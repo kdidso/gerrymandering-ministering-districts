@@ -13,12 +13,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from selenium import webdriver
-from selenium.common.exceptions import (
-    ElementClickInterceptedException,
-    NoSuchElementException,
-    StaleElementReferenceException,
-    TimeoutException,
-)
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 from selenium.webdriver import ChromeOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -37,21 +32,22 @@ ATTENDANCE_URL = f"{LCR_BASE}/report/class-and-quorum-attendance/overview?lang=e
 USERNAME = os.getenv("LCR_USERNAME", "").strip()
 PASSWORD = os.getenv("LCR_PASSWORD", "").strip()
 
-START_DATE = os.getenv("START_DATE", "2024-12-28").strip()
-END_DATE = os.getenv("END_DATE", "2025-03-08").strip()
+START_DATE = os.getenv("START_DATE", "2025-12-28").strip()
+END_DATE = os.getenv("END_DATE", "2026-03-08").strip()
 
 OUTPUT_DIR = "data"
 
-# Headless for GitHub Actions
 HEADLESS = True
 
-# Timing / waiting
 DEFAULT_WAIT = 30
 LONG_WAIT = 60
-POST_CLICK_SLEEP = 1.2
-POST_NAV_SLEEP = 1.6
+POST_CLICK_SLEEP = 1.1
+POST_NAV_SLEEP = 1.5
 POST_LOGIN_SLEEP = 2.0
-SCROLL_SLEEP = 0.4
+SCROLL_SLEEP = 0.35
+
+# 5 visible weeks at a time, per your description
+DATE_BLOCK_CLICKS = 5
 
 # Selectors from your inspection
 NAME_CELL_CLASS = "sc-14fff288-0 llFqzd sc-24d75410-4 bMziSa sc-24d75410-0 lpsZiy"
@@ -60,12 +56,10 @@ DATE_HEADER_CLASS = "sc-arbpvo-0 sc-arbpvo-1 fRnemr fhFlsT sc-473b494-0 kpqFIx"
 LEFT_ARROW_CLASS = "sc-2b11ed23-0 kPPSzB"
 
 # Generic fallbacks
-TABLE_XPATH = "//table"
 HEADER_TH_XPATH = "//table//thead//th"
 ROW_XPATH = "//table//tbody//tr"
 TD_REL_XPATH = ".//td"
 
-# Debug
 SAVE_DEBUG_ON_ERROR = True
 DEBUG_DIR = "debug"
 
@@ -158,25 +152,6 @@ def wait_present(driver: webdriver.Chrome, locator: Tuple[str, str], timeout: in
     return WebDriverWait(driver, timeout).until(EC.presence_of_element_located(locator))
 
 
-def wait_visible(driver: webdriver.Chrome, locator: Tuple[str, str], timeout: int = DEFAULT_WAIT):
-    return WebDriverWait(driver, timeout).until(EC.visibility_of_element_located(locator))
-
-
-def wait_all_present(driver: webdriver.Chrome, locator: Tuple[str, str], timeout: int = DEFAULT_WAIT):
-    return WebDriverWait(driver, timeout).until(EC.presence_of_all_elements_located(locator))
-
-
-def wait_clickable(driver: webdriver.Chrome, locator: Tuple[str, str], timeout: int = DEFAULT_WAIT):
-    return WebDriverWait(driver, timeout).until(EC.element_to_be_clickable(locator))
-
-
-def safe_find_elements(parent, by: str, value: str) -> List[WebElement]:
-    try:
-        return parent.find_elements(by, value)
-    except Exception:
-        return []
-
-
 def safe_text(element: WebElement) -> str:
     try:
         return normalize_space(element.text)
@@ -226,28 +201,6 @@ def make_driver() -> webdriver.Chrome:
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_argument("--lang=en-US")
     return webdriver.Chrome(options=opts)
-
-
-def page_looks_logged_in(driver: webdriver.Chrome) -> bool:
-    url = driver.current_url.lower()
-
-    if "class-and-quorum-attendance" in url:
-        return True
-
-    try:
-        title_text = driver.find_element(By.TAG_NAME, "body").text
-        if "Class and Quorum Attendance" in title_text:
-            return True
-    except Exception:
-        pass
-
-    try:
-        if len(driver.find_elements(By.CSS_SELECTOR, classes_to_css(NAME_CELL_CLASS))) > 0:
-            return True
-    except Exception:
-        pass
-
-    return False
 
 
 def login(driver: webdriver.Chrome) -> None:
@@ -313,7 +266,6 @@ def wait_for_attendance_table(driver: webdriver.Chrome) -> None:
 def get_visible_date_labels(driver: webdriver.Chrome) -> List[str]:
     labels: List[str] = []
 
-    # Primary class-based header selector
     try:
         elems = driver.find_elements(By.CSS_SELECTOR, classes_to_css(DATE_HEADER_CLASS))
         for elem in elems:
@@ -326,7 +278,6 @@ def get_visible_date_labels(driver: webdriver.Chrome) -> List[str]:
     if labels:
         return dedupe_preserve_order(labels)
 
-    # Fallback to table headers
     try:
         elems = driver.find_elements(By.XPATH, HEADER_TH_XPATH)
         for elem in elems:
@@ -342,7 +293,6 @@ def get_visible_date_labels(driver: webdriver.Chrome) -> List[str]:
 def get_visible_columns(driver: webdriver.Chrome, start_dt: date, end_dt: date) -> List[ColumnInfo]:
     columns: List[ColumnInfo] = []
 
-    # First try the semantic table header route
     try:
         headers = driver.find_elements(By.XPATH, HEADER_TH_XPATH)
         for idx, header in enumerate(headers):
@@ -361,9 +311,8 @@ def get_visible_columns(driver: webdriver.Chrome, start_dt: date, end_dt: date) 
     if columns:
         return columns
 
-    # Fallback if table header structure is weird
     date_labels = get_visible_date_labels(driver)
-    col_idx = 2  # Name and Gender first
+    col_idx = 2  # Name, Gender first
     for lbl in date_labels:
         actual = infer_year_for_label(lbl, start_dt, end_dt)
         if actual is not None:
@@ -389,7 +338,6 @@ def get_visible_window_dates(driver: webdriver.Chrome, start_dt: date, end_dt: d
 def get_bottom_page_numbers(driver: webdriver.Chrome) -> List[int]:
     found: List[int] = []
 
-    # Primary class-based selector
     try:
         elems = driver.find_elements(By.CSS_SELECTOR, classes_to_css(PAGE_NUM_CLASS))
         for elem in elems:
@@ -402,7 +350,6 @@ def get_bottom_page_numbers(driver: webdriver.Chrome) -> List[int]:
     if found:
         return sorted(set(found))
 
-    # Fallback: generic visible text nodes that are only digits
     try:
         elems = driver.find_elements(By.XPATH, "//*[normalize-space(text())!='']")
         for elem in elems:
@@ -421,7 +368,6 @@ def get_bottom_page_numbers(driver: webdriver.Chrome) -> List[int]:
 def click_member_page_number(driver: webdriver.Chrome, page_num: int) -> None:
     target = str(page_num)
 
-    # Primary selector
     try:
         elems = driver.find_elements(By.CSS_SELECTOR, classes_to_css(PAGE_NUM_CLASS))
         for elem in elems:
@@ -436,7 +382,6 @@ def click_member_page_number(driver: webdriver.Chrome, page_num: int) -> None:
     except Exception:
         pass
 
-    # Fallback
     try:
         elem = driver.find_element(By.XPATH, f"//*[normalize-space(text())='{target}']")
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
@@ -456,7 +401,6 @@ def click_member_page_number(driver: webdriver.Chrome, page_num: int) -> None:
 # ============================================================
 
 def click_left_arrow(driver: webdriver.Chrome) -> None:
-    # Primary selector from your inspection
     try:
         elems = driver.find_elements(By.CSS_SELECTOR, classes_to_css(LEFT_ARROW_CLASS))
         for elem in elems:
@@ -470,7 +414,6 @@ def click_left_arrow(driver: webdriver.Chrome) -> None:
     except Exception:
         pass
 
-    # Fallback: top-of-page clickable svg/button area near date headers
     fallback_xpaths = [
         "//button[.//*[name()='svg']]",
         "//*[@role='button'][.//*[name()='svg']]",
@@ -500,12 +443,31 @@ def click_left_arrow(driver: webdriver.Chrome) -> None:
     raise RuntimeError("Could not click the left attendance navigation arrow.")
 
 
+def click_left_arrow_block(driver: webdriver.Chrome, clicks: int = DATE_BLOCK_CLICKS) -> None:
+    old_labels = get_visible_date_labels(driver)
+    log(f"Current labels before block move: {old_labels}")
+
+    for i in range(clicks):
+        log(f"Clicking left arrow ({i + 1}/{clicks})")
+        click_left_arrow(driver)
+        time.sleep(0.8)
+
+    for _ in range(20):
+        new_labels = get_visible_date_labels(driver)
+        if new_labels and new_labels != old_labels:
+            log(f"Date block changed to: {new_labels}")
+            return
+        time.sleep(0.7)
+
+    save_debug_page(driver, "left_arrow_block_failed")
+    raise RuntimeError("Left-arrow block click did not change the visible date headers.")
+
+
 # ============================================================
 # ROW / CELL EXTRACTION
 # ============================================================
 
 def extract_name_from_row(row: WebElement) -> str:
-    # Primary class-based selector
     try:
         elems = row.find_elements(By.CSS_SELECTOR, classes_to_css(NAME_CELL_CLASS))
         for elem in elems:
@@ -515,7 +477,6 @@ def extract_name_from_row(row: WebElement) -> str:
     except Exception:
         pass
 
-    # Fallback: first td containing comma-name text
     try:
         tds = row.find_elements(By.XPATH, TD_REL_XPATH)
         if tds:
@@ -530,24 +491,48 @@ def extract_name_from_row(row: WebElement) -> str:
 
 def cell_is_present(cell: WebElement) -> bool:
     """
-    Based on your screenshot:
-    checked attendance seems to include a <path> check-mark shape,
-    while unchecked cells are outline-only circles.
+    Checked icons appear to include a filled square/checkmark structure.
+    Unchecked icons appear outline-only.
+    This is intentionally stricter than the old 'any path means present' logic.
     """
     try:
         html = (cell.get_attribute("innerHTML") or "").lower()
     except Exception:
         html = ""
 
-    if "<path" in html:
-        return True
+    if "<svg" not in html:
+        return False
 
     try:
         paths = cell.find_elements(By.XPATH, ".//*[name()='svg']//*[name()='path']")
-        if len(paths) > 0:
-            return True
     except Exception:
-        pass
+        paths = []
+
+    try:
+        circles = cell.find_elements(By.XPATH, ".//*[name()='svg']//*[name()='circle']")
+    except Exception:
+        circles = []
+
+    try:
+        rects = cell.find_elements(By.XPATH, ".//*[name()='svg']//*[name()='rect']")
+    except Exception:
+        rects = []
+
+    # Strong indicator of checked icon complexity
+    if len(paths) >= 2:
+        return True
+
+    # Filled square plus path often indicates checked state
+    if len(rects) >= 1 and len(paths) >= 1:
+        return True
+
+    # Heuristic from your screenshot: checked icon markup included fill-rule/clip-rule/currentColor
+    if "fill-rule" in html and "clip-rule" in html and "currentcolor" in html:
+        return True
+
+    # Simple outline-only icon should not count as present
+    if len(paths) <= 1 and len(circles) <= 1 and len(rects) == 0:
+        return False
 
     return False
 
@@ -592,6 +577,37 @@ def scrape_current_member_page(
     return scraped_rows, found_dates
 
 
+def scrape_all_member_pages_for_current_dates(
+    driver: webdriver.Chrome,
+    attendance_data: Dict[str, Dict[date, bool]],
+    start_dt: date,
+    end_dt: date,
+) -> List[date]:
+    collected: Set[date] = set()
+
+    member_pages = get_bottom_page_numbers(driver)
+    log(f"Member page numbers found: {member_pages}")
+
+    # Always scrape currently visible page first
+    rows_scraped, dates_found = scrape_current_member_page(driver, attendance_data, start_dt, end_dt)
+    for dt in dates_found:
+        collected.add(dt)
+    log(f"Scraped current visible page; rows: {rows_scraped}; dates: {[d.isoformat() for d in dates_found]}")
+
+    # Then explicitly visit remaining pages, skipping 1 because current page is already scraped
+    for member_page in member_pages:
+        if member_page == 1:
+            continue
+        log(f"Scraping member page {member_page}")
+        click_member_page_number(driver, member_page)
+        rows_scraped, dates_found = scrape_current_member_page(driver, attendance_data, start_dt, end_dt)
+        for dt in dates_found:
+            collected.add(dt)
+        log(f"Rows scraped: {rows_scraped}; dates: {[d.isoformat() for d in dates_found]}")
+
+    return sorted(collected)
+
+
 # ============================================================
 # MAIN SCRAPE LOOP
 # ============================================================
@@ -611,8 +627,8 @@ def scrape_attendance(
 
     while True:
         safety_counter += 1
-        if safety_counter > 60:
-            raise RuntimeError("Safety stop reached while paging through week windows.")
+        if safety_counter > 20:
+            raise RuntimeError("Safety stop reached while paging through date blocks.")
 
         visible_window_dates = get_visible_window_dates(driver, start_dt, end_dt)
         if not visible_window_dates:
@@ -627,24 +643,17 @@ def scrape_attendance(
             break
         seen_windows.add(window_key)
 
-        member_pages = get_bottom_page_numbers(driver)
-        log(f"Member page numbers found: {member_pages}")
-
-        for member_page in member_pages:
-            log(f"Scraping member page {member_page}")
-            click_member_page_number(driver, member_page)
-            rows_scraped, dates_found = scrape_current_member_page(driver, attendance_data, start_dt, end_dt)
-            for dt in dates_found:
-                collected_dates.add(dt)
-            log(f"Rows scraped: {rows_scraped}; in-range dates found: {[d.isoformat() for d in dates_found]}")
+        dates_found = scrape_all_member_pages_for_current_dates(driver, attendance_data, start_dt, end_dt)
+        for dt in dates_found:
+            collected_dates.add(dt)
 
         earliest_visible = min(visible_window_dates)
         if earliest_visible <= start_dt:
-            log("Reached earliest required date window.")
+            log("Reached earliest required date block.")
             break
 
-        log("Moving left to older dates")
-        click_left_arrow(driver)
+        log(f"Moving left to older {DATE_BLOCK_CLICKS}-week block")
+        click_left_arrow_block(driver, clicks=DATE_BLOCK_CLICKS)
 
     final_dates = sorted(dt for dt in collected_dates if start_dt <= dt <= end_dt)
     if not final_dates:
