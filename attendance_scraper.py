@@ -401,66 +401,56 @@ def click_member_page_number(driver: webdriver.Chrome, page_num: int) -> None:
 # ============================================================
 
 def click_left_arrow(driver: webdriver.Chrome) -> None:
+    # Click the parent TH that contains the left-arrow SVG
     try:
-        elems = driver.find_elements(By.CSS_SELECTOR, classes_to_css(LEFT_ARROW_CLASS))
-        for elem in elems:
-            if elem.is_displayed():
-                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
-                time.sleep(SCROLL_SLEEP)
-                driver.execute_script("arguments[0].click();", elem)
-                time.sleep(POST_CLICK_SLEEP)
-                wait_for_attendance_table(driver)
-                return
+        arrow_svg = driver.find_element(By.CSS_SELECTOR, "svg.sc-2b11ed23-0.kPPSzB")
+        clickable = arrow_svg.find_element(By.XPATH, "./ancestor::th[1]")
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", clickable)
+        time.sleep(SCROLL_SLEEP)
+        driver.execute_script("arguments[0].click();", clickable)
+        time.sleep(POST_CLICK_SLEEP)
+        wait_for_attendance_table(driver)
+        return
     except Exception:
         pass
 
-    fallback_xpaths = [
-        "//button[.//*[name()='svg']]",
-        "//*[@role='button'][.//*[name()='svg']]",
-        "//*[name()='svg']/ancestor::*[@role='button' or self::button][1]",
-    ]
-
-    for xp in fallback_xpaths:
-        try:
-            elems = driver.find_elements(By.XPATH, xp)
-            for elem in elems:
-                try:
-                    if not elem.is_displayed():
-                        continue
-                    box = elem.rect
-                    if box and box.get("x", 9999) < 900 and box.get("y", 9999) < 500:
-                        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
-                        time.sleep(SCROLL_SLEEP)
-                        driver.execute_script("arguments[0].click();", elem)
-                        time.sleep(POST_CLICK_SLEEP)
-                        wait_for_attendance_table(driver)
-                        return
-                except StaleElementReferenceException:
-                    continue
-        except Exception:
-            continue
+    # Fallback: click any TH containing that svg
+    try:
+        clickable = driver.find_element(
+            By.XPATH,
+            "//th[.//*[name()='svg' and contains(@class,'kPPSzB')]]"
+        )
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", clickable)
+        time.sleep(SCROLL_SLEEP)
+        driver.execute_script("arguments[0].click();", clickable)
+        time.sleep(POST_CLICK_SLEEP)
+        wait_for_attendance_table(driver)
+        return
+    except Exception:
+        pass
 
     raise RuntimeError("Could not click the left attendance navigation arrow.")
 
 
 def click_left_arrow_block(driver: webdriver.Chrome, clicks: int = DATE_BLOCK_CLICKS) -> None:
-    old_labels = get_visible_date_labels(driver)
-    log(f"Current labels before block move: {old_labels}")
-
     for i in range(clicks):
-        log(f"Clicking left arrow ({i + 1}/{clicks})")
+        old_labels = get_visible_date_labels(driver)
+        log(f"Before click {i+1}: {old_labels}")
+
         click_left_arrow(driver)
-        time.sleep(0.8)
 
-    for _ in range(20):
-        new_labels = get_visible_date_labels(driver)
-        if new_labels and new_labels != old_labels:
-            log(f"Date block changed to: {new_labels}")
-            return
-        time.sleep(0.7)
+        changed = False
+        for _ in range(20):
+            time.sleep(0.6)
+            new_labels = get_visible_date_labels(driver)
+            if new_labels and new_labels != old_labels:
+                log(f"After click {i+1}: {new_labels}")
+                changed = True
+                break
 
-    save_debug_page(driver, "left_arrow_block_failed")
-    raise RuntimeError("Left-arrow block click did not change the visible date headers.")
+        if not changed:
+            save_debug_page(driver, f"left_arrow_click_{i+1}_failed")
+            raise RuntimeError(f"Left-arrow click {i+1} did not change the visible date headers.")
 
 
 # ============================================================
