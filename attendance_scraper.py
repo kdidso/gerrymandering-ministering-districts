@@ -3,65 +3,75 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
-from playwright.sync_api import Browser, BrowserContext, Locator, Page, sync_playwright
+from selenium import webdriver
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    NoSuchElementException,
+    StaleElementReferenceException,
+    TimeoutException,
+)
+from selenium.webdriver import ChromeOptions
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.remote.webelement import WebElement
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-ATTENDANCE_URL = "https://lcr.churchofjesuschrist.org/report/class-and-quorum-attendance/overview?lang=eng"
+LCR_BASE = "https://lcr.churchofjesuschrist.org"
+ATTENDANCE_URL = f"{LCR_BASE}/report/class-and-quorum-attendance/overview?lang=eng"
 
-# Override these with GitHub Actions env vars or local environment variables if desired.
-START_DATE = os.getenv("START_DATE", "2024-12-28")
-END_DATE = os.getenv("END_DATE", "2025-03-08")
+USERNAME = os.getenv("LCR_USERNAME", "").strip()
+PASSWORD = os.getenv("LCR_PASSWORD", "").strip()
+
+START_DATE = os.getenv("START_DATE", "2024-12-28").strip()
+END_DATE = os.getenv("END_DATE", "2025-03-08").strip()
 
 OUTPUT_DIR = "data"
+
+# Headless for GitHub Actions
 HEADLESS = True
-SLOW_MO_MS = 0
-DEFAULT_TIMEOUT_MS = 20000
-POST_CLICK_WAIT_MS = 1200
-PAGE_LOAD_WAIT_MS = 1800
 
-# Login selectors
-EMAIL_INPUT_SELECTORS = [
-    "input[type='email']",
-    "input[name='identifier']",
-    "#identifierId",
-]
+# Timing / waiting
+DEFAULT_WAIT = 30
+LONG_WAIT = 60
+POST_CLICK_SLEEP = 1.2
+POST_NAV_SLEEP = 1.6
+POST_LOGIN_SLEEP = 2.0
+SCROLL_SLEEP = 0.4
 
-PASSWORD_INPUT_SELECTORS = [
-    "input[type='password']",
-    "input[name='password']",
-    "input[name='Passwd']",
-]
+# Selectors from your inspection
+NAME_CELL_CLASS = "sc-14fff288-0 llFqzd sc-24d75410-4 bMziSa sc-24d75410-0 lpsZiy"
+PAGE_NUM_CLASS = "sc-66e0b3ee-0 hxtefx"
+DATE_HEADER_CLASS = "sc-arbpvo-0 sc-arbpvo-1 fRnemr fhFlsT sc-473b494-0 kpqFIx"
+LEFT_ARROW_CLASS = "sc-2b11ed23-0 kPPSzB"
 
-# Attendance page selectors based on your inspection
-NAME_CELL_SELECTOR = ".sc-14fff288-0.llFqzd.sc-24d75410-4.bMziSa.sc-24d75410-0.lpsZiy"
-PAGE_NUMBER_SELECTOR = ".sc-66e0b3ee-0.hxtefx"
-DATE_HEADER_SELECTOR = ".sc-arbpvo-0.sc-arbpvo-1.fRnemr.fhFlsT.sc-473b494-0.kpqFIx"
-LEFT_ARROW_SELECTOR = ".sc-2b11ed23-0.kPPSzB"
+# Generic fallbacks
+TABLE_XPATH = "//table"
+HEADER_TH_XPATH = "//table//thead//th"
+ROW_XPATH = "//table//tbody//tr"
+TD_REL_XPATH = ".//td"
 
-# Fallback selectors
-TABLE_SELECTOR = "table"
-TABLE_ROW_SELECTOR = "table tbody tr"
-TABLE_HEADER_CELL_SELECTOR = "table thead th"
-TABLE_BODY_CELL_SELECTOR = "td"
-
-# If true, store trace/screenshot-like debug HTML dumps on failure
-SAVE_DEBUG_HTML = True
+# Debug
+SAVE_DEBUG_ON_ERROR = True
+DEBUG_DIR = "debug"
 
 
 # ============================================================
-# DATA CLASSES
+# DATA TYPES
 # ============================================================
 
 @dataclass(frozen=True)
@@ -84,7 +94,7 @@ def warn(msg: str) -> None:
 
 
 def err(msg: str) -> None:
-    print(f"[ERROR] {msg}")
+    print(f"[ERROR] {msg}", file=sys.stderr)
 
 
 def ensure_dir(path: str | Path) -> Path:
@@ -101,11 +111,8 @@ def parse_iso_date(value: str) -> date:
     return datetime.strptime(value, "%Y-%m-%d").date()
 
 
-def safe_text(locator: Locator) -> str:
-    try:
-        return normalize_space(locator.text_content() or "")
-    except Exception:
-        return ""
+def midpoint_date(start_dt: date, end_dt: date) -> date:
+    return start_dt + timedelta(days=(end_dt - start_dt).days // 2)
 
 
 def dedupe_preserve_order(items: List[str]) -> List[str]:
@@ -118,42 +125,67 @@ def dedupe_preserve_order(items: List[str]) -> List[str]:
     return out
 
 
-def first_visible_locator(page: Page, selectors: List[str], timeout_ms: int = 2500) -> Optional[Locator]:
-    for selector in selectors:
-        try:
-            loc = page.locator(selector)
-            if loc.count() > 0:
-                loc.first.wait_for(state="visible", timeout=timeout_ms)
-                return loc.first
-        except Exception:
-            continue
-    return None
+def format_excel_header(dt: date) -> str:
+    return f"{dt.strftime('%b')} {dt.day} {dt.year}"
 
 
-def try_click_by_text(page: Page, texts: List[str]) -> bool:
-    for text in texts:
-        patterns = [
-            page.get_by_role("button", name=re.compile(fr"^{re.escape(text)}$", re.I)),
-            page.get_by_role("link", name=re.compile(fr"^{re.escape(text)}$", re.I)),
-            page.get_by_text(re.compile(fr"^{re.escape(text)}$", re.I)),
-        ]
-        for loc in patterns:
-            try:
-                if loc.count() > 0:
-                    loc.first.click()
-                    page.wait_for_timeout(800)
-                    return True
-            except Exception:
-                continue
-    return False
+def classes_to_css(class_string: str) -> str:
+    return "." + ".".join(class_string.split())
+
+
+def save_debug_page(driver: webdriver.Chrome, name: str) -> None:
+    if not SAVE_DEBUG_ON_ERROR:
+        return
+
+    debug_dir = ensure_dir(DEBUG_DIR)
+
+    try:
+        html_path = debug_dir / f"{name}.html"
+        html_path.write_text(driver.page_source, encoding="utf-8")
+        log(f"Saved debug HTML to {html_path}")
+    except Exception as ex:
+        warn(f"Could not save debug HTML: {ex}")
+
+    try:
+        png_path = debug_dir / f"{name}.png"
+        driver.save_screenshot(str(png_path))
+        log(f"Saved debug screenshot to {png_path}")
+    except Exception as ex:
+        warn(f"Could not save debug screenshot: {ex}")
+
+
+def wait_present(driver: webdriver.Chrome, locator: Tuple[str, str], timeout: int = DEFAULT_WAIT):
+    return WebDriverWait(driver, timeout).until(EC.presence_of_element_located(locator))
+
+
+def wait_visible(driver: webdriver.Chrome, locator: Tuple[str, str], timeout: int = DEFAULT_WAIT):
+    return WebDriverWait(driver, timeout).until(EC.visibility_of_element_located(locator))
+
+
+def wait_all_present(driver: webdriver.Chrome, locator: Tuple[str, str], timeout: int = DEFAULT_WAIT):
+    return WebDriverWait(driver, timeout).until(EC.presence_of_all_elements_located(locator))
+
+
+def wait_clickable(driver: webdriver.Chrome, locator: Tuple[str, str], timeout: int = DEFAULT_WAIT):
+    return WebDriverWait(driver, timeout).until(EC.element_to_be_clickable(locator))
+
+
+def safe_find_elements(parent, by: str, value: str) -> List[WebElement]:
+    try:
+        return parent.find_elements(by, value)
+    except Exception:
+        return []
+
+
+def safe_text(element: WebElement) -> str:
+    try:
+        return normalize_space(element.text)
+    except Exception:
+        return ""
 
 
 def is_probable_date_label(text: str) -> bool:
     return bool(re.match(r"^\d{1,2}\s+[A-Za-z]{3}$", normalize_space(text)))
-
-
-def midpoint_date(start_dt: date, end_dt: date) -> date:
-    return start_dt + timedelta(days=(end_dt - start_dt).days // 2)
 
 
 def infer_year_for_label(label: str, start_dt: date, end_dt: date) -> Optional[date]:
@@ -162,8 +194,8 @@ def infer_year_for_label(label: str, start_dt: date, end_dt: date) -> Optional[d
         return None
 
     mid = midpoint_date(start_dt, end_dt)
-    best_candidate: Optional[date] = None
-    best_distance: Optional[int] = None
+    best_candidate = None
+    best_distance = None
 
     for year in range(start_dt.year - 1, end_dt.year + 2):
         try:
@@ -179,39 +211,38 @@ def infer_year_for_label(label: str, start_dt: date, end_dt: date) -> Optional[d
     return best_candidate
 
 
-def format_excel_header(dt: date) -> str:
-    return f"{dt.strftime('%b')} {dt.day} {dt.year}"
-
-
-def save_debug_html(page: Page, name: str) -> None:
-    if not SAVE_DEBUG_HTML:
-        return
-    try:
-        debug_dir = ensure_dir("debug")
-        out_path = debug_dir / f"{name}.html"
-        out_path.write_text(page.content(), encoding="utf-8")
-        log(f"Saved debug HTML to {out_path}")
-    except Exception as ex:
-        warn(f"Could not save debug HTML: {ex}")
-
-
 # ============================================================
-# LOGIN
+# DRIVER / LOGIN
 # ============================================================
 
-def page_looks_logged_in(page: Page) -> bool:
-    url = page.url.lower()
+def make_driver() -> webdriver.Chrome:
+    opts = ChromeOptions()
+    if HEADLESS or os.getenv("CI", "").lower() == "true":
+        opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--window-size=1600,2200")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_argument("--lang=en-US")
+    return webdriver.Chrome(options=opts)
+
+
+def page_looks_logged_in(driver: webdriver.Chrome) -> bool:
+    url = driver.current_url.lower()
+
     if "class-and-quorum-attendance" in url:
         return True
 
     try:
-        if page.locator(NAME_CELL_SELECTOR).count() > 0:
+        title_text = driver.find_element(By.TAG_NAME, "body").text
+        if "Class and Quorum Attendance" in title_text:
             return True
     except Exception:
         pass
 
     try:
-        if page.get_by_text("Class and Quorum Attendance", exact=False).count() > 0:
+        if len(driver.find_elements(By.CSS_SELECTOR, classes_to_css(NAME_CELL_CLASS))) > 0:
             return True
     except Exception:
         pass
@@ -219,85 +250,74 @@ def page_looks_logged_in(page: Page) -> bool:
     return False
 
 
-def automated_login(page: Page, username: str, password: str) -> bool:
+def login(driver: webdriver.Chrome) -> None:
+    if not USERNAME or not PASSWORD:
+        err("Missing env vars LCR_USERNAME and/or LCR_PASSWORD")
+        sys.exit(1)
+
+    log("Opening LCR base login page")
+    driver.get(LCR_BASE)
+
+    try:
+        user_input = wait_present(driver, (By.ID, "username-input"), LONG_WAIT)
+        user_input.clear()
+        user_input.send_keys(USERNAME)
+        user_input.send_keys(Keys.ENTER)
+
+        pwd_input = wait_present(driver, (By.ID, "password-input"), LONG_WAIT)
+        pwd_input.clear()
+        pwd_input.send_keys(PASSWORD)
+        pwd_input.send_keys(Keys.ENTER)
+
+        WebDriverWait(driver, LONG_WAIT).until(EC.url_contains(LCR_BASE))
+        time.sleep(POST_LOGIN_SLEEP)
+        log("Login submitted successfully")
+    except Exception:
+        save_debug_page(driver, "login_failure")
+        raise RuntimeError("Automated login failed with the known username/password field flow.")
+
+
+def goto_attendance(driver: webdriver.Chrome) -> None:
     log("Opening attendance page")
-    page.goto(ATTENDANCE_URL, wait_until="domcontentloaded")
-    page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
-
-    if page_looks_logged_in(page):
-        log("Already logged in")
-        return True
-
-    email_input = first_visible_locator(page, EMAIL_INPUT_SELECTORS, timeout_ms=6000)
-    if email_input is not None:
-        log("Filling username")
-        email_input.fill(username)
-        page.wait_for_timeout(300)
-        try_click_by_text(page, ["Next", "Continue", "Sign In", "Continue to Church Account"])
-        page.wait_for_timeout(1800)
-
-    password_input = first_visible_locator(page, PASSWORD_INPUT_SELECTORS, timeout_ms=8000)
-    if password_input is not None:
-        log("Filling password")
-        password_input.fill(password)
-        page.wait_for_timeout(300)
-        try_click_by_text(page, ["Sign In", "Log In", "Next", "Continue"])
-        page.wait_for_timeout(2500)
-
-    for _ in range(12):
-        if page_looks_logged_in(page):
-            return True
-        page.wait_for_timeout(1000)
-
-    return False
+    driver.get(ATTENDANCE_URL)
+    wait_for_attendance_table(driver)
 
 
-def ensure_logged_in(page: Page, username: str, password: str) -> None:
-    if not automated_login(page, username, password):
-        save_debug_html(page, "login_failure")
-        raise RuntimeError(
-            "Automated login failed in headless mode. "
-            "This may mean the sign-in flow changed or requires an extra prompt."
+# ============================================================
+# ATTENDANCE TABLE DETECTION
+# ============================================================
+
+def wait_for_attendance_table(driver: webdriver.Chrome) -> None:
+    try:
+        WebDriverWait(driver, DEFAULT_WAIT).until(
+            lambda d: len(d.find_elements(By.XPATH, ROW_XPATH)) > 0
         )
-
-    page.goto(ATTENDANCE_URL, wait_until="domcontentloaded")
-    page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
-
-    if not page_looks_logged_in(page):
-        save_debug_html(page, "attendance_page_not_loaded")
-        raise RuntimeError("Login seemed to complete, but attendance page did not load correctly.")
-
-
-# ============================================================
-# PAGE / TABLE EXTRACTION
-# ============================================================
-
-def wait_for_attendance_table(page: Page) -> None:
-    try:
-        page.locator(NAME_CELL_SELECTOR).first.wait_for(state="visible", timeout=DEFAULT_TIMEOUT_MS)
-        page.wait_for_timeout(1000)
+        time.sleep(POST_NAV_SLEEP)
         return
-    except Exception:
+    except TimeoutException:
         pass
 
     try:
-        page.locator(TABLE_SELECTOR).first.wait_for(state="visible", timeout=DEFAULT_TIMEOUT_MS)
-        page.wait_for_timeout(1000)
+        WebDriverWait(driver, DEFAULT_WAIT).until(
+            lambda d: len(d.find_elements(By.CSS_SELECTOR, classes_to_css(NAME_CELL_CLASS))) > 0
+        )
+        time.sleep(POST_NAV_SLEEP)
         return
-    except Exception:
+    except TimeoutException:
         pass
 
-    save_debug_html(page, "attendance_table_missing")
-    raise RuntimeError("Could not find attendance table or visible member rows.")
+    save_debug_page(driver, "attendance_table_missing")
+    raise RuntimeError("Could not detect attendance table rows.")
 
 
-def get_visible_date_labels(page: Page) -> List[str]:
+def get_visible_date_labels(driver: webdriver.Chrome) -> List[str]:
     labels: List[str] = []
 
+    # Primary class-based header selector
     try:
-        loc = page.locator(DATE_HEADER_SELECTOR)
-        for i in range(loc.count()):
-            txt = safe_text(loc.nth(i))
+        elems = driver.find_elements(By.CSS_SELECTOR, classes_to_css(DATE_HEADER_CLASS))
+        for elem in elems:
+            txt = safe_text(elem)
             if is_probable_date_label(txt):
                 labels.append(txt)
     except Exception:
@@ -306,10 +326,11 @@ def get_visible_date_labels(page: Page) -> List[str]:
     if labels:
         return dedupe_preserve_order(labels)
 
+    # Fallback to table headers
     try:
-        headers = page.locator(TABLE_HEADER_CELL_SELECTOR)
-        for i in range(headers.count()):
-            txt = safe_text(headers.nth(i))
+        elems = driver.find_elements(By.XPATH, HEADER_TH_XPATH)
+        for elem in elems:
+            txt = safe_text(elem)
             if is_probable_date_label(txt):
                 labels.append(txt)
     except Exception:
@@ -318,13 +339,14 @@ def get_visible_date_labels(page: Page) -> List[str]:
     return dedupe_preserve_order(labels)
 
 
-def get_visible_columns(page: Page, start_dt: date, end_dt: date) -> List[ColumnInfo]:
+def get_visible_columns(driver: webdriver.Chrome, start_dt: date, end_dt: date) -> List[ColumnInfo]:
     columns: List[ColumnInfo] = []
 
+    # First try the semantic table header route
     try:
-        headers = page.locator(TABLE_HEADER_CELL_SELECTOR)
-        for i in range(headers.count()):
-            txt = safe_text(headers.nth(i))
+        headers = driver.find_elements(By.XPATH, HEADER_TH_XPATH)
+        for idx, header in enumerate(headers):
+            txt = safe_text(header)
             if not is_probable_date_label(txt):
                 continue
 
@@ -332,133 +354,173 @@ def get_visible_columns(page: Page, start_dt: date, end_dt: date) -> List[Column
             if actual is None:
                 continue
 
-            columns.append(ColumnInfo(column_index=i, label_text=txt, actual_date=actual))
+            columns.append(ColumnInfo(column_index=idx, label_text=txt, actual_date=actual))
     except Exception:
         pass
 
     if columns:
         return columns
 
-    # fallback if semantic th structure is missing
-    labels = get_visible_date_labels(page)
-    body_col_idx = 2  # Name and Gender assumed first two columns
-    for lbl in labels:
+    # Fallback if table header structure is weird
+    date_labels = get_visible_date_labels(driver)
+    col_idx = 2  # Name and Gender first
+    for lbl in date_labels:
         actual = infer_year_for_label(lbl, start_dt, end_dt)
         if actual is not None:
-            columns.append(ColumnInfo(column_index=body_col_idx, label_text=lbl, actual_date=actual))
-            body_col_idx += 1
+            columns.append(ColumnInfo(column_index=col_idx, label_text=lbl, actual_date=actual))
+            col_idx += 1
 
     return columns
 
 
-def get_visible_window_dates(page: Page, start_dt: date, end_dt: date) -> List[date]:
-    dates: List[date] = []
-    for label in get_visible_date_labels(page):
+def get_visible_window_dates(driver: webdriver.Chrome, start_dt: date, end_dt: date) -> List[date]:
+    out: List[date] = []
+    for label in get_visible_date_labels(driver):
         actual = infer_year_for_label(label, start_dt, end_dt)
         if actual is not None:
-            dates.append(actual)
-    return sorted(set(dates))
+            out.append(actual)
+    return sorted(set(out))
 
 
-def get_bottom_page_numbers(page: Page) -> List[int]:
-    page_numbers: List[int] = []
+# ============================================================
+# MEMBER PAGE PAGINATION
+# ============================================================
 
+def get_bottom_page_numbers(driver: webdriver.Chrome) -> List[int]:
+    found: List[int] = []
+
+    # Primary class-based selector
     try:
-        loc = page.locator(PAGE_NUMBER_SELECTOR)
-        for i in range(loc.count()):
-            txt = safe_text(loc.nth(i))
+        elems = driver.find_elements(By.CSS_SELECTOR, classes_to_css(PAGE_NUM_CLASS))
+        for elem in elems:
+            txt = safe_text(elem)
             if txt.isdigit():
-                page_numbers.append(int(txt))
+                found.append(int(txt))
     except Exception:
         pass
 
-    if page_numbers:
-        return sorted(set(page_numbers))
+    if found:
+        return sorted(set(found))
 
+    # Fallback: generic visible text nodes that are only digits
     try:
-        generic = page.locator("text=/^\\d+$/")
-        for i in range(generic.count()):
-            txt = safe_text(generic.nth(i))
+        elems = driver.find_elements(By.XPATH, "//*[normalize-space(text())!='']")
+        for elem in elems:
+            txt = safe_text(elem)
             if txt.isdigit():
-                page_numbers.append(int(txt))
+                num = int(txt)
+                if 1 <= num <= 200:
+                    found.append(num)
     except Exception:
         pass
 
-    page_numbers = sorted(set(page_numbers))
-    return page_numbers if page_numbers else [1]
+    found = sorted(set(found))
+    return found if found else [1]
 
 
-def click_bottom_page_number(page: Page, target_page_num: int) -> None:
-    target = str(target_page_num)
+def click_member_page_number(driver: webdriver.Chrome, page_num: int) -> None:
+    target = str(page_num)
 
+    # Primary selector
     try:
-        loc = page.locator(PAGE_NUMBER_SELECTOR)
-        for i in range(loc.count()):
-            item = loc.nth(i)
-            if safe_text(item) == target:
-                item.click()
-                page.wait_for_timeout(POST_CLICK_WAIT_MS)
+        elems = driver.find_elements(By.CSS_SELECTOR, classes_to_css(PAGE_NUM_CLASS))
+        for elem in elems:
+            txt = safe_text(elem)
+            if txt == target:
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
+                time.sleep(SCROLL_SLEEP)
+                driver.execute_script("arguments[0].click();", elem)
+                time.sleep(POST_CLICK_SLEEP)
+                wait_for_attendance_table(driver)
                 return
     except Exception:
         pass
 
+    # Fallback
     try:
-        page.get_by_text(re.compile(fr"^{re.escape(target)}$")).first.click()
-        page.wait_for_timeout(POST_CLICK_WAIT_MS)
+        elem = driver.find_element(By.XPATH, f"//*[normalize-space(text())='{target}']")
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
+        time.sleep(SCROLL_SLEEP)
+        driver.execute_script("arguments[0].click();", elem)
+        time.sleep(POST_CLICK_SLEEP)
+        wait_for_attendance_table(driver)
         return
     except Exception:
         pass
 
-    raise RuntimeError(f"Could not click member page number {target_page_num}.")
+    raise RuntimeError(f"Could not click member page number {page_num}.")
 
 
-def click_left_arrow(page: Page) -> None:
+# ============================================================
+# WEEK NAVIGATION
+# ============================================================
+
+def click_left_arrow(driver: webdriver.Chrome) -> None:
+    # Primary selector from your inspection
     try:
-        loc = page.locator(LEFT_ARROW_SELECTOR)
-        if loc.count() > 0:
-            loc.first.click()
-            page.wait_for_timeout(POST_CLICK_WAIT_MS)
-            return
+        elems = driver.find_elements(By.CSS_SELECTOR, classes_to_css(LEFT_ARROW_CLASS))
+        for elem in elems:
+            if elem.is_displayed():
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
+                time.sleep(SCROLL_SLEEP)
+                driver.execute_script("arguments[0].click();", elem)
+                time.sleep(POST_CLICK_SLEEP)
+                wait_for_attendance_table(driver)
+                return
     except Exception:
         pass
 
-    # conservative fallback: leftmost visible svg button near top
-    candidates = [
-        "button:has(svg)",
-        "[role='button']:has(svg)",
-        "svg",
+    # Fallback: top-of-page clickable svg/button area near date headers
+    fallback_xpaths = [
+        "//button[.//*[name()='svg']]",
+        "//*[@role='button'][.//*[name()='svg']]",
+        "//*[name()='svg']/ancestor::*[@role='button' or self::button][1]",
     ]
-    for selector in candidates:
+
+    for xp in fallback_xpaths:
         try:
-            loc = page.locator(selector)
-            for i in range(loc.count()):
-                item = loc.nth(i)
-                box = item.bounding_box()
-                if box and box["x"] < 700 and box["y"] < 350:
-                    item.click()
-                    page.wait_for_timeout(POST_CLICK_WAIT_MS)
-                    return
+            elems = driver.find_elements(By.XPATH, xp)
+            for elem in elems:
+                try:
+                    if not elem.is_displayed():
+                        continue
+                    box = elem.rect
+                    if box and box.get("x", 9999) < 900 and box.get("y", 9999) < 500:
+                        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
+                        time.sleep(SCROLL_SLEEP)
+                        driver.execute_script("arguments[0].click();", elem)
+                        time.sleep(POST_CLICK_SLEEP)
+                        wait_for_attendance_table(driver)
+                        return
+                except StaleElementReferenceException:
+                    continue
         except Exception:
             continue
 
     raise RuntimeError("Could not click the left attendance navigation arrow.")
 
 
-def extract_name_from_row(row: Locator) -> str:
+# ============================================================
+# ROW / CELL EXTRACTION
+# ============================================================
+
+def extract_name_from_row(row: WebElement) -> str:
+    # Primary class-based selector
     try:
-        loc = row.locator(NAME_CELL_SELECTOR)
-        if loc.count() > 0:
-            name = safe_text(loc.first)
-            if name:
-                return name
+        elems = row.find_elements(By.CSS_SELECTOR, classes_to_css(NAME_CELL_CLASS))
+        for elem in elems:
+            txt = safe_text(elem)
+            if txt:
+                return txt
     except Exception:
         pass
 
+    # Fallback: first td containing comma-name text
     try:
-        cells = row.locator(TABLE_BODY_CELL_SELECTOR)
-        if cells.count() > 0:
-            txt = safe_text(cells.nth(0))
-            if txt and "," in txt:
+        tds = row.find_elements(By.XPATH, TD_REL_XPATH)
+        if tds:
+            txt = safe_text(tds[0])
+            if txt:
                 return txt
     except Exception:
         pass
@@ -466,13 +528,14 @@ def extract_name_from_row(row: Locator) -> str:
     return ""
 
 
-def cell_is_present(cell: Locator) -> bool:
+def cell_is_present(cell: WebElement) -> bool:
     """
-    Based on your inspection, filled attendance includes a check-mark path.
-    Empty circles appear as outline only.
+    Based on your screenshot:
+    checked attendance seems to include a <path> check-mark shape,
+    while unchecked cells are outline-only circles.
     """
     try:
-        html = (cell.inner_html() or "").lower()
+        html = (cell.get_attribute("innerHTML") or "").lower()
     except Exception:
         html = ""
 
@@ -480,7 +543,8 @@ def cell_is_present(cell: Locator) -> bool:
         return True
 
     try:
-        if cell.locator("svg path").count() > 0:
+        paths = cell.find_elements(By.XPATH, ".//*[name()='svg']//*[name()='path']")
+        if len(paths) > 0:
             return True
     except Exception:
         pass
@@ -489,78 +553,87 @@ def cell_is_present(cell: Locator) -> bool:
 
 
 def scrape_current_member_page(
-    page: Page,
+    driver: webdriver.Chrome,
     attendance_data: Dict[str, Dict[date, bool]],
     start_dt: date,
     end_dt: date,
 ) -> Tuple[int, List[date]]:
-    wait_for_attendance_table(page)
+    wait_for_attendance_table(driver)
 
-    columns = get_visible_columns(page, start_dt, end_dt)
+    columns = get_visible_columns(driver, start_dt, end_dt)
     if not columns:
-        save_debug_html(page, "no_columns_detected")
-        raise RuntimeError("No attendance date columns were detected.")
+        save_debug_page(driver, "no_columns_detected")
+        raise RuntimeError("Could not detect visible attendance date columns.")
 
     target_columns = [c for c in columns if start_dt <= c.actual_date <= end_dt]
-    rows = page.locator(TABLE_ROW_SELECTOR)
-
     found_dates = sorted({c.actual_date for c in target_columns})
+
+    rows = driver.find_elements(By.XPATH, ROW_XPATH)
     scraped_rows = 0
 
-    for row_idx in range(rows.count()):
-        row = rows.nth(row_idx)
-        name = extract_name_from_row(row)
-        if not name:
-            continue
-
-        scraped_rows += 1
-        attendance_data.setdefault(name, {})
-
-        cells = row.locator(TABLE_BODY_CELL_SELECTOR)
-        cell_count = cells.count()
-
-        for col in target_columns:
-            if col.column_index >= cell_count:
+    for row in rows:
+        try:
+            name = extract_name_from_row(row)
+            if not name:
                 continue
-            present = cell_is_present(cells.nth(col.column_index))
-            attendance_data[name][col.actual_date] = present
+
+            scraped_rows += 1
+            attendance_data.setdefault(name, {})
+
+            cells = row.find_elements(By.XPATH, TD_REL_XPATH)
+            for col in target_columns:
+                if col.column_index >= len(cells):
+                    continue
+                attendance_data[name][col.actual_date] = cell_is_present(cells[col.column_index])
+
+        except StaleElementReferenceException:
+            continue
 
     return scraped_rows, found_dates
 
 
 # ============================================================
-# SCRAPE LOOP
+# MAIN SCRAPE LOOP
 # ============================================================
 
-def scrape_attendance(page: Page, start_dt: date, end_dt: date) -> Tuple[Dict[str, Dict[date, bool]], List[date]]:
+def scrape_attendance(
+    driver: webdriver.Chrome,
+    start_dt: date,
+    end_dt: date,
+) -> Tuple[Dict[str, Dict[date, bool]], List[date]]:
     attendance_data: Dict[str, Dict[date, bool]] = {}
-    collected_dates: set[date] = set()
+    collected_dates: Set[date] = set()
 
-    page.goto(ATTENDANCE_URL, wait_until="domcontentloaded")
-    page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
-    wait_for_attendance_table(page)
+    goto_attendance(driver)
 
     safety_counter = 0
+    seen_windows: Set[Tuple[str, ...]] = set()
 
     while True:
         safety_counter += 1
         if safety_counter > 60:
             raise RuntimeError("Safety stop reached while paging through week windows.")
 
-        visible_window_dates = get_visible_window_dates(page, start_dt, end_dt)
+        visible_window_dates = get_visible_window_dates(driver, start_dt, end_dt)
         if not visible_window_dates:
-            save_debug_html(page, f"window_dates_missing_{safety_counter}")
-            raise RuntimeError("Could not detect visible date headers.")
+            save_debug_page(driver, f"window_dates_missing_{safety_counter}")
+            raise RuntimeError("Could not detect visible date headers on attendance page.")
 
-        log(f"Visible week window: {[d.isoformat() for d in visible_window_dates]}")
+        window_key = tuple(d.isoformat() for d in visible_window_dates)
+        log(f"Visible week window: {list(window_key)}")
 
-        member_pages = get_bottom_page_numbers(page)
+        if window_key in seen_windows:
+            warn("Detected repeated week window; stopping to avoid infinite loop.")
+            break
+        seen_windows.add(window_key)
+
+        member_pages = get_bottom_page_numbers(driver)
         log(f"Member page numbers found: {member_pages}")
 
         for member_page in member_pages:
             log(f"Scraping member page {member_page}")
-            click_bottom_page_number(page, member_page)
-            rows_scraped, dates_found = scrape_current_member_page(page, attendance_data, start_dt, end_dt)
+            click_member_page_number(driver, member_page)
+            rows_scraped, dates_found = scrape_current_member_page(driver, attendance_data, start_dt, end_dt)
             for dt in dates_found:
                 collected_dates.add(dt)
             log(f"Rows scraped: {rows_scraped}; in-range dates found: {[d.isoformat() for d in dates_found]}")
@@ -570,18 +643,18 @@ def scrape_attendance(page: Page, start_dt: date, end_dt: date) -> Tuple[Dict[st
             log("Reached earliest required date window.")
             break
 
-        log("Clicking left arrow to move to older dates")
-        click_left_arrow(page)
+        log("Moving left to older dates")
+        click_left_arrow(driver)
 
     final_dates = sorted(dt for dt in collected_dates if start_dt <= dt <= end_dt)
     if not final_dates:
-        raise RuntimeError("No attendance dates were collected within the requested date range.")
+        raise RuntimeError("No attendance dates were collected in the requested range.")
 
     return attendance_data, final_dates
 
 
 # ============================================================
-# OUTPUT
+# EXCEL OUTPUT
 # ============================================================
 
 def write_excel(attendance_data: Dict[str, Dict[date, bool]], all_dates: List[date], out_path: Path) -> None:
@@ -611,6 +684,7 @@ def write_excel(attendance_data: Dict[str, Dict[date, bool]], all_dates: List[da
         pct = (present_count / total) if total else 0.0
 
         ws.cell(row=row_idx, column=1, value=name)
+
         pct_cell = ws.cell(row=row_idx, column=2, value=pct)
         pct_cell.number_format = "0%"
         pct_cell.fill = percent_fill
@@ -637,10 +711,7 @@ def write_excel(attendance_data: Dict[str, Dict[date, bool]], all_dates: List[da
 # ============================================================
 
 def main() -> int:
-    username = os.getenv("LCR_USERNAME", "").strip()
-    password = os.getenv("LCR_PASSWORD", "").strip()
-
-    if not username or not password:
+    if not USERNAME or not PASSWORD:
         err("Missing LCR_USERNAME and/or LCR_PASSWORD environment variables.")
         return 1
 
@@ -653,22 +724,19 @@ def main() -> int:
 
     output_dir = ensure_dir(OUTPUT_DIR)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    excel_path = output_dir / f"attendance_{start_dt.isoformat()}_to_{end_dt.isoformat()}_{timestamp}.xlsx"
+    out_path = output_dir / f"attendance_{start_dt.isoformat()}_to_{end_dt.isoformat()}_{timestamp}.xlsx"
 
-    with sync_playwright() as p:
-        browser: Browser = p.chromium.launch(headless=HEADLESS, slow_mo=SLOW_MO_MS)
-        context: BrowserContext = browser.new_context()
-        context.set_default_timeout(DEFAULT_TIMEOUT_MS)
-
+    driver = make_driver()
+    try:
+        login(driver)
+        attendance_data, all_dates = scrape_attendance(driver, start_dt, end_dt)
+        write_excel(attendance_data, all_dates, out_path)
+        log(f"Excel output written to {out_path}")
+    finally:
         try:
-            page = context.new_page()
-            ensure_logged_in(page, username, password)
-            attendance_data, all_dates = scrape_attendance(page, start_dt, end_dt)
-            write_excel(attendance_data, all_dates, excel_path)
-            log(f"Excel output written to {excel_path}")
-        finally:
-            context.close()
-            browser.close()
+            driver.quit()
+        except Exception:
+            pass
 
     return 0
 
