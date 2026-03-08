@@ -1,21 +1,21 @@
-# Gerrymandering Ministering Districts
+# Attendance Scraper
 
-This repo currently includes a headless Playwright script that logs into LCR, visits the Class and Quorum Attendance page, scrapes attendance by date and member, and outputs an Excel spreadsheet into the `data` folder.
+This repo contains a Selenium-based headless scraper for the LCR Class and Quorum Attendance page.
 
 ## Required GitHub Secrets
 
-In the repo settings, create these secrets:
+Add these in:
+
+Settings > Secrets and variables > Actions
 
 - `LCR_USERNAME`
 - `LCR_PASSWORD`
 
-## Run it manually from GitHub
+## Run the workflow
 
 Go to:
 
-- **Actions**
-- **Run Attendance Scraper**
-- **Run workflow**
+Actions > Run Attendance Scraper > Run workflow
 
 Enter:
 
@@ -24,20 +24,19 @@ Enter:
 
 The workflow will:
 
-1. Run the scraper headlessly
-2. Save the `.xlsx` file to `data/`
-3. Upload it as an artifact
-4. Commit it back into the repo
+1. Log in to LCR
+2. Scrape attendance across all visible member pages
+3. Move left through attendance weeks until the start date is covered
+4. Generate an Excel file in `data/`
+5. Upload the file as an artifact
+6. Attempt to commit the spreadsheet back into the repo
 
-## Local run
+## Output
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python -m playwright install chromium
-export LCR_USERNAME="your_username"
-export LCR_PASSWORD="your_password"
-export START_DATE="2024-12-28"
-export END_DATE="2025-03-08"
-python attendance_scraper.py
+The spreadsheet includes:
+
+- Name
+- % activity
+- one column per attendance date
+- ☑ for present
+- ☐ for not present
