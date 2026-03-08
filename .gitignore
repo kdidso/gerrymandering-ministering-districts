@@ -1,6 +1,6 @@
 .venv/
 .env
-data/
-playwright_state.json
 __pycache__/
 *.pyc
+data/
+debug/
