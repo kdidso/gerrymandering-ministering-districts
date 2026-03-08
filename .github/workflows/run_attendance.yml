@@ -1,0 +1,60 @@
+name: Run Attendance Scraper
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date in YYYY-MM-DD format"
+        required: true
+        default: "2024-12-28"
+      end_date:
+        description: "End date in YYYY-MM-DD format"
+        required: true
+        default: "2025-03-08"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    env:
+      LCR_USERNAME: ${{ secrets.LCR_USERNAME }}
+      LCR_PASSWORD: ${{ secrets.LCR_PASSWORD }}
+      START_DATE: ${{ github.event.inputs.start_date }}
+      END_DATE: ${{ github.event.inputs.end_date }}
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright browser
+        run: |
+          python -m playwright install chromium
+
+      - name: Run scraper
+        run: |
+          python attendance_scraper.py
+
+      - name: Upload spreadsheet artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: attendance-output
+          path: data/*.xlsx
+          if-no-files-found: error
+
+      - name: Commit spreadsheet to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/*.xlsx
+          git diff --cached --quiet || git commit -m "Add attendance spreadsheet output"
+          git push
