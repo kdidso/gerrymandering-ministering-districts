@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
 import time
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -13,8 +13,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from selenium import webdriver
-from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver import ChromeOptions
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.remote.webelement import WebElement
@@ -36,43 +37,27 @@ START_DATE = os.getenv("START_DATE", "2025-12-28").strip()
 END_DATE = os.getenv("END_DATE", "2026-03-08").strip()
 
 OUTPUT_DIR = "data"
+DEBUG_DIR = "debug"
 
 HEADLESS = True
 
 DEFAULT_WAIT = 30
 LONG_WAIT = 60
-POST_CLICK_SLEEP = 1.1
-POST_NAV_SLEEP = 1.5
 POST_LOGIN_SLEEP = 2.0
+POST_NAV_SLEEP = 1.5
 SCROLL_SLEEP = 0.35
 
-# 5 visible weeks at a time, per your description
+# The page shows 5 weeks at a time. Moving left one click shifts by one week.
 DATE_BLOCK_CLICKS = 5
 
 # Selectors from your inspection
-NAME_CELL_CLASS = "sc-14fff288-0 llFqzd sc-24d75410-4 bMziSa sc-24d75410-0 lpsZiy"
-PAGE_NUM_CLASS = "sc-66e0b3ee-0 hxtefx"
 DATE_HEADER_CLASS = "sc-arbpvo-0 sc-arbpvo-1 fRnemr fhFlsT sc-473b494-0 kpqFIx"
-LEFT_ARROW_CLASS = "sc-2b11ed23-0 kPPSzB"
+LEFT_ARROW_SVG_CLASS = "sc-2b11ed23-0 kPPSzB"
 
-# Generic fallbacks
-HEADER_TH_XPATH = "//table//thead//th"
+# Fallback table selector
 ROW_XPATH = "//table//tbody//tr"
-TD_REL_XPATH = ".//td"
 
 SAVE_DEBUG_ON_ERROR = True
-DEBUG_DIR = "debug"
-
-
-# ============================================================
-# DATA TYPES
-# ============================================================
-
-@dataclass(frozen=True)
-class ColumnInfo:
-    column_index: int
-    label_text: str
-    actual_date: date
 
 
 # ============================================================
@@ -237,7 +222,7 @@ def goto_attendance(driver: webdriver.Chrome) -> None:
 
 
 # ============================================================
-# ATTENDANCE TABLE DETECTION
+# ATTENDANCE PAGE HELPERS
 # ============================================================
 
 def wait_for_attendance_table(driver: webdriver.Chrome) -> None:
@@ -248,19 +233,8 @@ def wait_for_attendance_table(driver: webdriver.Chrome) -> None:
         time.sleep(POST_NAV_SLEEP)
         return
     except TimeoutException:
-        pass
-
-    try:
-        WebDriverWait(driver, DEFAULT_WAIT).until(
-            lambda d: len(d.find_elements(By.CSS_SELECTOR, classes_to_css(NAME_CELL_CLASS))) > 0
-        )
-        time.sleep(POST_NAV_SLEEP)
-        return
-    except TimeoutException:
-        pass
-
-    save_debug_page(driver, "attendance_table_missing")
-    raise RuntimeError("Could not detect attendance table rows.")
+        save_debug_page(driver, "attendance_table_missing")
+        raise RuntimeError("Could not detect attendance table rows.")
 
 
 def get_visible_date_labels(driver: webdriver.Chrome) -> List[str]:
@@ -275,51 +249,7 @@ def get_visible_date_labels(driver: webdriver.Chrome) -> List[str]:
     except Exception:
         pass
 
-    if labels:
-        return dedupe_preserve_order(labels)
-
-    try:
-        elems = driver.find_elements(By.XPATH, HEADER_TH_XPATH)
-        for elem in elems:
-            txt = safe_text(elem)
-            if is_probable_date_label(txt):
-                labels.append(txt)
-    except Exception:
-        pass
-
     return dedupe_preserve_order(labels)
-
-
-def get_visible_columns(driver: webdriver.Chrome, start_dt: date, end_dt: date) -> List[ColumnInfo]:
-    columns: List[ColumnInfo] = []
-
-    try:
-        headers = driver.find_elements(By.XPATH, HEADER_TH_XPATH)
-        for idx, header in enumerate(headers):
-            txt = safe_text(header)
-            if not is_probable_date_label(txt):
-                continue
-
-            actual = infer_year_for_label(txt, start_dt, end_dt)
-            if actual is None:
-                continue
-
-            columns.append(ColumnInfo(column_index=idx, label_text=txt, actual_date=actual))
-    except Exception:
-        pass
-
-    if columns:
-        return columns
-
-    date_labels = get_visible_date_labels(driver)
-    col_idx = 2  # Name, Gender first
-    for lbl in date_labels:
-        actual = infer_year_for_label(lbl, start_dt, end_dt)
-        if actual is not None:
-            columns.append(ColumnInfo(column_index=col_idx, label_text=lbl, actual_date=actual))
-            col_idx += 1
-
-    return columns
 
 
 def get_visible_window_dates(driver: webdriver.Chrome, start_dt: date, end_dt: date) -> List[date]:
@@ -331,203 +261,74 @@ def get_visible_window_dates(driver: webdriver.Chrome, start_dt: date, end_dt: d
     return sorted(set(out))
 
 
-# ============================================================
-# MEMBER PAGE PAGINATION
-# ============================================================
+def extract_attendees_from_page_source(driver: webdriver.Chrome) -> List[dict]:
+    html = driver.page_source
 
-def get_bottom_page_numbers(driver: webdriver.Chrome) -> List[int]:
-    found: List[int] = []
+    # Prefer the exact marker we saw in the debug html
+    markers = [
+        '"initialProps":{"attendees":',
+        '"attendees":[',
+    ]
 
-    try:
-        elems = driver.find_elements(By.CSS_SELECTOR, classes_to_css(PAGE_NUM_CLASS))
-        for elem in elems:
-            txt = safe_text(elem)
-            if txt.isdigit():
-                found.append(int(txt))
-    except Exception:
-        pass
+    start = -1
+    for marker in markers:
+        start = html.find(marker)
+        if start != -1:
+            start = html.find("[", start)
+            break
 
-    if found:
-        return sorted(set(found))
+    if start == -1:
+        save_debug_page(driver, "attendees_marker_missing")
+        raise RuntimeError("Could not find attendees data in page source.")
 
-    try:
-        elems = driver.find_elements(By.XPATH, "//*[normalize-space(text())!='']")
-        for elem in elems:
-            txt = safe_text(elem)
-            if txt.isdigit():
-                num = int(txt)
-                if 1 <= num <= 200:
-                    found.append(num)
-    except Exception:
-        pass
+    depth = 0
+    end = None
+    in_string = False
+    escape = False
 
-    found = sorted(set(found))
-    return found if found else [1]
+    for i in range(start, len(html)):
+        ch = html[i]
 
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
 
-def click_member_page_number(driver: webdriver.Chrome, page_num: int) -> None:
-    target = str(page_num)
-
-    try:
-        elems = driver.find_elements(By.CSS_SELECTOR, classes_to_css(PAGE_NUM_CLASS))
-        for elem in elems:
-            txt = safe_text(elem)
-            if txt == target:
-                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
-                time.sleep(SCROLL_SLEEP)
-                driver.execute_script("arguments[0].click();", elem)
-                time.sleep(POST_CLICK_SLEEP)
-                wait_for_attendance_table(driver)
-                return
-    except Exception:
-        pass
-
-    try:
-        elem = driver.find_element(By.XPATH, f"//*[normalize-space(text())='{target}']")
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
-        time.sleep(SCROLL_SLEEP)
-        driver.execute_script("arguments[0].click();", elem)
-        time.sleep(POST_CLICK_SLEEP)
-        wait_for_attendance_table(driver)
-        return
-    except Exception:
-        pass
-
-    raise RuntimeError(f"Could not click member page number {page_num}.")
-
-
-# ============================================================
-# WEEK NAVIGATION
-# ============================================================
-
-def click_left_arrow(driver: webdriver.Chrome) -> None:
-    # Click the parent TH that contains the left-arrow SVG
-    try:
-        arrow_svg = driver.find_element(By.CSS_SELECTOR, "svg.sc-2b11ed23-0.kPPSzB")
-        clickable = arrow_svg.find_element(By.XPATH, "./ancestor::th[1]")
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", clickable)
-        time.sleep(SCROLL_SLEEP)
-        driver.execute_script("arguments[0].click();", clickable)
-        time.sleep(POST_CLICK_SLEEP)
-        wait_for_attendance_table(driver)
-        return
-    except Exception:
-        pass
-
-    # Fallback: click any TH containing that svg
-    try:
-        clickable = driver.find_element(
-            By.XPATH,
-            "//th[.//*[name()='svg' and contains(@class,'kPPSzB')]]"
-        )
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", clickable)
-        time.sleep(SCROLL_SLEEP)
-        driver.execute_script("arguments[0].click();", clickable)
-        time.sleep(POST_CLICK_SLEEP)
-        wait_for_attendance_table(driver)
-        return
-    except Exception:
-        pass
-
-    raise RuntimeError("Could not click the left attendance navigation arrow.")
-
-
-def click_left_arrow_block(driver: webdriver.Chrome, clicks: int = DATE_BLOCK_CLICKS) -> None:
-    for i in range(clicks):
-        old_labels = get_visible_date_labels(driver)
-        log(f"Before click {i+1}: {old_labels}")
-
-        click_left_arrow(driver)
-
-        changed = False
-        for _ in range(20):
-            time.sleep(0.6)
-            new_labels = get_visible_date_labels(driver)
-            if new_labels and new_labels != old_labels:
-                log(f"After click {i+1}: {new_labels}")
-                changed = True
+        if ch == '"':
+            in_string = True
+        elif ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
                 break
 
-        if not changed:
-            save_debug_page(driver, f"left_arrow_click_{i+1}_failed")
-            raise RuntimeError(f"Left-arrow click {i+1} did not change the visible date headers.")
+    if end is None:
+        save_debug_page(driver, "attendees_array_end_missing")
+        raise RuntimeError("Could not find end of attendees array in page source.")
 
-
-# ============================================================
-# ROW / CELL EXTRACTION
-# ============================================================
-
-def extract_name_from_row(row: WebElement) -> str:
-    try:
-        elems = row.find_elements(By.CSS_SELECTOR, classes_to_css(NAME_CELL_CLASS))
-        for elem in elems:
-            txt = safe_text(elem)
-            if txt:
-                return txt
-    except Exception:
-        pass
+    attendees_json = html[start:end]
 
     try:
-        tds = row.find_elements(By.XPATH, TD_REL_XPATH)
-        if tds:
-            txt = safe_text(tds[0])
-            if txt:
-                return txt
+        attendees = json.loads(attendees_json)
     except Exception:
-        pass
+        debug_dir = ensure_dir(DEBUG_DIR)
+        raw_path = debug_dir / "attendees_raw.json.txt"
+        raw_path.write_text(attendees_json, encoding="utf-8")
+        raise RuntimeError("Failed to parse attendees JSON from page source.")
 
-    return ""
+    if not isinstance(attendees, list):
+        raise RuntimeError("Attendees data was not a list.")
 
-
-def cell_is_present(cell: WebElement) -> bool:
-    """
-    Checked icons appear to include a filled square/checkmark structure.
-    Unchecked icons appear outline-only.
-    This is intentionally stricter than the old 'any path means present' logic.
-    """
-    try:
-        html = (cell.get_attribute("innerHTML") or "").lower()
-    except Exception:
-        html = ""
-
-    if "<svg" not in html:
-        return False
-
-    try:
-        paths = cell.find_elements(By.XPATH, ".//*[name()='svg']//*[name()='path']")
-    except Exception:
-        paths = []
-
-    try:
-        circles = cell.find_elements(By.XPATH, ".//*[name()='svg']//*[name()='circle']")
-    except Exception:
-        circles = []
-
-    try:
-        rects = cell.find_elements(By.XPATH, ".//*[name()='svg']//*[name()='rect']")
-    except Exception:
-        rects = []
-
-    # Strong indicator of checked icon complexity
-    if len(paths) >= 2:
-        return True
-
-    # Filled square plus path often indicates checked state
-    if len(rects) >= 1 and len(paths) >= 1:
-        return True
-
-    # Heuristic from your screenshot: checked icon markup included fill-rule/clip-rule/currentColor
-    if "fill-rule" in html and "clip-rule" in html and "currentcolor" in html:
-        return True
-
-    # Simple outline-only icon should not count as present
-    if len(paths) <= 1 and len(circles) <= 1 and len(rects) == 0:
-        return False
-
-    return False
+    return attendees
 
 
-def scrape_current_member_page(
+def scrape_current_loaded_window(
     driver: webdriver.Chrome,
     attendance_data: Dict[str, Dict[date, bool]],
     start_dt: date,
@@ -535,67 +336,93 @@ def scrape_current_member_page(
 ) -> Tuple[int, List[date]]:
     wait_for_attendance_table(driver)
 
-    columns = get_visible_columns(driver, start_dt, end_dt)
-    if not columns:
-        save_debug_page(driver, "no_columns_detected")
-        raise RuntimeError("Could not detect visible attendance date columns.")
-
-    target_columns = [c for c in columns if start_dt <= c.actual_date <= end_dt]
-    found_dates = sorted({c.actual_date for c in target_columns})
-
-    rows = driver.find_elements(By.XPATH, ROW_XPATH)
+    attendees = extract_attendees_from_page_source(driver)
+    found_dates: Set[date] = set()
     scraped_rows = 0
 
-    for row in rows:
-        try:
-            name = extract_name_from_row(row)
-            if not name:
+    for person in attendees:
+        name = normalize_space(person.get("displayName", ""))
+        if not name:
+            continue
+
+        scraped_rows += 1
+        attendance_data.setdefault(name, {})
+
+        for entry in person.get("entries", []):
+            iso = entry.get("date", {}).get("isoYearMonthDay")
+            if not iso:
                 continue
 
-            scraped_rows += 1
-            attendance_data.setdefault(name, {})
+            dt = datetime.strptime(iso, "%Y-%m-%d").date()
+            if not (start_dt <= dt <= end_dt):
+                continue
 
-            cells = row.find_elements(By.XPATH, TD_REL_XPATH)
-            for col in target_columns:
-                if col.column_index >= len(cells):
-                    continue
-                attendance_data[name][col.actual_date] = cell_is_present(cells[col.column_index])
+            found_dates.add(dt)
+            attendance_data[name][dt] = bool(entry.get("isMarkedAttended", False))
 
-        except StaleElementReferenceException:
+    return scraped_rows, sorted(found_dates)
+
+
+# ============================================================
+# LEFT ARROW NAVIGATION
+# ============================================================
+
+def click_left_arrow(driver: webdriver.Chrome) -> None:
+    # Get the header area into a stable view first
+    driver.execute_script("window.scrollTo(0, 0);")
+    time.sleep(0.6)
+
+    xpaths = [
+        "//th[.//*[name()='svg' and contains(@class,'kPPSzB')]]",
+        "//th[.//*[name()='svg' and contains(@class,'sc-2b11ed23-0')]]",
+        "//span[.//*[name()='svg' and contains(@class,'kPPSzB')]]/ancestor::th[1]",
+    ]
+
+    for xp in xpaths:
+        try:
+            elem = driver.find_element(By.XPATH, xp)
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
+            time.sleep(SCROLL_SLEEP)
+            driver.execute_script("arguments[0].click();", elem)
+            time.sleep(1.0)
+            return
+        except Exception:
             continue
 
-    return scraped_rows, found_dates
-
-
-def scrape_all_member_pages_for_current_dates(
-    driver: webdriver.Chrome,
-    attendance_data: Dict[str, Dict[date, bool]],
-    start_dt: date,
-    end_dt: date,
-) -> List[date]:
-    collected: Set[date] = set()
-
-    member_pages = get_bottom_page_numbers(driver)
-    log(f"Member page numbers found: {member_pages}")
-
-    # Always scrape currently visible page first
-    rows_scraped, dates_found = scrape_current_member_page(driver, attendance_data, start_dt, end_dt)
-    for dt in dates_found:
-        collected.add(dt)
-    log(f"Scraped current visible page; rows: {rows_scraped}; dates: {[d.isoformat() for d in dates_found]}")
-
-    # Then explicitly visit remaining pages, skipping 1 because current page is already scraped
-    for member_page in member_pages:
-        if member_page == 1:
+    for xp in xpaths:
+        try:
+            elem = driver.find_element(By.XPATH, xp)
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
+            time.sleep(SCROLL_SLEEP)
+            ActionChains(driver).move_to_element(elem).click().perform()
+            time.sleep(1.0)
+            return
+        except Exception:
             continue
-        log(f"Scraping member page {member_page}")
-        click_member_page_number(driver, member_page)
-        rows_scraped, dates_found = scrape_current_member_page(driver, attendance_data, start_dt, end_dt)
-        for dt in dates_found:
-            collected.add(dt)
-        log(f"Rows scraped: {rows_scraped}; dates: {[d.isoformat() for d in dates_found]}")
 
-    return sorted(collected)
+    save_debug_page(driver, "left_arrow_click_failed")
+    raise RuntimeError("Could not click the left attendance navigation arrow.")
+
+
+def click_left_arrow_block(driver: webdriver.Chrome, clicks: int = DATE_BLOCK_CLICKS) -> None:
+    for i in range(clicks):
+        old_labels = get_visible_date_labels(driver)
+        log(f"Before click {i + 1}: {old_labels}")
+
+        click_left_arrow(driver)
+
+        changed = False
+        for _ in range(20):
+            time.sleep(0.7)
+            new_labels = get_visible_date_labels(driver)
+            if new_labels and new_labels != old_labels:
+                log(f"After click {i + 1}: {new_labels}")
+                changed = True
+                break
+
+        if not changed:
+            save_debug_page(driver, f"left_arrow_click_{i+1}_failed")
+            raise RuntimeError(f"Left-arrow click {i+1} did not change the visible date headers.")
 
 
 # ============================================================
@@ -618,7 +445,7 @@ def scrape_attendance(
     while True:
         safety_counter += 1
         if safety_counter > 20:
-            raise RuntimeError("Safety stop reached while paging through date blocks.")
+            raise RuntimeError("Safety stop reached while paging through date windows.")
 
         visible_window_dates = get_visible_window_dates(driver, start_dt, end_dt)
         if not visible_window_dates:
@@ -633,13 +460,14 @@ def scrape_attendance(
             break
         seen_windows.add(window_key)
 
-        dates_found = scrape_all_member_pages_for_current_dates(driver, attendance_data, start_dt, end_dt)
+        rows_scraped, dates_found = scrape_current_loaded_window(driver, attendance_data, start_dt, end_dt)
         for dt in dates_found:
             collected_dates.add(dt)
+        log(f"Rows scraped from source: {rows_scraped}; dates: {[d.isoformat() for d in dates_found]}")
 
         earliest_visible = min(visible_window_dates)
         if earliest_visible <= start_dt:
-            log("Reached earliest required date block.")
+            log("Reached earliest required date window.")
             break
 
         log(f"Moving left to older {DATE_BLOCK_CLICKS}-week block")
