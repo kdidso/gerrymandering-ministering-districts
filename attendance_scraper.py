@@ -173,7 +173,7 @@ def attendance_api_url(unit_number: str, start_dt: date, end_dt: date) -> str:
 
 
 def member_list_api_url(unit_number: str) -> str:
-    return f"{LCR_BASE}/api/umlu/v1/member-list?lang=eng&unitNumber={unit_number}"
+    return f"{LCR_BASE}/api/umlu/report/member-list?lang=eng&unitNumber={unit_number}"
 
 
 # ============================================================
