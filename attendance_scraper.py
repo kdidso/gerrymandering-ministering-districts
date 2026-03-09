@@ -76,41 +76,50 @@ def format_excel_header(dt: date) -> str:
     return f"{dt.strftime('%b')} {dt.day} {dt.year}"
 
 
+def sunday_on_or_before(dt: date) -> date:
+    return dt - timedelta(days=(dt.weekday() + 1) % 7)
+
+
 def build_date_windows(start_dt: date, end_dt: date) -> List[Tuple[date, date]]:
     """
-    Build Sunday-to-Sunday-style 28-day windows going backward from end_dt.
-    Each request uses start/end inclusive dates as seen in the discovered URLs.
-    Example discovered:
-      2025-12-07 to 2026-01-04
-      2026-01-11 to 2026-02-08
+    Build overlapping 5-Sunday windows (28 days long) starting from every Sunday.
+    This avoids guessing which Sunday LCR chose for its blocks.
     """
     windows: List[Tuple[date, date]] = []
 
-    current_end = end_dt
-    while current_end >= start_dt:
-        current_start = current_end - timedelta(days=WINDOW_DAYS)
-        windows.append((current_start, current_end))
-        current_end = current_start - timedelta(days=7)
+    first_start = sunday_on_or_before(start_dt - timedelta(days=28))
+    last_start = sunday_on_or_before(end_dt)
 
-    # Remove exact duplicates while preserving order
-    deduped: List[Tuple[date, date]] = []
-    seen = set()
-    for win in windows:
-        if win not in seen:
-            seen.add(win)
-            deduped.append(win)
+    current = first_start
+    while current <= last_start:
+        windows.append((current, current + timedelta(days=28)))
+        current += timedelta(days=7)
 
-    return deduped
+    return windows
 
 
 def attendee_name(person: dict) -> str:
-    # Try the most likely fields first
-    for key in ("displayName", "preferredName", "name", "sortName"):
+    # Most likely direct string fields
+    for key in ("displayName", "preferredName", "name", "fullName", "sortName"):
         value = person.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
 
-    # Fallback from nested structures if ever needed
+    # Nested dict fields, just in case
+    for value in person.values():
+        if isinstance(value, dict):
+            for key in ("displayName", "preferredName", "name", "fullName", "sortName"):
+                sub = value.get(key)
+                if isinstance(sub, str) and sub.strip():
+                    return sub.strip()
+
+    # Last-resort fallback: pick the first non-empty string that looks like a name
+    for value in person.values():
+        if isinstance(value, str):
+            s = value.strip()
+            if s and ("," in s or " " in s):
+                return s
+
     return ""
 
 
@@ -211,11 +220,18 @@ def merge_attendance_window(
     attendance_data_obj = payload.get("attendanceData") or {}
     attendees = attendance_data_obj.get("attendees") or []
 
+    if attendees:
+        first = attendees[0]
+        log(f"First attendee keys: {list(first.keys())}")
+
     merged_people = 0
 
-    for person in attendees:
+    for idx, person in enumerate(attendees):
         name = attendee_name(person)
+
         if not name:
+            if idx < 3:
+                log(f"Could not determine name for attendee sample #{idx}: {person}")
             continue
 
         merged_people += 1
