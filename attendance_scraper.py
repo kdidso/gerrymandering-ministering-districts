@@ -368,40 +368,30 @@ def scrape_current_loaded_window(
 # ============================================================
 
 def click_left_arrow(driver: webdriver.Chrome) -> None:
-    # Get the header area into a stable view first
-    driver.execute_script("window.scrollTo(0, 0);")
-    time.sleep(0.6)
+    # ensure header area is visible
+    driver.execute_script("window.scrollTo(0,0)")
+    time.sleep(0.8)
 
-    xpaths = [
-        "//th[.//*[name()='svg' and contains(@class,'kPPSzB')]]",
-        "//th[.//*[name()='svg' and contains(@class,'sc-2b11ed23-0')]]",
-        "//span[.//*[name()='svg' and contains(@class,'kPPSzB')]]/ancestor::th[1]",
-    ]
+    try:
+        arrow_th = driver.find_element(
+            By.XPATH,
+            "//th[.//*[name()='svg' and contains(@class,'kPPSzB')]]"
+        )
 
-    for xp in xpaths:
-        try:
-            elem = driver.find_element(By.XPATH, xp)
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
-            time.sleep(SCROLL_SLEEP)
-            driver.execute_script("arguments[0].click();", elem)
-            time.sleep(1.0)
-            return
-        except Exception:
-            continue
+        driver.execute_script(
+            "arguments[0].scrollIntoView({block:'center'});",
+            arrow_th
+        )
+        time.sleep(0.5)
 
-    for xp in xpaths:
-        try:
-            elem = driver.find_element(By.XPATH, xp)
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
-            time.sleep(SCROLL_SLEEP)
-            ActionChains(driver).move_to_element(elem).click().perform()
-            time.sleep(1.0)
-            return
-        except Exception:
-            continue
+        # click the actual header cell
+        driver.execute_script("arguments[0].click();", arrow_th)
 
-    save_debug_page(driver, "left_arrow_click_failed")
-    raise RuntimeError("Could not click the left attendance navigation arrow.")
+        time.sleep(1.5)
+
+    except Exception:
+        save_debug_page(driver, "left_arrow_click_failed")
+        raise RuntimeError("Could not click the left attendance navigation arrow.")
 
 
 def click_left_arrow_block(driver: webdriver.Chrome, clicks: int = DATE_BLOCK_CLICKS) -> None:
