@@ -22,6 +22,7 @@ jobs:
       LCR_PASSWORD: ${{ secrets.LCR_PASSWORD }}
       START_DATE: ${{ github.event.inputs.start_date }}
       END_DATE: ${{ github.event.inputs.end_date }}
+      UNIT_NUMBER: "253022"
 
     steps:
       - name: Check out repo
