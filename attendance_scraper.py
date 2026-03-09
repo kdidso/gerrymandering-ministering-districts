@@ -2,23 +2,19 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
-import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+import requests
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException
 from selenium.webdriver import ChromeOptions
-from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -28,7 +24,10 @@ from selenium.webdriver.support.ui import WebDriverWait
 # ============================================================
 
 LCR_BASE = "https://lcr.churchofjesuschrist.org"
-ATTENDANCE_URL = f"{LCR_BASE}/report/class-and-quorum-attendance/overview?lang=eng"
+ATTENDANCE_PAGE_URL = f"{LCR_BASE}/report/class-and-quorum-attendance/overview?lang=eng"
+
+# From the API URL you found
+UNIT_NUMBER = os.getenv("UNIT_NUMBER", "253022").strip()
 
 USERNAME = os.getenv("LCR_USERNAME", "").strip()
 PASSWORD = os.getenv("LCR_PASSWORD", "").strip()
@@ -37,39 +36,22 @@ START_DATE = os.getenv("START_DATE", "2025-12-28").strip()
 END_DATE = os.getenv("END_DATE", "2026-03-08").strip()
 
 OUTPUT_DIR = "data"
-DEBUG_DIR = "debug"
 
 HEADLESS = True
-
 DEFAULT_WAIT = 30
 LONG_WAIT = 60
 POST_LOGIN_SLEEP = 2.0
-POST_NAV_SLEEP = 1.5
-SCROLL_SLEEP = 0.35
 
-# The page shows 5 weeks at a time. Moving left one click shifts by one week.
-DATE_BLOCK_CLICKS = 5
-
-# Selectors from your inspection
-DATE_HEADER_CLASS = "sc-arbpvo-0 sc-arbpvo-1 fRnemr fhFlsT sc-473b494-0 kpqFIx"
-LEFT_ARROW_SVG_CLASS = "sc-2b11ed23-0 kPPSzB"
-
-# Fallback table selector
-ROW_XPATH = "//table//tbody//tr"
-
-SAVE_DEBUG_ON_ERROR = True
+# The discovered API appears to load 4-week windows.
+WINDOW_DAYS = 28
 
 
 # ============================================================
-# BASIC HELPERS
+# HELPERS
 # ============================================================
 
 def log(msg: str) -> None:
     print(f"[INFO] {msg}")
-
-
-def warn(msg: str) -> None:
-    print(f"[WARN] {msg}")
 
 
 def err(msg: str) -> None:
@@ -82,97 +64,58 @@ def ensure_dir(path: str | Path) -> Path:
     return p
 
 
-def normalize_space(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "")).strip()
-
-
 def parse_iso_date(value: str) -> date:
     return datetime.strptime(value, "%Y-%m-%d").date()
 
 
-def midpoint_date(start_dt: date, end_dt: date) -> date:
-    return start_dt + timedelta(days=(end_dt - start_dt).days // 2)
-
-
-def dedupe_preserve_order(items: List[str]) -> List[str]:
-    seen = set()
-    out = []
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            out.append(item)
-    return out
+def to_iso(dt: date) -> str:
+    return dt.strftime("%Y-%m-%d")
 
 
 def format_excel_header(dt: date) -> str:
     return f"{dt.strftime('%b')} {dt.day} {dt.year}"
 
 
-def classes_to_css(class_string: str) -> str:
-    return "." + ".".join(class_string.split())
+def build_date_windows(start_dt: date, end_dt: date) -> List[Tuple[date, date]]:
+    """
+    Build Sunday-to-Sunday-style 28-day windows going backward from end_dt.
+    Each request uses start/end inclusive dates as seen in the discovered URLs.
+    Example discovered:
+      2025-12-07 to 2026-01-04
+      2026-01-11 to 2026-02-08
+    """
+    windows: List[Tuple[date, date]] = []
+
+    current_end = end_dt
+    while current_end >= start_dt:
+        current_start = current_end - timedelta(days=WINDOW_DAYS)
+        windows.append((current_start, current_end))
+        current_end = current_start - timedelta(days=7)
+
+    # Remove exact duplicates while preserving order
+    deduped: List[Tuple[date, date]] = []
+    seen = set()
+    for win in windows:
+        if win not in seen:
+            seen.add(win)
+            deduped.append(win)
+
+    return deduped
 
 
-def save_debug_page(driver: webdriver.Chrome, name: str) -> None:
-    if not SAVE_DEBUG_ON_ERROR:
-        return
+def attendee_name(person: dict) -> str:
+    # Try the most likely fields first
+    for key in ("displayName", "preferredName", "name", "sortName"):
+        value = person.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
 
-    debug_dir = ensure_dir(DEBUG_DIR)
-
-    try:
-        html_path = debug_dir / f"{name}.html"
-        html_path.write_text(driver.page_source, encoding="utf-8")
-        log(f"Saved debug HTML to {html_path}")
-    except Exception as ex:
-        warn(f"Could not save debug HTML: {ex}")
-
-    try:
-        png_path = debug_dir / f"{name}.png"
-        driver.save_screenshot(str(png_path))
-        log(f"Saved debug screenshot to {png_path}")
-    except Exception as ex:
-        warn(f"Could not save debug screenshot: {ex}")
-
-
-def wait_present(driver: webdriver.Chrome, locator: Tuple[str, str], timeout: int = DEFAULT_WAIT):
-    return WebDriverWait(driver, timeout).until(EC.presence_of_element_located(locator))
-
-
-def safe_text(element: WebElement) -> str:
-    try:
-        return normalize_space(element.text)
-    except Exception:
-        return ""
-
-
-def is_probable_date_label(text: str) -> bool:
-    return bool(re.match(r"^\d{1,2}\s+[A-Za-z]{3}$", normalize_space(text)))
-
-
-def infer_year_for_label(label: str, start_dt: date, end_dt: date) -> Optional[date]:
-    label = normalize_space(label)
-    if not is_probable_date_label(label):
-        return None
-
-    mid = midpoint_date(start_dt, end_dt)
-    best_candidate = None
-    best_distance = None
-
-    for year in range(start_dt.year - 1, end_dt.year + 2):
-        try:
-            candidate = datetime.strptime(f"{label} {year}", "%d %b %Y").date()
-        except ValueError:
-            continue
-
-        distance = abs((candidate - mid).days)
-        if best_distance is None or distance < best_distance:
-            best_candidate = candidate
-            best_distance = distance
-
-    return best_candidate
+    # Fallback from nested structures if ever needed
+    return ""
 
 
 # ============================================================
-# DRIVER / LOGIN
+# SELENIUM LOGIN
 # ============================================================
 
 def make_driver() -> webdriver.Chrome:
@@ -197,275 +140,122 @@ def login(driver: webdriver.Chrome) -> None:
     driver.get(LCR_BASE)
 
     try:
-        user_input = wait_present(driver, (By.ID, "username-input"), LONG_WAIT)
+        user_input = WebDriverWait(driver, LONG_WAIT).until(
+            EC.presence_of_element_located((By.ID, "username-input"))
+        )
         user_input.clear()
         user_input.send_keys(USERNAME)
         user_input.send_keys(Keys.ENTER)
 
-        pwd_input = wait_present(driver, (By.ID, "password-input"), LONG_WAIT)
+        pwd_input = WebDriverWait(driver, LONG_WAIT).until(
+            EC.presence_of_element_located((By.ID, "password-input"))
+        )
         pwd_input.clear()
         pwd_input.send_keys(PASSWORD)
         pwd_input.send_keys(Keys.ENTER)
 
         WebDriverWait(driver, LONG_WAIT).until(EC.url_contains(LCR_BASE))
-        time.sleep(POST_LOGIN_SLEEP)
+        driver.implicitly_wait(1)
         log("Login submitted successfully")
-    except Exception:
-        save_debug_page(driver, "login_failure")
-        raise RuntimeError("Automated login failed with the known username/password field flow.")
+    except Exception as ex:
+        raise RuntimeError("Automated login failed with the known username/password field flow.") from ex
 
 
-def goto_attendance(driver: webdriver.Chrome) -> None:
-    log("Opening attendance page")
-    driver.get(ATTENDANCE_URL)
-    wait_for_attendance_table(driver)
+def build_requests_session_from_driver(driver: webdriver.Chrome) -> requests.Session:
+    session = requests.Session()
 
-
-# ============================================================
-# ATTENDANCE PAGE HELPERS
-# ============================================================
-
-def wait_for_attendance_table(driver: webdriver.Chrome) -> None:
-    try:
-        WebDriverWait(driver, DEFAULT_WAIT).until(
-            lambda d: len(d.find_elements(By.XPATH, ROW_XPATH)) > 0
+    for cookie in driver.get_cookies():
+        session.cookies.set(
+            cookie["name"],
+            cookie["value"],
+            domain=cookie.get("domain"),
+            path=cookie.get("path", "/"),
         )
-        time.sleep(POST_NAV_SLEEP)
-        return
-    except TimeoutException:
-        save_debug_page(driver, "attendance_table_missing")
-        raise RuntimeError("Could not detect attendance table rows.")
+
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json, text/plain, */*",
+            "Referer": ATTENDANCE_PAGE_URL,
+        }
+    )
+    return session
 
 
-def get_visible_date_labels(driver: webdriver.Chrome) -> List[str]:
-    labels: List[str] = []
+# ============================================================
+# API ACCESS
+# ============================================================
 
-    try:
-        elems = driver.find_elements(By.CSS_SELECTOR, classes_to_css(DATE_HEADER_CLASS))
-        for elem in elems:
-            txt = safe_text(elem)
-            if is_probable_date_label(txt):
-                labels.append(txt)
-    except Exception:
-        pass
-
-    return dedupe_preserve_order(labels)
+def attendance_api_url(unit_number: str, start_dt: date, end_dt: date) -> str:
+    return (
+        f"{LCR_BASE}/api/umlu/v1/class-and-quorum/attendance/overview/"
+        f"unitNumber/{unit_number}/start/{to_iso(start_dt)}/end/{to_iso(end_dt)}?lang=eng"
+    )
 
 
-def get_visible_window_dates(driver: webdriver.Chrome, start_dt: date, end_dt: date) -> List[date]:
-    out: List[date] = []
-    for label in get_visible_date_labels(driver):
-        actual = infer_year_for_label(label, start_dt, end_dt)
-        if actual is not None:
-            out.append(actual)
-    return sorted(set(out))
+def fetch_window_json(session: requests.Session, unit_number: str, start_dt: date, end_dt: date) -> dict:
+    url = attendance_api_url(unit_number, start_dt, end_dt)
+    log(f"Fetching API window: {to_iso(start_dt)} to {to_iso(end_dt)}")
+    response = session.get(url, timeout=60)
+    response.raise_for_status()
+    return response.json()
 
 
-def extract_attendees_from_page_source(driver: webdriver.Chrome) -> List[dict]:
-    html = driver.page_source
-
-    # Prefer the exact marker we saw in the debug html
-    markers = [
-        '"initialProps":{"attendees":',
-        '"attendees":[',
-    ]
-
-    start = -1
-    for marker in markers:
-        start = html.find(marker)
-        if start != -1:
-            start = html.find("[", start)
-            break
-
-    if start == -1:
-        save_debug_page(driver, "attendees_marker_missing")
-        raise RuntimeError("Could not find attendees data in page source.")
-
-    depth = 0
-    end = None
-    in_string = False
-    escape = False
-
-    for i in range(start, len(html)):
-        ch = html[i]
-
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-
-        if ch == '"':
-            in_string = True
-        elif ch == "[":
-            depth += 1
-        elif ch == "]":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-
-    if end is None:
-        save_debug_page(driver, "attendees_array_end_missing")
-        raise RuntimeError("Could not find end of attendees array in page source.")
-
-    attendees_json = html[start:end]
-
-    try:
-        attendees = json.loads(attendees_json)
-    except Exception:
-        debug_dir = ensure_dir(DEBUG_DIR)
-        raw_path = debug_dir / "attendees_raw.json.txt"
-        raw_path.write_text(attendees_json, encoding="utf-8")
-        raise RuntimeError("Failed to parse attendees JSON from page source.")
-
-    if not isinstance(attendees, list):
-        raise RuntimeError("Attendees data was not a list.")
-
-    return attendees
-
-
-def scrape_current_loaded_window(
-    driver: webdriver.Chrome,
+def merge_attendance_window(
+    payload: dict,
     attendance_data: Dict[str, Dict[date, bool]],
+    all_dates: Set[date],
     start_dt: date,
     end_dt: date,
-) -> Tuple[int, List[date]]:
-    wait_for_attendance_table(driver)
+) -> int:
+    attendance_data_obj = payload.get("attendanceData") or {}
+    attendees = attendance_data_obj.get("attendees") or []
 
-    attendees = extract_attendees_from_page_source(driver)
-    found_dates: Set[date] = set()
-    scraped_rows = 0
+    merged_people = 0
 
     for person in attendees:
-        name = normalize_space(person.get("displayName", ""))
+        name = attendee_name(person)
         if not name:
             continue
 
-        scraped_rows += 1
+        merged_people += 1
         attendance_data.setdefault(name, {})
 
-        for entry in person.get("entries", []):
-            iso = entry.get("date", {}).get("isoYearMonthDay")
+        for entry in person.get("entries", []) or []:
+            date_obj = entry.get("date") or {}
+            iso = date_obj.get("isoYearMonthDay")
             if not iso:
                 continue
 
-            dt = datetime.strptime(iso, "%Y-%m-%d").date()
+            try:
+                dt = datetime.strptime(iso, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+
             if not (start_dt <= dt <= end_dt):
                 continue
 
-            found_dates.add(dt)
+            all_dates.add(dt)
             attendance_data[name][dt] = bool(entry.get("isMarkedAttended", False))
 
-    return scraped_rows, sorted(found_dates)
+    return merged_people
 
 
-# ============================================================
-# LEFT ARROW NAVIGATION
-# ============================================================
-
-def click_left_arrow(driver: webdriver.Chrome) -> None:
-    # ensure header area is visible
-    driver.execute_script("window.scrollTo(0,0)")
-    time.sleep(0.8)
-
-    try:
-        arrow_th = driver.find_element(
-            By.XPATH,
-            "//th[.//*[name()='svg' and contains(@class,'kPPSzB')]]"
-        )
-
-        driver.execute_script(
-            "arguments[0].scrollIntoView({block:'center'});",
-            arrow_th
-        )
-        time.sleep(0.5)
-
-        # click the actual header cell
-        driver.execute_script("arguments[0].click();", arrow_th)
-
-        time.sleep(1.5)
-
-    except Exception:
-        save_debug_page(driver, "left_arrow_click_failed")
-        raise RuntimeError("Could not click the left attendance navigation arrow.")
-
-
-def click_left_arrow_block(driver: webdriver.Chrome, clicks: int = DATE_BLOCK_CLICKS) -> None:
-    for i in range(clicks):
-        old_labels = get_visible_date_labels(driver)
-        log(f"Before click {i + 1}: {old_labels}")
-
-        click_left_arrow(driver)
-
-        changed = False
-        for _ in range(20):
-            time.sleep(0.7)
-            new_labels = get_visible_date_labels(driver)
-            if new_labels and new_labels != old_labels:
-                log(f"After click {i + 1}: {new_labels}")
-                changed = True
-                break
-
-        if not changed:
-            save_debug_page(driver, f"left_arrow_click_{i+1}_failed")
-            raise RuntimeError(f"Left-arrow click {i+1} did not change the visible date headers.")
-
-
-# ============================================================
-# MAIN SCRAPE LOOP
-# ============================================================
-
-def scrape_attendance(
-    driver: webdriver.Chrome,
-    start_dt: date,
-    end_dt: date,
-) -> Tuple[Dict[str, Dict[date, bool]], List[date]]:
+def scrape_attendance_via_api(session: requests.Session, unit_number: str, start_dt: date, end_dt: date) -> Tuple[Dict[str, Dict[date, bool]], List[date]]:
     attendance_data: Dict[str, Dict[date, bool]] = {}
-    collected_dates: Set[date] = set()
+    all_dates: Set[date] = set()
 
-    goto_attendance(driver)
+    windows = build_date_windows(start_dt, end_dt)
+    log(f"Date windows to request: {[f'{to_iso(s)}..{to_iso(e)}' for s, e in windows]}")
 
-    safety_counter = 0
-    seen_windows: Set[Tuple[str, ...]] = set()
+    for win_start, win_end in windows:
+        payload = fetch_window_json(session, unit_number, win_start, win_end)
+        merged_people = merge_attendance_window(payload, attendance_data, all_dates, start_dt, end_dt)
+        log(f"Merged attendees from window: {merged_people}")
 
-    while True:
-        safety_counter += 1
-        if safety_counter > 20:
-            raise RuntimeError("Safety stop reached while paging through date windows.")
-
-        visible_window_dates = get_visible_window_dates(driver, start_dt, end_dt)
-        if not visible_window_dates:
-            save_debug_page(driver, f"window_dates_missing_{safety_counter}")
-            raise RuntimeError("Could not detect visible date headers on attendance page.")
-
-        window_key = tuple(d.isoformat() for d in visible_window_dates)
-        log(f"Visible week window: {list(window_key)}")
-
-        if window_key in seen_windows:
-            warn("Detected repeated week window; stopping to avoid infinite loop.")
-            break
-        seen_windows.add(window_key)
-
-        rows_scraped, dates_found = scrape_current_loaded_window(driver, attendance_data, start_dt, end_dt)
-        for dt in dates_found:
-            collected_dates.add(dt)
-        log(f"Rows scraped from source: {rows_scraped}; dates: {[d.isoformat() for d in dates_found]}")
-
-        earliest_visible = min(visible_window_dates)
-        if earliest_visible <= start_dt:
-            log("Reached earliest required date window.")
-            break
-
-        log(f"Moving left to older {DATE_BLOCK_CLICKS}-week block")
-        click_left_arrow_block(driver, clicks=DATE_BLOCK_CLICKS)
-
-    final_dates = sorted(dt for dt in collected_dates if start_dt <= dt <= end_dt)
+    final_dates = sorted(all_dates)
     if not final_dates:
-        raise RuntimeError("No attendance dates were collected in the requested range.")
+        raise RuntimeError("No attendance dates were collected from the API.")
 
     return attendance_data, final_dates
 
@@ -546,7 +336,13 @@ def main() -> int:
     driver = make_driver()
     try:
         login(driver)
-        attendance_data, all_dates = scrape_attendance(driver, start_dt, end_dt)
+
+        # Open the attendance page once so the same authenticated context is definitely active
+        driver.get(ATTENDANCE_PAGE_URL)
+
+        session = build_requests_session_from_driver(driver)
+        attendance_data, all_dates = scrape_attendance_via_api(session, UNIT_NUMBER, start_dt, end_dt)
+
         write_excel(attendance_data, all_dates, out_path)
         log(f"Excel output written to {out_path}")
     finally:
