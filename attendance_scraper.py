@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
 import requests
 from openpyxl import Workbook
@@ -25,8 +24,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 LCR_BASE = "https://lcr.churchofjesuschrist.org"
 ATTENDANCE_PAGE_URL = f"{LCR_BASE}/report/class-and-quorum-attendance/overview?lang=eng"
+MEMBER_LIST_PAGE_URL = f"{LCR_BASE}/records/member-list?lang=eng"
 
-# From the API URL you found
 UNIT_NUMBER = os.getenv("UNIT_NUMBER", "253022").strip()
 
 USERNAME = os.getenv("LCR_USERNAME", "").strip()
@@ -40,9 +39,6 @@ OUTPUT_DIR = "data"
 HEADLESS = True
 DEFAULT_WAIT = 30
 LONG_WAIT = 60
-POST_LOGIN_SLEEP = 2.0
-
-# The discovered API appears to load 4-week windows.
 WINDOW_DAYS = 28
 
 
@@ -82,8 +78,8 @@ def sunday_on_or_before(dt: date) -> date:
 
 def build_date_windows(start_dt: date, end_dt: date) -> List[Tuple[date, date]]:
     """
-    Build overlapping 5-Sunday windows (28 days long) starting from every Sunday.
-    This avoids guessing which Sunday LCR chose for its blocks.
+    Build overlapping 28-day windows starting every Sunday.
+    This covers the discovered API pattern without guessing exact block alignment.
     """
     windows: List[Tuple[date, date]] = []
 
@@ -96,31 +92,6 @@ def build_date_windows(start_dt: date, end_dt: date) -> List[Tuple[date, date]]:
         current += timedelta(days=7)
 
     return windows
-
-
-def attendee_name(person: dict) -> str:
-    # Most likely direct string fields
-    for key in ("displayName", "preferredName", "name", "fullName", "sortName"):
-        value = person.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-
-    # Nested dict fields, just in case
-    for value in person.values():
-        if isinstance(value, dict):
-            for key in ("displayName", "preferredName", "name", "fullName", "sortName"):
-                sub = value.get(key)
-                if isinstance(sub, str) and sub.strip():
-                    return sub.strip()
-
-    # Last-resort fallback: pick the first non-empty string that looks like a name
-    for value in person.values():
-        if isinstance(value, str):
-            s = value.strip()
-            if s and ("," in s or " " in s):
-                return s
-
-    return ""
 
 
 # ============================================================
@@ -164,7 +135,6 @@ def login(driver: webdriver.Chrome) -> None:
         pwd_input.send_keys(Keys.ENTER)
 
         WebDriverWait(driver, LONG_WAIT).until(EC.url_contains(LCR_BASE))
-        driver.implicitly_wait(1)
         log("Login submitted successfully")
     except Exception as ex:
         raise RuntimeError("Automated login failed with the known username/password field flow.") from ex
@@ -192,7 +162,7 @@ def build_requests_session_from_driver(driver: webdriver.Chrome) -> requests.Ses
 
 
 # ============================================================
-# API ACCESS
+# API URLS
 # ============================================================
 
 def attendance_api_url(unit_number: str, start_dt: date, end_dt: date) -> str:
@@ -202,16 +172,72 @@ def attendance_api_url(unit_number: str, start_dt: date, end_dt: date) -> str:
     )
 
 
-def fetch_window_json(session: requests.Session, unit_number: str, start_dt: date, end_dt: date) -> dict:
-    url = attendance_api_url(unit_number, start_dt, end_dt)
-    log(f"Fetching API window: {to_iso(start_dt)} to {to_iso(end_dt)}")
+def member_list_api_url(unit_number: str) -> str:
+    return f"{LCR_BASE}/api/umlu/v1/member-list?lang=eng&unitNumber={unit_number}"
+
+
+# ============================================================
+# API FETCHES
+# ============================================================
+
+def fetch_json(session: requests.Session, url: str) -> dict | list:
     response = session.get(url, timeout=60)
     response.raise_for_status()
     return response.json()
 
 
+def fetch_member_roster(session: requests.Session, unit_number: str) -> Dict[str, str]:
+    url = member_list_api_url(unit_number)
+    log(f"Fetching member roster: {url}")
+    payload = fetch_json(session, url)
+
+    if not isinstance(payload, list):
+        raise RuntimeError("Member-list API did not return a list.")
+
+    roster: Dict[str, str] = {}
+
+    for person in payload:
+        uuid = (person.get("uuid") or person.get("personUuid") or "").strip()
+        if not uuid:
+            continue
+
+        name = (
+            person.get("nameListPreferredLocal")
+            or person.get("householdNameDirectoryLocal")
+            or (person.get("nameFormats") or {}).get("listPreferredLocal")
+            or person.get("houseHoldMemberNameForList")
+            or ""
+        )
+        name = name.strip()
+
+        if name:
+            roster[uuid] = name
+
+    log(f"Roster members mapped: {len(roster)}")
+    if not roster:
+        raise RuntimeError("No UUID→name mappings were found in member-list response.")
+
+    return roster
+
+
+def fetch_attendance_window(session: requests.Session, unit_number: str, start_dt: date, end_dt: date) -> dict:
+    url = attendance_api_url(unit_number, start_dt, end_dt)
+    log(f"Fetching attendance window: {to_iso(start_dt)} to {to_iso(end_dt)}")
+    payload = fetch_json(session, url)
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("Attendance API did not return an object.")
+
+    return payload
+
+
+# ============================================================
+# MERGE ATTENDANCE
+# ============================================================
+
 def merge_attendance_window(
     payload: dict,
+    roster: Dict[str, str],
     attendance_data: Dict[str, Dict[date, bool]],
     all_dates: Set[date],
     start_dt: date,
@@ -220,18 +246,15 @@ def merge_attendance_window(
     attendance_data_obj = payload.get("attendanceData") or {}
     attendees = attendance_data_obj.get("attendees") or []
 
-    if attendees:
-        first = attendees[0]
-        log(f"First attendee keys: {list(first.keys())}")
-
     merged_people = 0
 
-    for idx, person in enumerate(attendees):
-        name = attendee_name(person)
+    for person in attendees:
+        uuid = (person.get("uuid") or person.get("personUuid") or "").strip()
+        if not uuid:
+            continue
 
+        name = roster.get(uuid)
         if not name:
-            if idx < 3:
-                log(f"Could not determine name for attendee sample #{idx}: {person}")
             continue
 
         merged_people += 1
@@ -252,12 +275,22 @@ def merge_attendance_window(
                 continue
 
             all_dates.add(dt)
-            attendance_data[name][dt] = bool(entry.get("isMarkedAttended", False))
+            attended = bool(
+                entry.get("isMarkedAttended", entry.get("markedAttended", False))
+            )
+            attendance_data[name][dt] = attended
 
     return merged_people
 
 
-def scrape_attendance_via_api(session: requests.Session, unit_number: str, start_dt: date, end_dt: date) -> Tuple[Dict[str, Dict[date, bool]], List[date]]:
+def scrape_attendance_via_api(
+    session: requests.Session,
+    unit_number: str,
+    start_dt: date,
+    end_dt: date,
+) -> Tuple[Dict[str, Dict[date, bool]], List[date]]:
+    roster = fetch_member_roster(session, unit_number)
+
     attendance_data: Dict[str, Dict[date, bool]] = {}
     all_dates: Set[date] = set()
 
@@ -265,8 +298,10 @@ def scrape_attendance_via_api(session: requests.Session, unit_number: str, start
     log(f"Date windows to request: {[f'{to_iso(s)}..{to_iso(e)}' for s, e in windows]}")
 
     for win_start, win_end in windows:
-        payload = fetch_window_json(session, unit_number, win_start, win_end)
-        merged_people = merge_attendance_window(payload, attendance_data, all_dates, start_dt, end_dt)
+        payload = fetch_attendance_window(session, unit_number, win_start, win_end)
+        merged_people = merge_attendance_window(
+            payload, roster, attendance_data, all_dates, start_dt, end_dt
+        )
         log(f"Merged attendees from window: {merged_people}")
 
     final_dates = sorted(all_dates)
@@ -353,8 +388,9 @@ def main() -> int:
     try:
         login(driver)
 
-        # Open the attendance page once so the same authenticated context is definitely active
+        # Touch both pages so auth/session context is definitely warm
         driver.get(ATTENDANCE_PAGE_URL)
+        driver.get(MEMBER_LIST_PAGE_URL)
 
         session = build_requests_session_from_driver(driver)
         attendance_data, all_dates = scrape_attendance_via_api(session, UNIT_NUMBER, start_dt, end_dt)
