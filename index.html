@@ -227,6 +227,7 @@
     let wardLayer = null;
     let cellsOutlineLayer = null;
     let allMembersLayer = null;
+    let filteredPreviewLayer = null;
     let filteredLayerGroup = null;
     let districtFillLayer = null;
     let districtOutlineLayer = null;
@@ -746,10 +747,23 @@
     }
 
     function removeDistrictLayers() {
-      if (filteredLayerGroup) { map.removeLayer(filteredLayerGroup); filteredLayerGroup = null; }
-      if (districtFillLayer) { map.removeLayer(districtFillLayer); districtFillLayer = null; }
-      if (districtOutlineLayer) { map.removeLayer(districtOutlineLayer); districtOutlineLayer = null; }
-    }
+  if (filteredPreviewLayer) {
+    map.removeLayer(filteredPreviewLayer);
+    filteredPreviewLayer = null;
+  }
+  if (filteredLayerGroup) {
+    map.removeLayer(filteredLayerGroup);
+    filteredLayerGroup = null;
+  }
+  if (districtFillLayer) {
+    map.removeLayer(districtFillLayer);
+    districtFillLayer = null;
+  }
+  if (districtOutlineLayer) {
+    map.removeLayer(districtOutlineLayer);
+    districtOutlineLayer = null;
+  }
+}
 
     function unionFeatures(features) {
       if (!features.length) return null;
@@ -845,6 +859,42 @@
       }
     }
 
+    function showFilteredPreview(filteredItems) {
+  if (filteredPreviewLayer) {
+    map.removeLayer(filteredPreviewLayer);
+    filteredPreviewLayer = null;
+  }
+
+  const features = filteredItems.map(item => {
+    const clone = JSON.parse(JSON.stringify(item.feature));
+    clone.properties = clone.properties || {};
+    clone.properties._group = item.group;
+    return clone;
+  });
+
+  filteredPreviewLayer = L.geoJSON(
+    { type: "FeatureCollection", features },
+    {
+      pointToLayer: (feature, latlng) => {
+        const group = feature.properties._group;
+        const color = group === 1 ? "#d97706" : "#2563eb";
+
+        return L.circleMarker(latlng, {
+          radius: group === 1 ? 8 : 7,
+          color: "#ffffff",
+          weight: 2.2,
+          fillColor: color,
+          fillOpacity: 1,
+          opacity: 1
+        });
+      },
+      onEachFeature: (feature, layer) => {
+        const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
+        layer.bindPopup(makeMemberPopup(feature, groupLabel));
+      }
+    }
+  ).addTo(map);
+}
     function runFilter() {
       if (!membersData || !wardPolygonFeatures.length || !cellsWorking.length) {
         setStatus(filterStatus, "Data is not ready yet.", "error");
@@ -890,9 +940,11 @@
       currentStats = computeStats(filteredItems, outsideWardExcluded);
       updateMetricCards(currentStats);
 
-      if (allMembersLayer) {
-        allMembersLayer.setStyle({ radius: 5.5, color: "#ffffff", weight: 1.4, fillColor: "#cc3344", fillOpacity: 0.78, opacity: 1 });
-      }
+      if (allMembersLayer && map.hasLayer(allMembersLayer)) {
+  map.removeLayer(allMembersLayer);
+}
+
+showFilteredPreview(filteredItems);
 
       calcDistrictBtn.disabled = false;
       districtCountSelect.disabled = false;
@@ -936,38 +988,55 @@
       growDistrictsAcrossPieces(pointDistricts, pieces, runSeed);
       smoothHoleLikePieces(pieces);
       currentDistrictResult = { pointDistricts, pieces };
+      if (filteredPreviewLayer) {
+      map.removeLayer(filteredPreviewLayer);
+      filteredPreviewLayer = null;
+}
       addDistrictLayers(pointDistricts, pieces);
-      renderGerrySummary(pointDistricts, pieces);
-      if (allMembersLayer) {
-        allMembersLayer.setStyle({ radius: 5.2, color: "#ffffff", weight: 1.2, fillColor: "#cc3344", fillOpacity: 0.40, opacity: 0.9 });
-      }
+      renderGerrySummary(pointDistricts, pieces)
       regerrymanderBtn.disabled = false;
       setStatus(gerryStatus, `Generated ${pointDistricts.length} full-coverage districts from ward cells. Click Re-gerrymander to try a different layout.`, "good");
     }
 
     function resetPage() {
-      currentFiltered = [];
-      currentStats = null;
-      currentDistrictTargets = null;
-      currentDistrictResult = null;
-      gerrymanderRunCount = 0;
-      clearMetricCards();
-      resetDistrictSummary();
-      resetGerrySummary();
-      removeDistrictLayers();
-      if (allMembersLayer) {
-        allMembersLayer.setStyle({ radius: 5.5, color: "#ffffff", weight: 1.4, fillColor: "#cc3344", fillOpacity: 0.78, opacity: 1 });
-      }
-      calcDistrictBtn.disabled = true;
-      districtCountSelect.disabled = true;
-      zoomFilteredBtn.disabled = true;
-      gerrymanderBtn.disabled = true;
-      regerrymanderBtn.disabled = true;
-      setStatus(filterStatus, "Choose a gender and click Run Filter.");
-      setStatus(districtStatus, "Run the filter first.");
-      setStatus(gerryStatus, "Calculate targets first.");
-      fitMapToWard();
-    }
+  currentFiltered = [];
+  currentStats = null;
+  currentDistrictTargets = null;
+  currentDistrictResult = null;
+  gerrymanderRunCount = 0;
+
+  clearMetricCards();
+  resetDistrictSummary();
+  resetGerrySummary();
+  removeDistrictLayers();
+
+  if (allMembersLayer && !map.hasLayer(allMembersLayer)) {
+    allMembersLayer.addTo(map);
+  }
+
+  if (allMembersLayer) {
+    allMembersLayer.setStyle({
+      radius: 5.5,
+      color: "#ffffff",
+      weight: 1.4,
+      fillColor: "#cc3344",
+      fillOpacity: 0.78,
+      opacity: 1
+    });
+  }
+
+  calcDistrictBtn.disabled = true;
+  districtCountSelect.disabled = true;
+  zoomFilteredBtn.disabled = true;
+  gerrymanderBtn.disabled = true;
+  regerrymanderBtn.disabled = true;
+
+  setStatus(filterStatus, "Choose a gender and click Run Filter.");
+  setStatus(districtStatus, "Run the filter first.");
+  setStatus(gerryStatus, "Calculate targets first.");
+
+  fitMapToWard();
+}
 
     function initMap() {
       map = L.map("map", { zoomControl: true });
