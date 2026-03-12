@@ -238,6 +238,7 @@
     let gerrymanderRunCount = 0;
 
     let cellsWorking = [];
+    let cellLookup = new Map();
 
     const chkWardLoaded = document.getElementById("chkWardLoaded");
     const chkMembersLoaded = document.getElementById("chkMembersLoaded");
@@ -385,6 +386,7 @@
 
     function prepareCellsWorkingSet() {
       cellsWorking = [];
+      cellLookup = new Map();
       const giantThreshold = wardArea * 0.98;
       (cellsData.features || []).forEach((feature, index) => {
         if (!isPolygonLike(feature)) return;
@@ -393,7 +395,9 @@
         if (area >= giantThreshold) return;
         const centroid = turf.centroid(feature).geometry.coordinates;
         const bbox = turf.bbox(feature);
-        cellsWorking.push({ id: getCellId(feature, index), feature, area, bbox, centroidLng: centroid[0], centroidLat: centroid[1], pointMembers: [], pieces: [] });
+        const cell = { id: getCellId(feature, index), feature, area, bbox, centroidLng: centroid[0], centroidLat: centroid[1], pointMembers: [], pieces: [] };
+        cellsWorking.push(cell);
+        cellLookup.set(String(cell.id), cell);
       });
     }
 
