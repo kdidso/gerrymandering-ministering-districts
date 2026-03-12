@@ -811,70 +811,105 @@
         const districtIds = [...new Set(cell.pointMembers.map(item => item._assignedDistrict))];
         cell.occupiedByDistricts = districtIds.slice();
 
-        if (districtIds.length === 1) {
-  const districtId = districtIds[0];
-  const clone = JSON.parse(JSON.stringify(cell.feature));
-  clone.properties = {
-    ...(clone.properties || {}),
-    _district: districtId,
-    _pieceType: "full-cell"
-  };
-  fillFeatures.push(clone);
+   function buildDistrictPolygons(pointDistricts) {
+  const fillFeatures = [];
+  const occupiedCellIds = new Set();
+  const seedQueue = [];
+  const districtSeedCells = new Map();
+  const districtPointFeatures = [];
 
-  if (!districtSeedCells.has(districtId)) {
-    districtSeedCells.set(districtId, new Set());
+  for (const district of pointDistricts) {
+    districtSeedCells.set(district.id, new Set());
+    for (const item of district.members) {
+      districtPointFeatures.push({
+        feature: item.feature,
+        group: item.group,
+        districtId: district.id
+      });
+    }
   }
-  districtSeedCells.get(districtId).add(cell.id);
 
-  seedQueue.push({ districtId, cellId: cell.id });
-} else {
-  const pieces = splitMixedCell(cell, cell.pointMembers);
-  for (const piece of pieces) {
-    const clone = JSON.parse(JSON.stringify(piece.feature));
+  for (const cell of cellsWorking) {
+    if (!cell.pointMembers.length) continue;
+
+    occupiedCellIds.add(cell.id);
+    const districtIds = [...new Set(cell.pointMembers.map(item => item._assignedDistrict))];
+    cell.occupiedByDistricts = districtIds.slice();
+
+    if (districtIds.length === 1) {
+      const districtId = districtIds[0];
+      const clone = JSON.parse(JSON.stringify(cell.feature));
+      clone.properties = {
+        ...(clone.properties || {}),
+        _district: districtId,
+        _pieceType: "full-cell"
+      };
+      fillFeatures.push(clone);
+
+      if (!districtSeedCells.has(districtId)) {
+        districtSeedCells.set(districtId, new Set());
+      }
+      districtSeedCells.get(districtId).add(cell.id);
+
+      seedQueue.push({ districtId, cellId: cell.id });
+    } else {
+      const pieces = splitMixedCell(cell, cell.pointMembers);
+
+      for (const piece of pieces) {
+        const clone = JSON.parse(JSON.stringify(piece.feature));
+        clone.properties = {
+          ...(clone.properties || {}),
+          _district: piece.districtId,
+          _pieceType: "mixed-piece",
+          _parentCell: cell.id
+        };
+        fillFeatures.push(clone);
+
+        if (!districtSeedCells.has(piece.districtId)) {
+          districtSeedCells.set(piece.districtId, new Set());
+        }
+        districtSeedCells.get(piece.districtId).add(cell.id);
+
+        seedQueue.push({ districtId: piece.districtId, cellId: cell.id });
+      }
+    }
+  }
+
+  const owner = new Map();
+  const queue = seededShuffle(seedQueue, 12345);
+  let qIndex = 0;
+
+  while (qIndex < queue.length) {
+    const { districtId, cellId } = queue[qIndex++];
+    const cell = cellById.get(String(cellId));
+    if (!cell) continue;
+
+    for (const neighborId of cell.neighbors) {
+      const neighbor = cellById.get(String(neighborId));
+      if (!neighbor) continue;
+      if (occupiedCellIds.has(neighbor.id)) continue;
+      if (owner.has(neighbor.id)) continue;
+
+      owner.set(neighbor.id, districtId);
+      queue.push({ districtId, cellId: neighbor.id });
+    }
+  }
+
+  for (const cell of cellsWorking) {
+    if (occupiedCellIds.has(cell.id)) continue;
+
+    const districtId = owner.has(cell.id) ? owner.get(cell.id) : 0;
+    const clone = JSON.parse(JSON.stringify(cell.feature));
     clone.properties = {
       ...(clone.properties || {}),
-      _district: piece.districtId,
-      _pieceType: "mixed-piece",
-      _parentCell: cell.id
+      _district: districtId,
+      _pieceType: "empty-cell"
     };
     fillFeatures.push(clone);
-
-    if (!districtSeedCells.has(piece.districtId)) {
-      districtSeedCells.set(piece.districtId, new Set());
-    }
-    districtSeedCells.get(piece.districtId).add(cell.id);
-
-    seedQueue.push({ districtId: piece.districtId, cellId: cell.id });
   }
+
+  return { fillFeatures, districtPointFeatures };
 }
-
-      const owner = new Map();
-      const queue = seededShuffle(seedQueue, 12345);
-      let qIndex = 0;
-      while (qIndex < queue.length) {
-        const { districtId, cellId } = queue[qIndex++];
-        const cell = cellById.get(String(cellId));
-        if (!cell) continue;
-        for (const neighborId of cell.neighbors) {
-          const neighbor = cellById.get(String(neighborId));
-          if (!neighbor) continue;
-          if (occupiedCellIds.has(neighbor.id)) continue;
-          if (owner.has(neighbor.id)) continue;
-          owner.set(neighbor.id, districtId);
-          queue.push({ districtId, cellId: neighbor.id });
-        }
-      }
-
-      for (const cell of cellsWorking) {
-        if (occupiedCellIds.has(cell.id)) continue;
-        const districtId = owner.has(cell.id) ? owner.get(cell.id) : 0;
-        const clone = JSON.parse(JSON.stringify(cell.feature));
-        clone.properties = { ...(clone.properties || {}), _district: districtId, _pieceType: "empty-cell" };
-        fillFeatures.push(clone);
-      }
-
-      return { fillFeatures, districtPointFeatures };
-    }
 
     function addDistrictLayers(pointDistricts, polygonResult) {
       removeDistrictLayers();
