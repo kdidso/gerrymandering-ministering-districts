@@ -747,73 +747,153 @@
 }
 
     function splitMixedCell(cell, pointItems) {
-  const featuresByDistrict = [];
-  const districtGroups = new Map();
-
-  for (const item of pointItems) {
-    const d = item._assignedDistrict;
-    if (!districtGroups.has(d)) districtGroups.set(d, []);
-    districtGroups.get(d).push(item);
-  }
-
-  const seeds = [];
-  for (const [districtId, items] of districtGroups.entries()) {
-    if (items.length === 1) {
-      const coords = items[0].feature.geometry.coordinates;
-      seeds.push(turf.point(coords, { districtId }));
-    } else {
-      let sumLng = 0;
-      let sumLat = 0;
-      for (const item of items) {
-        const coords = item.feature.geometry.coordinates;
-        sumLng += coords[0];
-        sumLat += coords[1];
+      const featuresByDistrict = [];
+      const districtGroups = new Map();
+      for (const item of pointItems) {
+        const d = item._assignedDistrict;
+        if (!districtGroups.has(d)) districtGroups.set(d, []);
+        districtGroups.get(d).push(item);
       }
-      seeds.push(turf.point([sumLng / items.length, sumLat / items.length], { districtId }));
+      const seeds = [];
+      for (const [districtId, items] of districtGroups.entries()) {
+        if (items.length === 1) {
+          const coords = items[0].feature.geometry.coordinates;
+          seeds.push(turf.point(coords, { districtId }));
+        } else {
+          let sumLng = 0;
+          let sumLat = 0;
+          for (const item of items) {
+            const coords = item.feature.geometry.coordinates;
+            sumLng += coords[0];
+            sumLat += coords[1];
+          }
+          seeds.push(turf.point([sumLng / items.length, sumLat / items.length], { districtId }));
+        }
+      }
+      if (seeds.length <= 1) {
+        return [{ districtId: [...districtGroups.keys()][0], feature: JSON.parse(JSON.stringify(cell.feature)) }];
+      }
+      const bbox = cell.bbox;
+      const voronoi = turf.voronoi(turf.featureCollection(seeds), { bbox });
+      if (!voronoi || !voronoi.features) {
+        return seeds.map(seed => ({ districtId: seed.properties.districtId, feature: JSON.parse(JSON.stringify(cell.feature)) }));
+      }
+      for (const region of voronoi.features) {
+        if (!region) continue;
+        try {
+          const clipped = turf.intersect(region, cell.feature);
+          if (clipped) {
+            featuresByDistrict.push({ districtId: region.properties.districtId, feature: clipped });
+          }
+        } catch (err) {}
+      }
+      if (!featuresByDistrict.length) {
+        return seeds.map(seed => ({ districtId: seed.properties.districtId, feature: JSON.parse(JSON.stringify(cell.feature)) }));
+      }
+      return featuresByDistrict;
+    }
+
+
+   function buildDistrictPolygons(pointDistricts) {
+  const fillFeatures = [];
+  const occupiedCellIds = new Set();
+  const seedQueue = [];
+  const districtSeedCells = new Map();
+  const districtPointFeatures = [];
+
+  for (const district of pointDistricts) {
+    districtSeedCells.set(district.id, new Set());
+    for (const item of district.members) {
+      districtPointFeatures.push({
+        feature: item.feature,
+        group: item.group,
+        districtId: district.id
+      });
     }
   }
 
-  if (seeds.length <= 1) {
-    return [{
-      districtId: [...districtGroups.keys()][0],
-      feature: JSON.parse(JSON.stringify(cell.feature))
-    }];
-  }
+  for (const cell of cellsWorking) {
+    if (!cell.pointMembers.length) continue;
 
-  const bbox = cell.bbox;
-  const voronoi = turf.voronoi(turf.featureCollection(seeds), { bbox });
+    occupiedCellIds.add(cell.id);
+    const districtIds = [...new Set(cell.pointMembers.map(item => item._assignedDistrict))];
+    cell.occupiedByDistricts = districtIds.slice();
 
-  if (!voronoi || !voronoi.features) {
-    return seeds.map(seed => ({
-      districtId: seed.properties.districtId,
-      feature: JSON.parse(JSON.stringify(cell.feature))
-    }));
-  }
+    if (districtIds.length === 1) {
+      const districtId = districtIds[0];
+      const clone = JSON.parse(JSON.stringify(cell.feature));
+      clone.properties = {
+        ...(clone.properties || {}),
+        _district: districtId,
+        _pieceType: "full-cell"
+      };
+      fillFeatures.push(clone);
 
-  for (const region of voronoi.features) {
-    if (!region) continue;
-    try {
-      const clipped = turf.intersect(region, cell.feature);
-      if (clipped) {
-        featuresByDistrict.push({
-          districtId: region.properties.districtId,
-          feature: clipped
-        });
+      if (!districtSeedCells.has(districtId)) {
+        districtSeedCells.set(districtId, new Set());
       }
-    } catch (err) {}
+      districtSeedCells.get(districtId).add(cell.id);
+
+      seedQueue.push({ districtId, cellId: cell.id });
+    } else {
+      const pieces = splitMixedCell(cell, cell.pointMembers);
+
+      for (const piece of pieces) {
+        const clone = JSON.parse(JSON.stringify(piece.feature));
+        clone.properties = {
+          ...(clone.properties || {}),
+          _district: piece.districtId,
+          _pieceType: "mixed-piece",
+          _parentCell: cell.id
+        };
+        fillFeatures.push(clone);
+
+        if (!districtSeedCells.has(piece.districtId)) {
+          districtSeedCells.set(piece.districtId, new Set());
+        }
+        districtSeedCells.get(piece.districtId).add(cell.id);
+
+        seedQueue.push({ districtId: piece.districtId, cellId: cell.id });
+      }
+    }
   }
 
-  if (!featuresByDistrict.length) {
-    return seeds.map(seed => ({
-      districtId: seed.properties.districtId,
-      feature: JSON.parse(JSON.stringify(cell.feature))
-    }));
+  const owner = new Map();
+  const queue = seededShuffle(seedQueue, 12345);
+  let qIndex = 0;
+
+  while (qIndex < queue.length) {
+    const { districtId, cellId } = queue[qIndex++];
+    const cell = cellById.get(String(cellId));
+    if (!cell) continue;
+
+    for (const neighborId of cell.neighbors) {
+      const neighbor = cellById.get(String(neighborId));
+      if (!neighbor) continue;
+      if (occupiedCellIds.has(neighbor.id)) continue;
+      if (owner.has(neighbor.id)) continue;
+
+      owner.set(neighbor.id, districtId);
+      queue.push({ districtId, cellId: neighbor.id });
+    }
   }
 
-  return featuresByDistrict;
+  for (const cell of cellsWorking) {
+    if (occupiedCellIds.has(cell.id)) continue;
+
+    const districtId = owner.has(cell.id) ? owner.get(cell.id) : 0;
+    const clone = JSON.parse(JSON.stringify(cell.feature));
+    clone.properties = {
+      ...(clone.properties || {}),
+      _district: districtId,
+      _pieceType: "empty-cell"
+    };
+    fillFeatures.push(clone);
+  }
+
+  return { fillFeatures, districtPointFeatures };
 }
-
-function unionFeatures(features) {
+ function unionFeatures(features) {
   if (!features.length) return null;
 
   let merged = JSON.parse(JSON.stringify(features[0]));
@@ -830,281 +910,9 @@ function unionFeatures(features) {
   }
 
   return merged;
-}
+}   
 
-function getPointCellDistrictSets(pointDistricts) {
-  const result = new Map();
-
-  for (const district of pointDistricts) {
-    for (const item of district.members) {
-      const cellId = item.cellId ? String(item.cellId) : null;
-      if (!cellId) continue;
-      if (!result.has(cellId)) result.set(cellId, new Set());
-      result.get(cellId).add(district.id);
-    }
-  }
-
-  return result;
-}
-
-function getDistrictUniquePointCells(district) {
-  return [...new Set(
-    district.members
-      .map(item => item.cellId)
-      .filter(Boolean)
-      .map(String)
-  )];
-}
-
-function buildDistrictLineFeatures(pointDistricts) {
-  const linesByDistrict = new Map();
-
-  for (const district of pointDistricts) {
-    const pointItems = district.members.slice();
-
-    if (pointItems.length < 2) {
-      linesByDistrict.set(district.id, []);
-      continue;
-    }
-
-    const ordered = pointItems.slice();
-    const used = new Set();
-    const chain = [];
-
-    chain.push(ordered[0]);
-    used.add(0);
-
-    while (chain.length < ordered.length) {
-      const last = chain[chain.length - 1];
-      const lastCoords = last.feature.geometry.coordinates;
-
-      let bestIdx = -1;
-      let bestDist = Infinity;
-
-      for (let i = 0; i < ordered.length; i++) {
-        if (used.has(i)) continue;
-        const coords = ordered[i].feature.geometry.coordinates;
-        const d = Math.hypot(coords[0] - lastCoords[0], coords[1] - lastCoords[1]);
-        if (d < bestDist) {
-          bestDist = d;
-          bestIdx = i;
-        }
-      }
-
-      if (bestIdx === -1) break;
-      chain.push(ordered[bestIdx]);
-      used.add(bestIdx);
-    }
-
-    const lineFeatures = [];
-    for (let i = 0; i < chain.length - 1; i++) {
-      const a = chain[i].feature.geometry.coordinates;
-      const b = chain[i + 1].feature.geometry.coordinates;
-      lineFeatures.push(
-        turf.lineString([a, b], { districtId: district.id })
-      );
-    }
-
-    linesByDistrict.set(district.id, lineFeatures);
-  }
-
-  return linesByDistrict;
-}
-
-function cellContainsOtherDistrictPoint(cellId, districtId, pointCellDistrictSets) {
-  const set = pointCellDistrictSets.get(String(cellId));
-  if (!set || !set.size) return false;
-  return [...set].some(d => d !== districtId);
-}
-
-function lineTouchesCell(lineFeature, cellFeature) {
-  try {
-    return turf.booleanIntersects(lineFeature, cellFeature);
-  } catch (err) {
-    return false;
-  }
-}
-
-function buildDistrictPolygons(pointDistricts) {
-  const districtPointFeatures = [];
-
-  for (const district of pointDistricts) {
-    for (const item of district.members) {
-      districtPointFeatures.push({
-        feature: item.feature,
-        group: item.group,
-        districtId: district.id
-      });
-    }
-  }
-
-  const pointCellDistrictSets = getPointCellDistrictSets(pointDistricts);
-  const linesByDistrict = buildDistrictLineFeatures(pointDistricts);
-
-  const owner = new Map();
-  const mixedCells = new Set();
-
-  for (const [cellId, set] of pointCellDistrictSets.entries()) {
-    if (set.size > 1) {
-      mixedCells.add(cellId);
-    } else {
-      owner.set(cellId, [...set][0]);
-    }
-  }
-
-  const districtOrder = seededShuffle(
-    pointDistricts.map(d => d.id),
-    Date.now() & 0xffffffff
-  );
-
-  for (const districtId of districtOrder) {
-    const lineFeatures = linesByDistrict.get(districtId) || [];
-
-    for (const cell of cellsWorking) {
-      if (mixedCells.has(cell.id)) continue;
-      if (owner.has(cell.id) && owner.get(cell.id) !== districtId) continue;
-      if (cellContainsOtherDistrictPoint(cell.id, districtId, pointCellDistrictSets)) continue;
-
-      let touched = false;
-
-      for (const lineFeature of lineFeatures) {
-        if (lineTouchesCell(lineFeature, cell.feature)) {
-          touched = true;
-          break;
-        }
-      }
-
-      if (touched) {
-        owner.set(cell.id, districtId);
-      }
-    }
-  }
-
-  const queue = [];
-  for (const [cellId, districtId] of owner.entries()) {
-    queue.push({ cellId, districtId });
-  }
-
-  let qIndex = 0;
-  while (qIndex < queue.length) {
-    const { cellId, districtId } = queue[qIndex++];
-    const cell = cellById.get(String(cellId));
-    if (!cell) continue;
-
-    for (const neighborIdRaw of cell.neighbors) {
-      const neighborId = String(neighborIdRaw);
-      if (mixedCells.has(neighborId)) continue;
-      if (owner.has(neighborId)) continue;
-      if (cellContainsOtherDistrictPoint(neighborId, districtId, pointCellDistrictSets)) continue;
-
-      owner.set(neighborId, districtId);
-      queue.push({ cellId: neighborId, districtId });
-    }
-  }
-
-  for (const cell of cellsWorking) {
-    if (mixedCells.has(cell.id)) continue;
-    if (!owner.has(cell.id)) {
-      const neighborOwners = cell.neighbors
-        .map(id => owner.get(String(id)))
-        .filter(v => v != null);
-
-      if (neighborOwners.length) {
-        owner.set(cell.id, neighborOwners[0]);
-      } else {
-        owner.set(cell.id, 0);
-      }
-    }
-  }
-
-  let changed = true;
-  let passes = 0;
-  while (changed && passes < 4) {
-    changed = false;
-    passes++;
-
-    for (const cell of cellsWorking) {
-      if (mixedCells.has(cell.id)) continue;
-      if (pointCellDistrictSets.has(cell.id)) continue;
-
-      const counts = new Map();
-      for (const neighborIdRaw of cell.neighbors) {
-        const d = owner.get(String(neighborIdRaw));
-        if (d == null) continue;
-        counts.set(d, (counts.get(d) || 0) + 1);
-      }
-
-      if (!counts.size) continue;
-
-      let bestDistrict = owner.get(cell.id);
-      let bestCount = -1;
-
-      for (const [districtId, count] of counts.entries()) {
-        if (count > bestCount) {
-          bestCount = count;
-          bestDistrict = districtId;
-        }
-      }
-
-      if (bestDistrict !== owner.get(cell.id)) {
-        owner.set(cell.id, bestDistrict);
-        changed = true;
-      }
-    }
-  }
-
-  const fillFeatures = [];
-
-  for (const cell of cellsWorking) {
-    if (mixedCells.has(cell.id)) {
-      const pieces = splitMixedCell(cell, cell.pointMembers);
-      for (const piece of pieces) {
-        const clone = JSON.parse(JSON.stringify(piece.feature));
-        clone.properties = {
-          ...(clone.properties || {}),
-          _district: piece.districtId,
-          _pieceType: "mixed-piece",
-          _parentCell: cell.id
-        };
-        fillFeatures.push(clone);
-      }
-      continue;
-    }
-
-    const districtId = owner.get(cell.id) ?? 0;
-    const clone = JSON.parse(JSON.stringify(cell.feature));
-    clone.properties = {
-      ...(clone.properties || {}),
-      _district: districtId,
-      _pieceType: pointCellDistrictSets.has(cell.id) ? "occupied-cell" : "filled-cell"
-    };
-    fillFeatures.push(clone);
-  }
-
-  const districtBoundaryFeatures = [];
-
-  for (const district of pointDistricts) {
-    const districtFeatures = fillFeatures
-      .filter(f => f.properties && f.properties._district === district.id)
-      .map(f => JSON.parse(JSON.stringify(f)));
-
-    if (!districtFeatures.length) continue;
-
-    const merged = unionFeatures(districtFeatures);
-    if (!merged) continue;
-
-    merged.properties = { _district: district.id };
-    districtBoundaryFeatures.push(merged);
-  }
-
-  return {
-    fillFeatures,
-    districtPointFeatures,
-    districtBoundaryFeatures
-  };
-}
-
-function addDistrictLayers(pointDistricts, polygonResult) {
+    function addDistrictLayers(pointDistricts, polygonResult) {
   removeDistrictLayers();
 
   districtFillLayer = L.geoJSON(
@@ -1124,11 +932,27 @@ function addDistrictLayers(pointDistricts, polygonResult) {
     }
   ).addTo(map);
 
+  const dissolvedDistrictFeatures = [];
+
+  for (const district of pointDistricts) {
+    const districtFeatures = polygonResult.fillFeatures
+      .filter(f => f.properties && f.properties._district === district.id)
+      .map(f => JSON.parse(JSON.stringify(f)));
+
+    if (!districtFeatures.length) continue;
+
+    const merged = unionFeatures(districtFeatures);
+    if (!merged) continue;
+
+    merged.properties = {
+      _district: district.id
+    };
+
+    dissolvedDistrictFeatures.push(merged);
+  }
+
   districtBoundaryLayer = L.geoJSON(
-    {
-      type: "FeatureCollection",
-      features: polygonResult.districtBoundaryFeatures || []
-    },
+    { type: "FeatureCollection", features: dissolvedDistrictFeatures },
     {
       style: function(feature) {
         const districtId = feature.properties._district;
@@ -1169,9 +993,7 @@ function addDistrictLayers(pointDistricts, polygonResult) {
       },
       onEachFeature: function(feature, layer) {
         const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
-        layer.bindPopup(
-          makeMemberPopup(feature, groupLabel, `District ${feature.properties._district + 1}`)
-        );
+        layer.bindPopup(makeMemberPopup(feature, groupLabel, `District ${feature.properties._district + 1}`));
       }
     }
   ).addTo(map);
