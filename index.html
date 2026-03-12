@@ -248,6 +248,7 @@
     let cellsData = null;
     let adjacencyData = null;
     let metadataData = null;
+    let wardPolygonFeatures = [];
 
     let allMembersLayer = null;
     let filteredPreviewLayer = null;
@@ -787,29 +788,6 @@
       return featuresByDistrict;
     }
 
-    function buildDistrictPolygons(pointDistricts) {
-      const fillFeatures = [];
-      const occupiedCellIds = new Set();
-      const seedQueue = [];
-      const districtSeedCells = new Map();
-      const districtPointFeatures = [];
-
-      for (const district of pointDistricts) {
-        districtSeedCells.set(district.id, new Set());
-        for (const item of district.members) {
-          districtPointFeatures.push({
-            feature: item.feature,
-            group: item.group,
-            districtId: district.id
-          });
-        }
-      }
-
-      for (const cell of cellsWorking) {
-        if (!cell.pointMembers.length) continue;
-        occupiedCellIds.add(cell.id);
-        const districtIds = [...new Set(cell.pointMembers.map(item => item._assignedDistrict))];
-        cell.occupiedByDistricts = districtIds.slice();
 
    function buildDistrictPolygons(pointDistricts) {
   const fillFeatures = [];
