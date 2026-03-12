@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Gerrymandering Ministering Districts</title>
+
+  <!-- MapLibre -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/maplibre-gl@5.20.0/dist/maplibre-gl.css"
+  />
+  <script src="https://unpkg.com/maplibre-gl@5.20.0/dist/maplibre-gl.js"></script>
+
+  <!-- Turf -->
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.3.0/turf.min.js"></script>
+
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --border: #d9dfeb;
+      --text: #1c2430;
+      --muted: #5f6b7a;
+      --accent: #1f6feb;
+      --accent-dark: #1557b0;
+      --success: #1f883d;
+      --warning: #9a6700;
+      --danger: #b42318;
+      --group1: #d97706;
+      --group2: #2563eb;
+      --ward: #0f766e;
+      --network: #6b7280;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 390px 1fr;
+      height: 100vh;
+      width: 100%;
+    }
+
+    .sidebar {
+      overflow-y: auto;
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      padding: 18px;
+    }
+
+    .map-wrap {
+      position: relative;
+      min-width: 0;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+
+    .title {
+      margin: 0 0 8px 0;
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    .subtitle {
+      margin: 0 0 18px 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      margin-bottom: 14px;
+      background: #fff;
+    }
+
+    .card h2,
+    .card h3 {
+      margin: 0 0 10px 0;
+      font-size: 18px;
+    }
+
+    .card p {
+      margin: 0 0 10px 0;
+      line-height: 1.45;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .step-badge {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .col {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .radio-group,
+    .checkbox-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin: 8px 0 14px 0;
+    }
+
+    label.option {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fbfcfe;
+      cursor: pointer;
+      color: var(--text);
+    }
+
+    label.option input {
+      margin-top: 2px;
+    }
+
+    button,
+    select {
+      font: inherit;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #fff;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+    }
+
+    button:hover:not(:disabled) {
+      background: var(--accent-dark);
+      border-color: var(--accent-dark);
+    }
+
+    button.secondary {
+      background: #fff;
+      color: var(--accent);
+    }
+
+    button.secondary:hover:not(:disabled) {
+      background: #eef4ff;
+    }
+
+    button:disabled,
+    select:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    select {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #fff;
+      min-width: 130px;
+    }
+
+    .status {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .status.good {
+      color: var(--success);
+      font-weight: 700;
+    }
+
+    .status.warn {
+      color: var(--warning);
+      font-weight: 700;
+    }
+
+    .status.error {
+      color: var(--danger);
+      font-weight: 700;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .metric {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      background: #fbfcfe;
+    }
+
+    .metric .label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .metric .value {
+      font-size: 22px;
+      font-weight: 800;
+    }
+
+    .metric .sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 3px;
+    }
+
+    .legend {
+      position: absolute;
+      right: 12px;
+      bottom: 12px;
+      z-index: 5;
+      background: rgba(255,255,255,0.95);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+      font-size: 13px;
+      min-width: 180px;
+    }
+
+    .legend h4 {
+      margin: 0 0 8px 0;
+      font-size: 13px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 6px 0;
+    }
+
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 1px solid rgba(0,0,0,0.15);
+      flex: 0 0 auto;
+    }
+
+    .swatch.line {
+      width: 18px;
+      height: 3px;
+      border-radius: 999px;
+    }
+
+    .small-note {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.4;
+      margin-top: 8px;
+    }
+
+    .district-summary {
+      margin-top: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .district-row {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fbfcfe;
+      padding: 10px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .footer-note {
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    @media (max-width: 980px) {
+      .app {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+      }
+
+      .sidebar {
+        max-height: 48vh;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <h1 class="title">Gerrymandering Ministering Districts</h1>
+      <p class="subtitle">
+        Phase 1 loads the ward, member points, and network layer, applies your ministering filters,
+        excludes anyone outside the ward boundary, and calculates the live district target math.
+      </p>
+
+      <div class="card">
+        <div class="step-badge">Data status</div>
+        <h2>Layer loading</h2>
+        <p>This page loads:</p>
+        <div class="checkbox-group">
+          <label class="option">
+            <input type="checkbox" id="chkWardLoaded" disabled />
+            <span>Ward boundary polygon</span>
+          </label>
+          <label class="option">
+            <input type="checkbox" id="chkMembersLoaded" disabled />
+            <span>Member locations</span>
+          </label>
+          <label class="option">
+            <input type="checkbox" id="chkNetworkLoaded" disabled />
+            <span>District network lines</span>
+          </label>
+        </div>
+        <div id="loadStatus" class="status">Loading data...</div>
+      </div>
+
+      <div class="card">
+        <div class="step-badge">Step 1</div>
+        <h2>Filter ministering pool</h2>
+        <p>
+          Choose the group to work on. The code will only keep points inside the ward boundary and
+          will apply your ministering rules.
+        </p>
+
+        <div class="radio-group">
+          <label class="option">
+            <input type="radio" name="genderChoice" value="M" checked />
+            <span>
+              <strong>Gender = M</strong><br />
+              Include only men with <code>Is_assigned_ministers = yes</code>
+            </span>
+          </label>
+
+          <label class="option">
+            <input type="radio" name="genderChoice" value="F" />
+            <span>
+              <strong>Gender = F</strong><br />
+              Include only women with <code>Is_assigned_ministers = yes</code>
+            </span>
+          </label>
+        </div>
+
+        <div class="checkbox-group">
+          <label class="option">
+            <input type="checkbox" checked disabled />
+            <span>
+              <strong>Hard rule:</strong> exclude anyone outside the ward boundary
+            </span>
+          </label>
+        </div>
+
+        <div class="row">
+          <button id="runFilterBtn">Run Filter</button>
+          <button id="zoomFilteredBtn" class="secondary" disabled>Zoom to Filtered</button>
+          <button id="resetBtn" class="secondary">Reset</button>
+        </div>
+
+        <div id="filterStatus" class="status">
+          Choose a gender and click <strong>Run Filter</strong>.
+        </div>
+
+        <div class="metrics">
+          <div class="metric">
+            <div class="label">Group 1 (X)</div>
+            <div class="value" id="metricGroup1">0</div>
+            <div class="sub">Assigned_to_minister = yes</div>
+          </div>
+          <div class="metric">
+            <div class="label">Group 2 (Y)</div>
+            <div class="value" id="metricGroup2">0</div>
+            <div class="sub">Assigned_to_minister = no</div>
+          </div>
+          <div class="metric">
+            <div class="label">Total (S)</div>
+            <div class="value" id="metricTotal">0</div>
+            <div class="sub">Is_assigned_ministers = yes</div>
+          </div>
+          <div class="metric">
+            <div class="label">Companionships (C)</div>
+            <div class="value" id="metricCompanionships">0</div>
+            <div class="sub">Based on Group 1</div>
+          </div>
+          <div class="metric">
+            <div class="label">Avg assignments (A)</div>
+            <div class="value" id="metricAssignments">0</div>
+            <div class="sub">S ÷ C</div>
+          </div>
+          <div class="metric">
+            <div class="label">Outside ward excluded</div>
+            <div class="value" id="metricOutside">0</div>
+            <div class="sub">Filtered out</div>
+          </div>
+        </div>
+
+        <div class="footer-note">
+          Group 1 = <code>Assigned_to_minister = yes</code> and
+          <code>Is_assigned_ministers = yes</code>.<br />
+          Group 2 = <code>Assigned_to_minister = no</code> and
+          <code>Is_assigned_ministers = yes</code>.
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="step-badge">Step 2</div>
+        <h2>District target math</h2>
+        <p>
+          After filtering, choose the number of districts. This computes the live target distribution
+          for Group 1, Group 2, total people, companionship counts, and the expected assignment range.
+        </p>
+
+        <div class="row">
+          <select id="districtCountSelect" disabled>
+            <option value="1">1 district</option>
+            <option value="2">2 districts</option>
+            <option value="3">3 districts</option>
+            <option value="4" selected>4 districts</option>
+            <option value="5">5 districts</option>
+            <option value="6">6 districts</option>
+            <option value="7">7 districts</option>
+            <option value="8">8 districts</option>
+            <option value="9">9 districts</option>
+            <option value="10">10 districts</option>
+          </select>
+
+          <button id="calcDistrictBtn" disabled>Calculate Targets</button>
+          <button id="continueBtn" class="secondary" disabled>Continue</button>
+        </div>
+
+        <div id="districtStatus" class="status">
+          Run the filter first.
+        </div>
+
+        <div class="district-summary" id="districtSummary"></div>
+
+        <div class="small-note">
+          This page computes the district quotas now. The actual district drawing, re-gerrymander,
+          companionship pairing, and assignment export come next.
+        </div>
+      </div>
+    </aside>
+
+    <div class="map-wrap">
+      <div id="map"></div>
+
+      <div class="legend">
+        <h4>Map legend</h4>
+        <div class="legend-item">
+          <span class="swatch line" style="background: var(--network);"></span>
+          <span>District network lines</span>
+        </div>
+        <div class="legend-item">
+          <span class="swatch" style="background: rgba(15,118,110,0.18); border-color: #0f766e;"></span>
+          <span>Ward boundary polygon</span>
+        </div>
+        <div class="legend-item">
+          <span class="swatch" style="background: var(--group1);"></span>
+          <span>Group 1 filtered points</span>
+        </div>
+        <div class="legend-item">
+          <span class="swatch" style="background: var(--group2);"></span>
+          <span>Group 2 filtered points</span>
+        </div>
+        <div class="small-note">
+          Only points inside the ward boundary are allowed into the ministering pool.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ============================
+    // CONFIG
+    // ============================
+    const WARD_URL = "https://kdidso.github.io/snow-canyon-map/ward_boundaries_JSO.geojson";
+    const MEMBERS_URL = "https://kdidso.github.io/snow-canyon-map/member_locations_JSO.geojson";
+
+    // Change this if you move the file into /data/
+    const NETWORK_URL = "./district_netwo_FeaturesToJSO1.geojson";
+
+    // ============================
+    // STATE
+    // ============================
+    let map;
+    let wardData = null;
+    let membersData = null;
+    let networkData = null;
+
+    let wardPolygonFeatures = [];
+    let currentFiltered = [];
+    let currentStats = null;
+
+    // ============================
+    // DOM
+    // ============================
+    const chkWardLoaded = document.getElementById("chkWardLoaded");
+    const chkMembersLoaded = document.getElementById("chkMembersLoaded");
+    const chkNetworkLoaded = document.getElementById("chkNetworkLoaded");
+
+    const loadStatus = document.getElementById("loadStatus");
+    const filterStatus = document.getElementById("filterStatus");
+    const districtStatus = document.getElementById("districtStatus");
+
+    const runFilterBtn = document.getElementById("runFilterBtn");
+    const zoomFilteredBtn = document.getElementById("zoomFilteredBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const continueBtn = document.getElementById("continueBtn");
+
+    const districtCountSelect = document.getElementById("districtCountSelect");
+    const calcDistrictBtn = document.getElementById("calcDistrictBtn");
+
+    const districtSummary = document.getElementById("districtSummary");
+
+    const metricGroup1 = document.getElementById("metricGroup1");
+    const metricGroup2 = document.getElementById("metricGroup2");
+    const metricTotal = document.getElementById("metricTotal");
+    const metricCompanionships = document.getElementById("metricCompanionships");
+    const metricAssignments = document.getElementById("metricAssignments");
+    const metricOutside = document.getElementById("metricOutside");
+
+    // ============================
+    // HELPERS
+    // ============================
+    function setStatus(el, text, cls = "") {
+      el.textContent = text;
+      el.className = "status" + (cls ? " " + cls : "");
+    }
+
+    function normalize(value) {
+      return String(value ?? "").trim().toLowerCase();
+    }
+
+    function normYes(value) {
+      return normalize(value) === "yes";
+    }
+
+    function normGender(value) {
+      return String(value ?? "").trim().toUpperCase();
+    }
+
+    function getProp(feature, key) {
+      return feature?.properties?.[key];
+    }
+
+    function bboxToMapBounds(bbox) {
+      return [
+        [bbox[0], bbox[1]],
+        [bbox[2], bbox[3]]
+      ];
+    }
+
+    function formatNumber(value, decimals = 0) {
+      return Number(value).toLocaleString(undefined, {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals
+      });
+    }
+
+    function round2(value) {
+      return Math.round(value * 100) / 100;
+    }
+
+    function distributeTotal(total, parts) {
+      const base = Math.floor(total / parts);
+      const remainder = total % parts;
+      const arr = [];
+
+      for (let i = 0; i < parts; i++) {
+        arr.push(base + (i < remainder ? 1 : 0));
+      }
+
+      return arr;
+    }
+
+    function assignmentsRange(avg) {
+      if (!isFinite(avg) || avg <= 0) return "0";
+      const lo = Math.floor(avg);
+      const hi = Math.ceil(avg);
+      return lo === hi ? String(lo) : `${lo}-${hi}`;
+    }
+
+    function isPolygonLike(feature) {
+      const type = feature?.geometry?.type;
+      return type === "Polygon" || type === "MultiPolygon";
+    }
+
+    function pointInsideWard(pointFeature) {
+      return wardPolygonFeatures.some(poly => {
+        try {
+          return turf.booleanPointInPolygon(pointFeature, poly);
+        } catch (err) {
+          return false;
+        }
+      });
+    }
+
+    function buildFilteredFeatureCollection(filteredItems) {
+      return {
+        type: "FeatureCollection",
+        features: filteredItems.map(item => item.feature)
+      };
+    }
+
+    function updateMetricCards(stats) {
+      metricGroup1.textContent = formatNumber(stats.group1);
+      metricGroup2.textContent = formatNumber(stats.group2);
+      metricTotal.textContent = formatNumber(stats.total);
+      metricCompanionships.textContent = formatNumber(stats.companionships);
+      metricAssignments.textContent = stats.avgAssignmentsDisplay;
+      metricOutside.textContent = formatNumber(stats.outsideWardExcluded);
+    }
+
+    function clearMetricCards() {
+      metricGroup1.textContent = "0";
+      metricGroup2.textContent = "0";
+      metricTotal.textContent = "0";
+      metricCompanionships.textContent = "0";
+      metricAssignments.textContent = "0";
+      metricOutside.textContent = "0";
+    }
+
+    function getSelectedGender() {
+      const checked = document.querySelector('input[name="genderChoice"]:checked');
+      return checked ? checked.value : "M";
+    }
+
+    function computeStats(filteredItems, outsideWardExcluded) {
+      const group1 = filteredItems.filter(item => item.group === 1).length;
+      const group2 = filteredItems.filter(item => item.group === 2).length;
+      const total = group1 + group2;
+
+      // Per your rule system:
+      // companionship count is based on Group 1.
+      const companionships = group1 > 0 ? Math.floor(group1 / 2) : 0;
+      const trioNeeded = group1 % 2 === 1 && group1 >= 3;
+
+      const avgAssignments = companionships > 0 ? total / companionships : 0;
+      const avgAssignmentsDisplay = companionships > 0 ? round2(avgAssignments) : 0;
+
+      return {
+        group1,
+        group2,
+        total,
+        companionships,
+        trioNeeded,
+        avgAssignments,
+        avgAssignmentsDisplay,
+        avgAssignmentsRange: assignmentsRange(avgAssignments),
+        outsideWardExcluded
+      };
+    }
+
+    function updateFilteredSource(filteredItems) {
+      const source = map.getSource("filtered-members");
+      if (!source) return;
+      source.setData(buildFilteredFeatureCollection(filteredItems));
+    }
+
+    function resetDistrictSummary() {
+      districtSummary.innerHTML = "";
+    }
+
+    function fitToFeatureCollection(fc, fallbackBbox = null) {
+      if (!fc || !fc.features || !fc.features.length) {
+        if (fallbackBbox) {
+          map.fitBounds(bboxToMapBounds(fallbackBbox), { padding: 30, duration: 800 });
+        }
+        return;
+      }
+
+      const bbox = turf.bbox(fc);
+      map.fitBounds(bboxToMapBounds(bbox), { padding: 40, duration: 800 });
+    }
+
+    function createDistrictSummary(stats, districtCount) {
+      resetDistrictSummary();
+
+      const xDist = distributeTotal(stats.group1, districtCount);
+      const yDist = distributeTotal(stats.group2, districtCount);
+      const sDist = distributeTotal(stats.total, districtCount);
+      const cDist = xDist.map(x => Math.floor(x / 2));
+
+      const avgAssignments = stats.companionships > 0 ? stats.total / stats.companionships : 0;
+      const rangeText = assignmentsRange(avgAssignments);
+
+      const intro = document.createElement("div");
+      intro.className = "district-row";
+      intro.innerHTML = `
+        <strong>Computed targets for ${districtCount} district${districtCount === 1 ? "" : "s"}:</strong><br>
+        Group 1 target(s): ${xDist.join(", ")}<br>
+        Group 2 target(s): ${yDist.join(", ")}<br>
+        Total target(s): ${sDist.join(", ")}<br>
+        Estimated companionship count(s): ${cDist.join(", ")}<br>
+        Assignments per companionship target: ${rangeText}
+      `;
+      districtSummary.appendChild(intro);
+
+      for (let i = 0; i < districtCount; i++) {
+        const row = document.createElement("div");
+        row.className = "district-row";
+
+        const districtName = `District ${i + 1}`;
+        const x = xDist[i];
+        const y = yDist[i];
+        const s = sDist[i];
+        const c = cDist[i];
+
+        row.innerHTML = `
+          <strong>${districtName}</strong><br>
+          Group 1 (X): ${x}<br>
+          Group 2 (Y): ${y}<br>
+          Total (S): ${s}<br>
+          Estimated companionships: ${c}<br>
+          Expected assignment load per companionship: ${rangeText}
+        `;
+        districtSummary.appendChild(row);
+      }
+
+      if (stats.trioNeeded) {
+        const trioRow = document.createElement("div");
+        trioRow.className = "district-row";
+        trioRow.innerHTML = `
+          <strong>Trio note</strong><br>
+          Group 1 is odd, so one companionship of 3 will be needed later during the pairing step.
+        `;
+        districtSummary.appendChild(trioRow);
+      }
+    }
+
+    // ============================
+    // MAP
+    // ============================
+    function initMap() {
+      map = new maplibregl.Map({
+        container: "map",
+        style: "https://demotiles.maplibre.org/style.json",
+        center: [-113.63, 37.15],
+        zoom: 11
+      });
+
+      map.addControl(new maplibregl.NavigationControl(), "top-right");
+      map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "imperial" }), "bottom-right");
+
+      map.on("load", async () => {
+        try {
+          await loadAllData();
+          addMapSourcesAndLayers();
+          fitMapToWard();
+          setStatus(loadStatus, "All layers loaded successfully.", "good");
+        } catch (error) {
+          console.error(error);
+          setStatus(loadStatus, "A layer failed to load. Check the browser console.", "error");
+        }
+      });
+    }
+
+    async function loadAllData() {
+      setStatus(loadStatus, "Loading data...");
+
+      const [wardResponse, membersResponse, networkResponse] = await Promise.all([
+        fetch(WARD_URL),
+        fetch(MEMBERS_URL),
+        fetch(NETWORK_URL)
+      ]);
+
+      if (!wardResponse.ok) throw new Error(`Ward boundary failed to load: ${wardResponse.status}`);
+      if (!membersResponse.ok) throw new Error(`Member locations failed to load: ${membersResponse.status}`);
+      if (!networkResponse.ok) throw new Error(`Network failed to load: ${networkResponse.status}`);
+
+      wardData = await wardResponse.json();
+      membersData = await membersResponse.json();
+      networkData = await networkResponse.json();
+
+      wardPolygonFeatures = (wardData.features || []).filter(isPolygonLike);
+
+      if (!wardPolygonFeatures.length) {
+        throw new Error("No polygon features were found in the ward boundary GeoJSON.");
+      }
+
+      chkWardLoaded.checked = true;
+      chkMembersLoaded.checked = true;
+      chkNetworkLoaded.checked = true;
+    }
+
+    function addMapSourcesAndLayers() {
+      map.addSource("ward", {
+        type: "geojson",
+        data: wardData
+      });
+
+      map.addSource("network", {
+        type: "geojson",
+        data: networkData
+      });
+
+      map.addSource("filtered-members", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: []
+        }
+      });
+
+      map.addLayer({
+        id: "ward-fill",
+        type: "fill",
+        source: "ward",
+        paint: {
+          "fill-color": "#0f766e",
+          "fill-opacity": 0.08
+        }
+      });
+
+      map.addLayer({
+        id: "ward-outline",
+        type: "line",
+        source: "ward",
+        paint: {
+          "line-color": "#0f766e",
+          "line-width": 3
+        }
+      });
+
+      map.addLayer({
+        id: "network-lines",
+        type: "line",
+        source: "network",
+        paint: {
+          "line-color": "#6b7280",
+          "line-opacity": 0.55,
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            10, 0.4,
+            14, 0.8,
+            17, 1.5
+          ]
+        }
+      });
+
+      map.addLayer({
+        id: "filtered-group2",
+        type: "circle",
+        source: "filtered-members",
+        filter: ["==", ["get", "_group"], 2],
+        paint: {
+          "circle-radius": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            10, 4.5,
+            15, 7
+          ],
+          "circle-color": "#2563eb",
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 1.2
+        }
+      });
+
+      map.addLayer({
+        id: "filtered-group1",
+        type: "circle",
+        source: "filtered-members",
+        filter: ["==", ["get", "_group"], 1],
+        paint: {
+          "circle-radius": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            10, 5.5,
+            15, 8
+          ],
+          "circle-color": "#d97706",
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 1.2
+        }
+      });
+
+      map.on("click", "filtered-group1", showMemberPopup);
+      map.on("click", "filtered-group2", showMemberPopup);
+
+      map.on("mouseenter", "filtered-group1", () => map.getCanvas().style.cursor = "pointer");
+      map.on("mouseleave", "filtered-group1", () => map.getCanvas().style.cursor = "");
+      map.on("mouseenter", "filtered-group2", () => map.getCanvas().style.cursor = "pointer");
+      map.on("mouseleave", "filtered-group2", () => map.getCanvas().style.cursor = "");
+    }
+
+    function showMemberPopup(e) {
+      const feature = e.features && e.features[0];
+      if (!feature) return;
+
+      const p = feature.properties || {};
+      const first = p.First_Name || p.first_name || "";
+      const last = p.Last_Name || p.last_name || "";
+      const gender = p.Gender || "";
+      const assignedToMinister = p.Assigned_to_minister || "";
+      const isAssignedMinisters = p.Is_assigned_ministers || "";
+      const group = p._group === 1 ? "Group 1" : "Group 2";
+
+      new maplibregl.Popup()
+        .setLngLat(e.lngLat)
+        .setHTML(`
+          <div style="font-size:13px;line-height:1.45;">
+            <strong>${escapeHtml(`${first} ${last}`.trim() || "Member")}</strong><br>
+            Gender: ${escapeHtml(gender)}<br>
+            Assigned_to_minister: ${escapeHtml(assignedToMinister)}<br>
+            Is_assigned_ministers: ${escapeHtml(isAssignedMinisters)}<br>
+            Filter group: ${escapeHtml(group)}
+          </div>
+        `)
+        .addTo(map);
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function fitMapToWard() {
+      if (!wardData) return;
+      const bbox = turf.bbox(wardData);
+      map.fitBounds(bboxToMapBounds(bbox), {
+        padding: 30,
+        duration: 0
+      });
+    }
+
+    // ============================
+    // FILTERING + MATH
+    // ============================
+    function runFilter() {
+      if (!membersData || !wardPolygonFeatures.length) {
+        setStatus(filterStatus, "Data is not ready yet.", "error");
+        return;
+      }
+
+      const chosenGender = getSelectedGender();
+      const features = membersData.features || [];
+
+      let outsideWardExcluded = 0;
+      const filteredItems = [];
+
+      for (const feature of features) {
+        if (!feature?.geometry || feature.geometry.type !== "Point") continue;
+
+        const gender = normGender(getProp(feature, "Gender"));
+        const assignedToMinister = normYes(getProp(feature, "Assigned_to_minister"));
+        const isAssignedMinisters = normYes(getProp(feature, "Is_assigned_ministers"));
+
+        if (gender !== chosenGender) continue;
+        if (!isAssignedMinisters) continue;
+
+        if (!pointInsideWard(feature)) {
+          outsideWardExcluded++;
+          continue;
+        }
+
+        let group = 0;
+
+        if (assignedToMinister && isAssignedMinisters) {
+          group = 1;
+        } else if (!assignedToMinister && isAssignedMinisters) {
+          group = 2;
+        } else {
+          continue;
+        }
+
+        const cloned = structuredClone(feature);
+        cloned.properties = cloned.properties || {};
+        cloned.properties._group = group;
+
+        filteredItems.push({
+          feature: cloned,
+          group
+        });
+      }
+
+      currentFiltered = filteredItems;
+      currentStats = computeStats(filteredItems, outsideWardExcluded);
+
+      updateMetricCards(currentStats);
+      updateFilteredSource(filteredItems);
+
+      calcDistrictBtn.disabled = false;
+      districtCountSelect.disabled = false;
+      continueBtn.disabled = false;
+      zoomFilteredBtn.disabled = filteredItems.length === 0;
+
+      resetDistrictSummary();
+
+      const chosenLabel = chosenGender === "M" ? "male" : "female";
+      const message = [
+        `Filter complete for ${chosenLabel} members.`,
+        `Group 1 = ${currentStats.group1}, Group 2 = ${currentStats.group2}, Total = ${currentStats.total}.`,
+        `Companionships = ${currentStats.companionships}.`,
+        `Average assignments per companionship = ${currentStats.avgAssignmentsDisplay}.`,
+        `Outside ward excluded = ${currentStats.outsideWardExcluded}.`
+      ].join(" ");
+
+      setStatus(filterStatus, message, filteredItems.length ? "good" : "warn");
+      setStatus(districtStatus, "Choose district count and click Calculate Targets.", "good");
+
+      if (filteredItems.length) {
+        fitToFeatureCollection(buildFilteredFeatureCollection(filteredItems), turf.bbox(wardData));
+      } else {
+        fitMapToWard();
+      }
+    }
+
+    function calculateDistrictTargets() {
+      if (!currentStats) {
+        setStatus(districtStatus, "Run the filter first.", "warn");
+        return;
+      }
+
+      const districtCount = Number(districtCountSelect.value);
+
+      if (!districtCount || districtCount < 1 || districtCount > 10) {
+        setStatus(districtStatus, "Choose a district count from 1 to 10.", "warn");
+        return;
+      }
+
+      createDistrictSummary(currentStats, districtCount);
+
+      const note = currentStats.trioNeeded
+        ? "Targets computed. Group 1 is odd, so one trio will be needed later."
+        : "Targets computed successfully.";
+
+      setStatus(districtStatus, note, "good");
+    }
+
+    function zoomToFiltered() {
+      if (!currentFiltered.length) {
+        fitMapToWard();
+        return;
+      }
+      fitToFeatureCollection(buildFilteredFeatureCollection(currentFiltered), turf.bbox(wardData));
+    }
+
+    function resetPage() {
+      currentFiltered = [];
+      currentStats = null;
+
+      clearMetricCards();
+      resetDistrictSummary();
+      updateFilteredSource([]);
+
+      calcDistrictBtn.disabled = true;
+      districtCountSelect.disabled = true;
+      continueBtn.disabled = true;
+      zoomFilteredBtn.disabled = true;
+
+      setStatus(filterStatus, "Choose a gender and click Run Filter.");
+      setStatus(districtStatus, "Run the filter first.");
+
+      fitMapToWard();
+    }
+
+    // ============================
+    // EVENTS
+    // ============================
+    runFilterBtn.addEventListener("click", runFilter);
+    calcDistrictBtn.addEventListener("click", calculateDistrictTargets);
+    zoomFilteredBtn.addEventListener("click", zoomToFiltered);
+    resetBtn.addEventListener("click", resetPage);
+
+    continueBtn.addEventListener("click", () => {
+      alert(
+        "Phase 1 is complete: your data is loaded, the filter works, and the district target math is computed. " +
+        "The next step is wiring in the actual Gerrymander Districts and Re-gerrymander logic."
+      );
+    });
+
+    // ============================
+    // START
+    // ============================
+    initMap();
+  </script>
+</body>
+</html>
