@@ -249,8 +249,8 @@
     let adjacencyData = null;
     let metadataData = null;
 
-    let wardPolygonFeatures = [];
     let allMembersLayer = null;
+    let filteredPreviewLayer = null;
     let wardLayer = null;
     let cellsOutlineLayer = null;
     let districtFillLayer = null;
@@ -726,15 +726,19 @@
     }
 
     function removeDistrictLayers() {
-      if (districtFillLayer) {
-        map.removeLayer(districtFillLayer);
-        districtFillLayer = null;
-      }
-      if (districtPointLayer) {
-        map.removeLayer(districtPointLayer);
-        districtPointLayer = null;
-      }
-    }
+  if (filteredPreviewLayer) {
+    map.removeLayer(filteredPreviewLayer);
+    filteredPreviewLayer = null;
+  }
+  if (districtFillLayer) {
+    map.removeLayer(districtFillLayer);
+    districtFillLayer = null;
+  }
+  if (districtPointLayer) {
+    map.removeLayer(districtPointLayer);
+    districtPointLayer = null;
+  }
+}
 
     function splitMixedCell(cell, pointItems) {
       const featuresByDistrict = [];
@@ -976,8 +980,50 @@
       addFilteredPreviewLayer(currentFiltered);
 
       if (allMembersLayer) {
-        allMembersLayer.setStyle({ radius: 3, color: "#ffffff", weight: 0.8, fillColor: "#cc3344", fillOpacity: 0.06, opacity: 0.08 });
-      }
+  allMembersLayer.setStyle({
+    radius: 4,
+    color: "#ffffff",
+    weight: 0.8,
+    fillColor: "#cc3344",
+    fillOpacity: 0.06,
+    opacity: 0.08
+  });
+}
+
+if (filteredPreviewLayer) {
+  map.removeLayer(filteredPreviewLayer);
+  filteredPreviewLayer = null;
+}
+
+filteredPreviewLayer = L.geoJSON(
+  {
+    type: "FeatureCollection",
+    features: currentFiltered.map(item => {
+      const clone = JSON.parse(JSON.stringify(item.feature));
+      clone.properties = clone.properties || {};
+      clone.properties._group = item.group;
+      return clone;
+    })
+  },
+  {
+    pointToLayer: function(feature, latlng) {
+      const group = feature.properties._group;
+      const color = group === 1 ? "#d97706" : "#2563eb";
+      return L.circleMarker(latlng, {
+        radius: group === 1 ? 8 : 7,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: color,
+        fillOpacity: 1,
+        opacity: 1
+      });
+    },
+    onEachFeature: function(feature, layer) {
+      const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
+      layer.bindPopup(makeMemberPopup(feature, groupLabel, null));
+    }
+  }
+).addTo(map);
 
       calcDistrictBtn.disabled = false;
       districtCountSelect.disabled = false;
