@@ -202,23 +202,23 @@
       </div>
 
       <div class="card">
-        <div class="step-badge">Step 3</div>
-        <h2>Cell-based district generation</h2>
-        <p>
-          Points are seeded into districts first. Then cells are filled using the prebuilt adjacency graph.
-          If a cell contains points from more than one district, only that cell is temporarily split.
-        </p>
-        <div class="row">
-          <button id="gerrymanderBtn" disabled>Gerrymander Districts</button>
-          <button id="regerrymanderBtn" class="secondary" disabled>Re-gerrymander</button>
-        </div>
-        <div id="gerryStatus" class="status">Calculate targets first.</div>
-        <div class="district-summary" id="gerrySummary"></div>
-        <div class="small-note">
-          Same-color cells are drawn without internal borders so they visually dissolve together.
-          Only mixed cells get temporary split pieces.
-        </div>
-      </div>
+  <div class="step-badge">Step 3</div>
+  <h2>People districts and connection lines</h2>
+  <p>
+    First assign filtered people to districts. Then draw lines connecting people in the same district.
+    No polygons are created yet.
+  </p>
+  <div class="row">
+    <button id="gerrymanderBtn" disabled>Gerrymander People</button>
+    <button id="regerrymanderBtn" class="secondary" disabled>Re-gerrymander</button>
+    <button id="connectLinesBtn" class="secondary" disabled>Connect District Lines</button>
+  </div>
+  <div id="gerryStatus" class="status">Calculate targets first.</div>
+  <div class="district-summary" id="gerrySummary"></div>
+  <div class="small-note">
+    This step only colors people by district and draws connecting lines between them.
+  </div>
+</div>
     </aside>
 
     <div class="map-wrap">
@@ -257,11 +257,13 @@
     let districtFillLayer = null;
     let districtPointLayer = null;
     let districtBoundaryLayer = null;
+    let districtLineLayer = null;
 
     let currentFiltered = [];
     let currentStats = null;
     let currentDistrictTargets = null;
     let currentDistrictResult = null;
+    let currentPointDistricts = null;
     let gerrymanderRunCount = 0;
 
     let cellsWorking = [];
@@ -284,6 +286,7 @@
     const calcDistrictBtn = document.getElementById("calcDistrictBtn");
     const gerrymanderBtn = document.getElementById("gerrymanderBtn");
     const regerrymanderBtn = document.getElementById("regerrymanderBtn");
+    const connectLinesBtn = document.getElementById("connectLinesBtn");
     const districtCountSelect = document.getElementById("districtCountSelect");
     const districtSummary = document.getElementById("districtSummary");
     const gerrySummary = document.getElementById("gerrySummary");
@@ -744,6 +747,10 @@
     map.removeLayer(districtBoundaryLayer);
     districtBoundaryLayer = null;
   }
+  if (districtLineLayer) {
+    map.removeLayer(districtLineLayer);
+    districtLineLayer = null;
+  }
 }
 
     function splitMixedCell(cell, pointItems) {
@@ -1019,6 +1026,12 @@
         gerrySummary.appendChild(row);
       }
     }
+    function removeDistrictLineLayer() {
+  if (districtLineLayer) {
+    map.removeLayer(districtLineLayer);
+    districtLineLayer = null;
+  }
+}
 
     function runFilter() {
       if (!membersData || !wardPolygonFeatures.length || !cellsWorking.length) {
@@ -1030,8 +1043,11 @@
       resetGerrySummary();
       currentDistrictTargets = null;
       currentDistrictResult = null;
+      currentPointDistricts = null;
       regerrymanderBtn.disabled = true;
       gerrymanderBtn.disabled = true;
+      connectLinesBtn.disabled = true;
+      removeDistrictLineLayer();
       setStatus(gerryStatus, "Calculate targets first.");
 
       const chosenGender = getSelectedGender();
@@ -1142,55 +1158,243 @@ filteredPreviewLayer = L.geoJSON(
       renderTargetSummary(currentDistrictTargets, currentStats);
       gerrymanderBtn.disabled = false;
       regerrymanderBtn.disabled = true;
+      connectLinesBtn.disabled = true;
       setStatus(districtStatus, currentStats.trioNeeded ? "Targets computed. Group 1 is odd, so one trio will be needed later." : "Targets computed successfully.", "good");
       setStatus(gerryStatus, "Click Gerrymander Districts to generate cell-based districts.", "good");
     }
 
     function runGerrymander() {
-      if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
-        setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
-        return;
-      }
-      setStatus(gerryStatus, "Building districts from precomputed adjacency...", "warn");
-      setTimeout(() => {
-        try {
-          gerrymanderRunCount++;
-          const runSeed = Date.now() + gerrymanderRunCount * 99991;
-          const districts = generatePointDistricts(currentFiltered.map(item => ({
-            feature: JSON.parse(JSON.stringify(item.feature)),
-            group: item.group,
-            cellId: item.cellId,
-            _assignedDistrict: null
-          })), currentDistrictTargets, runSeed);
+  if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
+    setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
+    return;
+  }
 
-          const polygonResult = buildDistrictPolygons(districts);
-          currentDistrictResult = { districts, polygonResult };
-          addDistrictLayers(districts, polygonResult);
-          renderGerrySummary(districts);
+  removeDistrictLayers();
+  removeDistrictLineLayer();
 
-          if (allMembersLayer) {
-            allMembersLayer.setStyle({ radius: 4, color: "#ffffff", weight: 1, fillColor: "#cc3344", fillOpacity: 0.20, opacity: 0.55 });
+  setStatus(gerryStatus, "Assigning people to districts...", "warn");
+
+  setTimeout(() => {
+    try {
+      gerrymanderRunCount++;
+      const runSeed = Date.now() + gerrymanderRunCount * 99991;
+
+      const districts = generatePointDistricts(
+        currentFiltered.map(item => ({
+          feature: JSON.parse(JSON.stringify(item.feature)),
+          group: item.group,
+          cellId: item.cellId,
+          _assignedDistrict: null
+        })),
+        currentDistrictTargets,
+        runSeed
+      );
+
+      currentPointDistricts = districts;
+      currentDistrictResult = null;
+
+      removeFilteredPreviewLayer();
+
+      districtPointLayer = L.geoJSON(
+        {
+          type: "FeatureCollection",
+          features: districts.flatMap(district =>
+            district.members.map(item => {
+              const clone = JSON.parse(JSON.stringify(item.feature));
+              clone.properties = clone.properties || {};
+              clone.properties._group = item.group;
+              clone.properties._district = district.id;
+              return clone;
+            })
+          )
+        },
+        {
+          pointToLayer: function(feature, latlng) {
+            const districtId = feature.properties._district;
+            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+            return L.circleMarker(latlng, {
+              radius: feature.properties._group === 1 ? 8 : 7,
+              color: "#ffffff",
+              weight: 2,
+              fillColor: color,
+              fillOpacity: 1,
+              opacity: 1
+            });
+          },
+          onEachFeature: function(feature, layer) {
+            const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
+            layer.bindPopup(makeMemberPopup(feature, groupLabel, `District ${feature.properties._district + 1}`));
           }
-
-          regerrymanderBtn.disabled = false;
-          setStatus(gerryStatus, `Generated ${districts.length} cell-based districts. Click Re-gerrymander to try a different layout.`, "good");
-        } catch (error) {
-          console.error(error);
-          setStatus(gerryStatus, "District generation failed. Check the browser console.", "error");
         }
-      }, 40);
+      ).addTo(map);
+
+      if (allMembersLayer) {
+        allMembersLayer.setStyle({
+          radius: 4,
+          color: "#ffffff",
+          weight: 0.8,
+          fillColor: "#cc3344",
+          fillOpacity: 0.06,
+          opacity: 0.08
+        });
+      }
+
+      resetGerrySummary();
+
+      const intro = document.createElement("div");
+      intro.className = "district-row";
+      intro.innerHTML = `<strong>People assigned to districts</strong><br>The filtered people have been assigned to districts. You can now draw connecting lines between people in the same district.`;
+      gerrySummary.appendChild(intro);
+
+      for (const district of districts) {
+        const row = document.createElement("div");
+        row.className = "district-row";
+        const companionships = Math.floor(district.group1 / 2);
+        row.innerHTML = `
+          <strong>District ${district.id + 1}</strong><br>
+          Group 1: ${district.group1} / target ${district.xTarget}<br>
+          Group 2: ${district.group2} / target ${district.yTarget}<br>
+          Total: ${district.total} / target ${district.sTarget}<br>
+          Estimated companionships: ${companionships}
+        `;
+        gerrySummary.appendChild(row);
+      }
+
+      regerrymanderBtn.disabled = false;
+      connectLinesBtn.disabled = false;
+
+      setStatus(
+        gerryStatus,
+        `Assigned people to ${districts.length} districts. Click Connect District Lines for the next step.`,
+        "good"
+      );
+    } catch (error) {
+      console.error(error);
+      setStatus(
+        gerryStatus,
+        `District generation failed: ${error?.message || error}`,
+        "error"
+      );
     }
+  }, 40);
+}
+    function buildDistrictLineFeatures(pointDistricts) {
+  const lineFeatures = [];
+
+  for (const district of pointDistricts) {
+    const pointItems = district.members.slice();
+
+    if (pointItems.length < 2) continue;
+
+    const ordered = pointItems.slice();
+    const used = new Set();
+    const chain = [];
+
+    chain.push(ordered[0]);
+    used.add(0);
+
+    while (chain.length < ordered.length) {
+      const last = chain[chain.length - 1];
+      const lastCoords = last.feature.geometry.coordinates;
+
+      let bestIdx = -1;
+      let bestDist = Infinity;
+
+      for (let i = 0; i < ordered.length; i++) {
+        if (used.has(i)) continue;
+        const coords = ordered[i].feature.geometry.coordinates;
+        const d = Math.hypot(coords[0] - lastCoords[0], coords[1] - lastCoords[1]);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+
+      if (bestIdx === -1) break;
+      chain.push(ordered[bestIdx]);
+      used.add(bestIdx);
+    }
+
+    for (let i = 0; i < chain.length - 1; i++) {
+      const a = chain[i].feature.geometry.coordinates;
+      const b = chain[i + 1].feature.geometry.coordinates;
+
+      lineFeatures.push({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: [a, b]
+        },
+        properties: {
+          _district: district.id
+        }
+      });
+    }
+  }
+
+  return lineFeatures;
+}
+
+function connectDistrictLines() {
+  if (!currentPointDistricts || !currentPointDistricts.length) {
+    setStatus(gerryStatus, "Gerrymander people first.", "warn");
+    return;
+  }
+
+  removeDistrictLineLayer();
+
+  setStatus(gerryStatus, "Drawing district connection lines...", "warn");
+
+  setTimeout(() => {
+    try {
+      const lineFeatures = buildDistrictLineFeatures(currentPointDistricts);
+
+      districtLineLayer = L.geoJSON(
+        {
+          type: "FeatureCollection",
+          features: lineFeatures
+        },
+        {
+          style: function(feature) {
+            const districtId = feature.properties._district;
+            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+            return {
+              color: color,
+              weight: 3,
+              opacity: 0.95
+            };
+          }
+        }
+      ).addTo(map);
+
+      setStatus(
+        gerryStatus,
+        `Created ${lineFeatures.length} district connection line segments.`,
+        "good"
+      );
+    } catch (error) {
+      console.error(error);
+      setStatus(
+        gerryStatus,
+        `Connecting lines failed: ${error?.message || error}`,
+        "error"
+      );
+    }
+  }, 40);
+}
 
     function resetPage() {
       currentFiltered = [];
       currentStats = null;
       currentDistrictTargets = null;
       currentDistrictResult = null;
+      currentPointDistricts = null;
       gerrymanderRunCount = 0;
       clearMetricCards();
       resetDistrictSummary();
       resetGerrySummary();
       removeDistrictLayers();
+      removeDistrictLineLayer();
       removeFilteredPreviewLayer();
       if (allMembersLayer) {
         allMembersLayer.setStyle({ radius: 5, color: "#ffffff", weight: 1.2, fillColor: "#cc3344", fillOpacity: 0.55, opacity: 0.95 });
@@ -1200,6 +1404,7 @@ filteredPreviewLayer = L.geoJSON(
       zoomFilteredBtn.disabled = true;
       gerrymanderBtn.disabled = true;
       regerrymanderBtn.disabled = true;
+      connectLinesBtn.disabled = true;
       setStatus(filterStatus, "Choose a gender and click Run Filter.");
       setStatus(districtStatus, "Run the filter first.");
       setStatus(gerryStatus, "Calculate targets first.");
@@ -1276,7 +1481,7 @@ filteredPreviewLayer = L.geoJSON(
     calcDistrictBtn.addEventListener("click", calculateDistrictTargets);
     gerrymanderBtn.addEventListener("click", runGerrymander);
     regerrymanderBtn.addEventListener("click", runGerrymander);
-
+    connectLinesBtn.addEventListener("click", connectDistrictLines);
     initMap();
   </script>
 </body>
