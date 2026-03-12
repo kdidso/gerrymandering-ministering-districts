@@ -1096,69 +1096,92 @@
     }
 
     function addDistrictLayers(districts) {
-      removeDistrictLayers();
+  removeDistrictLayers();
 
-      const hullLayers = [];
-      const pointLayers = [];
+  const pointLayers = [];
+  const polygonLayers = [];
 
-      for (const district of districts) {
-        const color = DISTRICT_COLORS[district.id % DISTRICT_COLORS.length];
+  const seedFeatures = [];
 
-        const fc = {
-          type: "FeatureCollection",
-          features: district.members.map(m => m.feature)
-        };
+  for (const district of districts) {
+    if (district.centroidLng == null || district.centroidLat == null) continue;
 
-        if (district.members.length >= 3) {
-          try {
-            let hull = turf.convex(fc);
-            if (!hull) {
-              const buffered = district.members.map(m => turf.buffer(m.feature, 0.03, { units: "kilometers" }));
-              let merged = buffered[0];
-              for (let i = 1; i < buffered.length; i++) {
-                merged = turf.union(merged, buffered[i]) || merged;
-              }
-              hull = merged;
-            }
+    seedFeatures.push(
+      turf.point([district.centroidLng, district.centroidLat], {
+        districtId: district.id
+      })
+    );
+  }
 
-            if (hull) {
-              const hullLayer = L.geoJSON(hull, {
-                style: {
-                  color,
-                  weight: 2,
-                  fillColor: color,
-                  fillOpacity: 0.12
-                }
-              });
-              hullLayers.push(hullLayer);
-            }
-          } catch (err) {
-            console.warn("Hull creation failed for district", district.id + 1, err);
-          }
-        }
+  const wardBbox = turf.bbox(wardData);
 
-        const pointLayer = L.geoJSON(fc, {
-          pointToLayer: function(feature, latlng) {
-            return L.circleMarker(latlng, {
-              radius: feature.properties._group === 1 ? 6 : 5,
-              color: "#ffffff",
-              weight: 1.2,
-              fillColor: color,
-              fillOpacity: 1
-            });
-          },
-          onEachFeature: function(feature, layer) {
-            const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
-            layer.bindPopup(makeMemberPopup(feature, groupLabel, `District ${district.id + 1}`));
-          }
-        });
-
-        pointLayers.push(pointLayer);
-      }
-
-      districtHullLayerGroup = L.layerGroup(hullLayers).addTo(map);
-      filteredLayerGroup = L.layerGroup(pointLayers).addTo(map);
+  const voronoi = turf.voronoi(
+    turf.featureCollection(seedFeatures),
+    {
+      bbox: wardBbox
     }
+  );
+
+  if (voronoi && voronoi.features) {
+    for (const cell of voronoi.features) {
+      if (!cell) continue;
+
+      const districtId = cell.properties.districtId;
+      const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+
+      for (const wardPoly of wardPolygonFeatures) {
+        try {
+          const clipped = turf.intersect(cell, wardPoly);
+
+          if (clipped) {
+            const polyLayer = L.geoJSON(clipped, {
+              style: {
+                color,
+                weight: 2,
+                fillColor: color,
+                fillOpacity: 0.12
+              }
+            });
+
+            polygonLayers.push(polyLayer);
+          }
+        } catch (err) {
+          console.warn("Voronoi clip failed", err);
+        }
+      }
+    }
+  }
+
+  for (const district of districts) {
+    const color = DISTRICT_COLORS[district.id % DISTRICT_COLORS.length];
+
+    const fc = {
+      type: "FeatureCollection",
+      features: district.members.map(m => m.feature)
+    };
+
+    const pointLayer = L.geoJSON(fc, {
+      pointToLayer: function(feature, latlng) {
+        return L.circleMarker(latlng, {
+          radius: feature.properties._group === 1 ? 6 : 5,
+          color: "#ffffff",
+          weight: 1.2,
+          fillColor: color,
+          fillOpacity: 1
+        });
+      },
+      onEachFeature: function(feature, layer) {
+        const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
+        layer.bindPopup(makeMemberPopup(feature, groupLabel, `District ${district.id + 1}`));
+      }
+    });
+
+    pointLayers.push(pointLayer);
+  }
+
+  districtHullLayerGroup = L.layerGroup(polygonLayers).addTo(map);
+  filteredLayerGroup = L.layerGroup(pointLayers).addTo(map);
+}
 
     function renderGerrySummary(districts, targets) {
       resetGerrySummary();
@@ -1424,8 +1447,8 @@
             return {
               color: "#0f766e",
               weight: 3,
-              fillColor: "#0f766e",
-              fillOpacity: 0.08
+              fillOpacity: 0
+              opacity: 1
             };
           }
         }).addTo(map);
