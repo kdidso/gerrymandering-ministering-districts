@@ -689,6 +689,42 @@
       return assignedCount;
     }
 
+    
+    function removeFilteredPreviewLayer() {
+      if (filteredPreviewLayer) {
+        map.removeLayer(filteredPreviewLayer);
+        filteredPreviewLayer = null;
+      }
+    }
+
+    function addFilteredPreviewLayer(filteredItems) {
+      removeFilteredPreviewLayer();
+      const features = filteredItems.map(item => {
+        const clone = JSON.parse(JSON.stringify(item.feature));
+        clone.properties = clone.properties || {};
+        clone.properties._group = item.group;
+        return clone;
+      });
+
+      filteredPreviewLayer = L.geoJSON({ type: "FeatureCollection", features }, {
+        pointToLayer: function(feature, latlng) {
+          const isGroup1 = feature.properties._group === 1;
+          return L.circleMarker(latlng, {
+            radius: isGroup1 ? 7 : 6,
+            color: "#ffffff",
+            weight: 1.6,
+            fillColor: isGroup1 ? "#d97706" : "#2563eb",
+            fillOpacity: 1,
+            opacity: 1
+          });
+        },
+        onEachFeature: function(feature, layer) {
+          const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
+          layer.bindPopup(makeMemberPopup(feature, groupLabel, null));
+        }
+      }).addTo(map);
+    }
+
     function removeDistrictLayers() {
       if (districtFillLayer) {
         map.removeLayer(districtFillLayer);
@@ -937,8 +973,10 @@
       currentStats = computeStats(filteredItems, outsideWardExcluded);
       updateMetricCards(currentStats);
 
+      addFilteredPreviewLayer(currentFiltered);
+
       if (allMembersLayer) {
-        allMembersLayer.setStyle({ radius: 5, color: "#ffffff", weight: 1.2, fillColor: "#cc3344", fillOpacity: 0.40, opacity: 0.9 });
+        allMembersLayer.setStyle({ radius: 3, color: "#ffffff", weight: 0.8, fillColor: "#cc3344", fillOpacity: 0.06, opacity: 0.08 });
       }
 
       calcDistrictBtn.disabled = false;
@@ -1018,6 +1056,7 @@
       resetDistrictSummary();
       resetGerrySummary();
       removeDistrictLayers();
+      removeFilteredPreviewLayer();
       if (allMembersLayer) {
         allMembersLayer.setStyle({ radius: 5, color: "#ffffff", weight: 1.2, fillColor: "#cc3344", fillOpacity: 0.55, opacity: 0.95 });
       }
