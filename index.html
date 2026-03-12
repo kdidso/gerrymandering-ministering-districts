@@ -252,7 +252,7 @@
       padding: 10px 12px;
       box-shadow: 0 4px 18px rgba(0,0,0,0.08);
       font-size: 13px;
-      min-width: 180px;
+      min-width: 220px;
     }
 
     .legend h4 {
@@ -336,8 +336,9 @@
     <aside class="sidebar">
       <h1 class="title">Gerrymandering Ministering Districts</h1>
       <p class="subtitle">
-        Phase 1 loads the ward, member points, and network layer, applies your ministering filters,
-        excludes anyone outside the ward boundary, and calculates the live district target math.
+        This phase loads the ward, member points, and network layer, applies your ministering filters,
+        calculates the district target math, and generates provisional seeded districts with a
+        re-gerrymander button.
       </p>
 
       <div class="card">
@@ -365,8 +366,8 @@
         <div class="step-badge">Step 1</div>
         <h2>Filter ministering pool</h2>
         <p>
-          Choose the group to work on. The code will only keep points inside the ward boundary and
-          will apply your ministering rules.
+          Choose the group to work on. The code keeps only points inside the ward boundary and applies
+          your ministering rules.
         </p>
 
         <div class="radio-group">
@@ -470,7 +471,6 @@
           </select>
 
           <button id="calcDistrictBtn" disabled>Calculate Targets</button>
-          <button id="continueBtn" class="secondary" disabled>Continue</button>
         </div>
 
         <div id="districtStatus" class="status">
@@ -478,10 +478,30 @@
         </div>
 
         <div class="district-summary" id="districtSummary"></div>
+      </div>
+
+      <div class="card">
+        <div class="step-badge">Step 3</div>
+        <h2>Seeded district generation</h2>
+        <p>
+          This version creates provisional districts from the filtered people points and balances them
+          by your target counts. It is the seed logic first, before legal road/parcel boundary carving.
+        </p>
+
+        <div class="row">
+          <button id="gerrymanderBtn" disabled>Gerrymander Districts</button>
+          <button id="regerrymanderBtn" class="secondary" disabled>Re-gerrymander</button>
+        </div>
+
+        <div id="gerryStatus" class="status">
+          Calculate targets first.
+        </div>
+
+        <div class="district-summary" id="gerrySummary"></div>
 
         <div class="small-note">
-          This page computes the district quotas now. The actual district drawing, re-gerrymander,
-          companionship pairing, and assignment export come next.
+          Current phase colors the filtered people by district and draws soft district hulls. The next
+          phase will use the network to build legal district edges.
         </div>
       </div>
     </aside>
@@ -504,15 +524,12 @@
           <span>All member points</span>
         </div>
         <div class="legend-item">
-          <span class="swatch" style="background: var(--group1);"></span>
-          <span>Group 1 filtered points</span>
-        </div>
-        <div class="legend-item">
-          <span class="swatch" style="background: var(--group2);"></span>
-          <span>Group 2 filtered points</span>
+          <span class="swatch" style="background: #e11d48;"></span>
+          <span>District-colored filtered points</span>
         </div>
         <div class="small-note">
-          Raw member points are shown immediately. Filtered points appear after you click Run Filter.
+          Raw points show immediately. Filtered points become district-colored after running the seed
+          district engine.
         </div>
       </div>
     </div>
@@ -522,6 +539,19 @@
     const WARD_URL = "https://kdidso.github.io/snow-canyon-map/ward_boundaries_JSO.geojson";
     const MEMBERS_URL = "https://kdidso.github.io/snow-canyon-map/member_locations_JSO.geojson";
     const NETWORK_URL = "./district_netwo_FeaturesToJSO1.geojson";
+
+    const DISTRICT_COLORS = [
+      "#e11d48",
+      "#2563eb",
+      "#16a34a",
+      "#d97706",
+      "#7c3aed",
+      "#0891b2",
+      "#dc2626",
+      "#65a30d",
+      "#c2410c",
+      "#0f766e"
+    ];
 
     let map;
 
@@ -534,9 +564,13 @@
     let wardLayer = null;
     let networkLayer = null;
     let filteredLayerGroup = null;
+    let districtHullLayerGroup = null;
 
     let currentFiltered = [];
     let currentStats = null;
+    let currentDistrictTargets = null;
+    let currentDistrictResult = null;
+    let gerrymanderRunCount = 0;
 
     const chkWardLoaded = document.getElementById("chkWardLoaded");
     const chkMembersLoaded = document.getElementById("chkMembersLoaded");
@@ -545,16 +579,18 @@
     const loadStatus = document.getElementById("loadStatus");
     const filterStatus = document.getElementById("filterStatus");
     const districtStatus = document.getElementById("districtStatus");
+    const gerryStatus = document.getElementById("gerryStatus");
 
     const runFilterBtn = document.getElementById("runFilterBtn");
     const zoomFilteredBtn = document.getElementById("zoomFilteredBtn");
     const resetBtn = document.getElementById("resetBtn");
-    const continueBtn = document.getElementById("continueBtn");
+    const calcDistrictBtn = document.getElementById("calcDistrictBtn");
+    const gerrymanderBtn = document.getElementById("gerrymanderBtn");
+    const regerrymanderBtn = document.getElementById("regerrymanderBtn");
 
     const districtCountSelect = document.getElementById("districtCountSelect");
-    const calcDistrictBtn = document.getElementById("calcDistrictBtn");
-
     const districtSummary = document.getElementById("districtSummary");
+    const gerrySummary = document.getElementById("gerrySummary");
 
     const metricGroup1 = document.getElementById("metricGroup1");
     const metricGroup2 = document.getElementById("metricGroup2");
@@ -685,6 +721,10 @@
       districtSummary.innerHTML = "";
     }
 
+    function resetGerrySummary() {
+      gerrySummary.innerHTML = "";
+    }
+
     function fitMapToWard() {
       if (!wardLayer) return;
       map.fitBounds(wardLayer.getBounds(), { padding: [20, 20] });
@@ -709,7 +749,7 @@
       map.fitBounds(bounds, { padding: [20, 20] });
     }
 
-    function makeMemberPopup(feature, groupLabel = null) {
+    function makeMemberPopup(feature, groupLabel = null, districtLabel = null) {
       const p = feature.properties || {};
       const first = p.First_Name || p.first_name || "";
       const last = p.Last_Name || p.last_name || "";
@@ -724,43 +764,55 @@
           Assigned_to_minister: ${escapeHtml(assignedToMinister)}<br>
           Is_assigned_ministers: ${escapeHtml(isAssignedMinisters)}${
             groupLabel ? `<br>Filter group: ${escapeHtml(groupLabel)}` : ""
+          }${
+            districtLabel ? `<br>District: ${escapeHtml(districtLabel)}` : ""
           }
         </div>
       `;
     }
 
-    function createDistrictSummary(stats, districtCount) {
-      resetDistrictSummary();
-
+    function createDistrictTargets(stats, districtCount) {
       const xDist = distributeTotal(stats.group1, districtCount);
       const yDist = distributeTotal(stats.group2, districtCount);
       const sDist = distributeTotal(stats.total, districtCount);
       const cDist = xDist.map(x => Math.floor(x / 2));
-      const avgAssignments = stats.companionships > 0 ? stats.total / stats.companionships : 0;
-      const rangeText = assignmentsRange(avgAssignments);
+      const rangeText = assignmentsRange(stats.avgAssignments);
+
+      return {
+        districtCount,
+        xDist,
+        yDist,
+        sDist,
+        cDist,
+        rangeText
+      };
+    }
+
+    function renderTargetSummary(targets, stats) {
+      resetDistrictSummary();
 
       const intro = document.createElement("div");
       intro.className = "district-row";
       intro.innerHTML = `
-        <strong>Computed targets for ${districtCount} district${districtCount === 1 ? "" : "s"}:</strong><br>
-        Group 1 target(s): ${xDist.join(", ")}<br>
-        Group 2 target(s): ${yDist.join(", ")}<br>
-        Total target(s): ${sDist.join(", ")}<br>
-        Estimated companionship count(s): ${cDist.join(", ")}<br>
-        Assignments per companionship target: ${rangeText}
+        <strong>Computed targets for ${targets.districtCount} district${targets.districtCount === 1 ? "" : "s"}:</strong><br>
+        Group 1 target(s): ${targets.xDist.join(", ")}<br>
+        Group 2 target(s): ${targets.yDist.join(", ")}<br>
+        Total target(s): ${targets.sDist.join(", ")}<br>
+        Estimated companionship count(s): ${targets.cDist.join(", ")}<br>
+        Assignments per companionship target: ${targets.rangeText}
       `;
       districtSummary.appendChild(intro);
 
-      for (let i = 0; i < districtCount; i++) {
+      for (let i = 0; i < targets.districtCount; i++) {
         const row = document.createElement("div");
         row.className = "district-row";
         row.innerHTML = `
           <strong>District ${i + 1}</strong><br>
-          Group 1 (X): ${xDist[i]}<br>
-          Group 2 (Y): ${yDist[i]}<br>
-          Total (S): ${sDist[i]}<br>
-          Estimated companionships: ${cDist[i]}<br>
-          Expected assignment load per companionship: ${rangeText}
+          Group 1 (X): ${targets.xDist[i]}<br>
+          Group 2 (Y): ${targets.yDist[i]}<br>
+          Total (S): ${targets.sDist[i]}<br>
+          Estimated companionships: ${targets.cDist[i]}<br>
+          Expected assignment load per companionship: ${targets.rangeText}
         `;
         districtSummary.appendChild(row);
       }
@@ -776,52 +828,407 @@
       }
     }
 
-    function addFilteredLayer(filteredItems) {
-      if (filteredLayerGroup) {
-        map.removeLayer(filteredLayerGroup);
+    function distanceBetweenFeatures(a, b) {
+      return turf.distance(a.feature, b.feature, { units: "kilometers" });
+    }
+
+    function createEmptyDistrictStates(targets) {
+      return targets.xDist.map((xTarget, idx) => ({
+        id: idx,
+        xTarget,
+        yTarget: targets.yDist[idx],
+        sTarget: targets.sDist[idx],
+        cTarget: targets.cDist[idx],
+        members: [],
+        group1: 0,
+        group2: 0,
+        total: 0,
+        seed: null,
+        centroidLng: null,
+        centroidLat: null
+      }));
+    }
+
+    function updateDistrictCentroid(district) {
+      if (!district.members.length) return;
+      let sumLng = 0;
+      let sumLat = 0;
+
+      for (const item of district.members) {
+        const coords = item.feature.geometry.coordinates;
+        sumLng += coords[0];
+        sumLat += coords[1];
       }
 
-      const group1FC = {
-        type: "FeatureCollection",
-        features: filteredItems.filter(item => item.group === 1).map(item => item.feature)
-      };
+      district.centroidLng = sumLng / district.members.length;
+      district.centroidLat = sumLat / district.members.length;
+    }
 
-      const group2FC = {
-        type: "FeatureCollection",
-        features: filteredItems.filter(item => item.group === 2).map(item => item.feature)
-      };
+    function seededShuffle(arr, seed) {
+      const result = arr.slice();
+      let s = seed >>> 0;
 
-      const group2Layer = L.geoJSON(group2FC, {
-        pointToLayer: function(feature, latlng) {
-          return L.circleMarker(latlng, {
-            radius: 5,
-            color: "#ffffff",
-            weight: 1.2,
-            fillColor: "#2563eb",
-            fillOpacity: 1
-          });
-        },
-        onEachFeature: function(feature, layer) {
-          layer.bindPopup(makeMemberPopup(feature, "Group 2"));
+      function rnd() {
+        s = (1664525 * s + 1013904223) >>> 0;
+        return s / 4294967296;
+      }
+
+      for (let i = result.length - 1; i > 0; i--) {
+        const j = Math.floor(rnd() * (i + 1));
+        [result[i], result[j]] = [result[j], result[i]];
+      }
+
+      return result;
+    }
+
+    function chooseSeeds(items, districtCount, runSeed) {
+      const shuffled = seededShuffle(items, runSeed + 101);
+      const seeds = [];
+      if (!shuffled.length) return seeds;
+
+      seeds.push(shuffled[0]);
+
+      while (seeds.length < districtCount && seeds.length < shuffled.length) {
+        let bestCandidate = null;
+        let bestScore = -Infinity;
+
+        for (const candidate of shuffled) {
+          if (seeds.includes(candidate)) continue;
+
+          let minDist = Infinity;
+          for (const seed of seeds) {
+            const d = distanceBetweenFeatures(candidate, seed);
+            if (d < minDist) minDist = d;
+          }
+
+          if (minDist > bestScore) {
+            bestScore = minDist;
+            bestCandidate = candidate;
+          }
         }
-      });
 
-      const group1Layer = L.geoJSON(group1FC, {
-        pointToLayer: function(feature, latlng) {
-          return L.circleMarker(latlng, {
-            radius: 6,
-            color: "#ffffff",
-            weight: 1.2,
-            fillColor: "#d97706",
-            fillOpacity: 1
-          });
-        },
-        onEachFeature: function(feature, layer) {
-          layer.bindPopup(makeMemberPopup(feature, "Group 1"));
+        if (!bestCandidate) break;
+        seeds.push(bestCandidate);
+      }
+
+      return seeds;
+    }
+
+    function computePointScore(item, district, targetWeight = 1) {
+      const coords = item.feature.geometry.coordinates;
+      const dLng = district.centroidLng == null ? 0 : coords[0] - district.centroidLng;
+      const dLat = district.centroidLat == null ? 0 : coords[1] - district.centroidLat;
+      const distPenalty = Math.sqrt(dLng * dLng + dLat * dLat);
+
+      const xAfter = district.group1 + (item.group === 1 ? 1 : 0);
+      const yAfter = district.group2 + (item.group === 2 ? 1 : 0);
+      const sAfter = district.total + 1;
+
+      const xPenalty = Math.max(0, xAfter - district.xTarget);
+      const yPenalty = Math.max(0, yAfter - district.yTarget);
+      const sPenalty = Math.max(0, sAfter - district.sTarget);
+
+      const underX = Math.max(0, district.xTarget - xAfter);
+      const underY = Math.max(0, district.yTarget - yAfter);
+      const underS = Math.max(0, district.sTarget - sAfter);
+
+      return (
+        distPenalty * 1.0 +
+        (xPenalty * 10 + yPenalty * 10 + sPenalty * 14) * targetWeight +
+        (underX * 0.1 + underY * 0.1 + underS * 0.1)
+      );
+    }
+
+    function assignBySeeds(items, targets, runSeed) {
+      const districts = createEmptyDistrictStates(targets);
+      const seeds = chooseSeeds(items, targets.districtCount, runSeed);
+
+      for (let i = 0; i < districts.length; i++) {
+        const district = districts[i];
+        const seedItem = seeds[i] || items[i] || null;
+        district.seed = seedItem;
+
+        if (seedItem) {
+          district.members.push(seedItem);
+          district.group1 += seedItem.group === 1 ? 1 : 0;
+          district.group2 += seedItem.group === 2 ? 1 : 0;
+          district.total += 1;
+          updateDistrictCentroid(district);
+          seedItem._assignedDistrict = district.id;
         }
-      });
+      }
 
-      filteredLayerGroup = L.layerGroup([group2Layer, group1Layer]).addTo(map);
+      const remaining = items.filter(item => item._assignedDistrict == null);
+
+      const orderedRemaining = seededShuffle(remaining, runSeed + 909);
+
+      for (const item of orderedRemaining) {
+        let bestDistrict = null;
+        let bestScore = Infinity;
+
+        for (const district of districts) {
+          const score = computePointScore(item, district, 1.6);
+          if (score < bestScore) {
+            bestScore = score;
+            bestDistrict = district;
+          }
+        }
+
+        bestDistrict.members.push(item);
+        bestDistrict.group1 += item.group === 1 ? 1 : 0;
+        bestDistrict.group2 += item.group === 2 ? 1 : 0;
+        bestDistrict.total += 1;
+        item._assignedDistrict = bestDistrict.id;
+        updateDistrictCentroid(bestDistrict);
+      }
+
+      return districts;
+    }
+
+    function rebalanceDistricts(districts, targets) {
+      let improved = true;
+      let passCount = 0;
+
+      while (improved && passCount < 12) {
+        improved = false;
+        passCount++;
+
+        for (const district of districts) {
+          for (const other of districts) {
+            if (district.id === other.id) continue;
+
+            const districtOver =
+              (district.group1 > district.xTarget) ||
+              (district.group2 > district.yTarget) ||
+              (district.total > district.sTarget);
+
+            const otherUnder =
+              (other.group1 < other.xTarget) ||
+              (other.group2 < other.yTarget) ||
+              (other.total < other.sTarget);
+
+            if (!districtOver || !otherUnder) continue;
+
+            let bestMoveIndex = -1;
+            let bestMoveScore = Infinity;
+
+            for (let i = 0; i < district.members.length; i++) {
+              const item = district.members[i];
+
+              const couldHelp =
+                (item.group === 1 && other.group1 < other.xTarget) ||
+                (item.group === 2 && other.group2 < other.yTarget) ||
+                (other.total < other.sTarget);
+
+              if (!couldHelp) continue;
+
+              const coords = item.feature.geometry.coordinates;
+              const d1 =
+                district.centroidLng == null
+                  ? 0
+                  : Math.sqrt(
+                      Math.pow(coords[0] - district.centroidLng, 2) +
+                      Math.pow(coords[1] - district.centroidLat, 2)
+                    );
+
+              const d2 =
+                other.centroidLng == null
+                  ? 0
+                  : Math.sqrt(
+                      Math.pow(coords[0] - other.centroidLng, 2) +
+                      Math.pow(coords[1] - other.centroidLat, 2)
+                    );
+
+              const moveScore = d2 - d1;
+              if (moveScore < bestMoveScore) {
+                bestMoveScore = moveScore;
+                bestMoveIndex = i;
+              }
+            }
+
+            if (bestMoveIndex >= 0) {
+              const [item] = district.members.splice(bestMoveIndex, 1);
+
+              district.group1 -= item.group === 1 ? 1 : 0;
+              district.group2 -= item.group === 2 ? 1 : 0;
+              district.total -= 1;
+
+              other.members.push(item);
+              other.group1 += item.group === 1 ? 1 : 0;
+              other.group2 += item.group === 2 ? 1 : 0;
+              other.total += 1;
+
+              item._assignedDistrict = other.id;
+
+              updateDistrictCentroid(district);
+              updateDistrictCentroid(other);
+
+              improved = true;
+            }
+          }
+        }
+      }
+
+      return districts;
+    }
+
+    function generateDistricts(filteredItems, targets, runSeed) {
+      for (const item of filteredItems) {
+        item._assignedDistrict = null;
+      }
+
+      let districts = assignBySeeds(filteredItems, targets, runSeed);
+      districts = rebalanceDistricts(districts, targets);
+
+      return districts;
+    }
+
+    function removeDistrictLayers() {
+      if (filteredLayerGroup) {
+        map.removeLayer(filteredLayerGroup);
+        filteredLayerGroup = null;
+      }
+
+      if (districtHullLayerGroup) {
+        map.removeLayer(districtHullLayerGroup);
+        districtHullLayerGroup = null;
+      }
+    }
+
+    function addDistrictLayers(districts) {
+      removeDistrictLayers();
+
+      const hullLayers = [];
+      const pointLayers = [];
+
+      for (const district of districts) {
+        const color = DISTRICT_COLORS[district.id % DISTRICT_COLORS.length];
+
+        const fc = {
+          type: "FeatureCollection",
+          features: district.members.map(m => m.feature)
+        };
+
+        if (district.members.length >= 3) {
+          try {
+            let hull = turf.convex(fc);
+            if (!hull) {
+              const buffered = district.members.map(m => turf.buffer(m.feature, 0.03, { units: "kilometers" }));
+              let merged = buffered[0];
+              for (let i = 1; i < buffered.length; i++) {
+                merged = turf.union(merged, buffered[i]) || merged;
+              }
+              hull = merged;
+            }
+
+            if (hull) {
+              const hullLayer = L.geoJSON(hull, {
+                style: {
+                  color,
+                  weight: 2,
+                  fillColor: color,
+                  fillOpacity: 0.12
+                }
+              });
+              hullLayers.push(hullLayer);
+            }
+          } catch (err) {
+            console.warn("Hull creation failed for district", district.id + 1, err);
+          }
+        }
+
+        const pointLayer = L.geoJSON(fc, {
+          pointToLayer: function(feature, latlng) {
+            return L.circleMarker(latlng, {
+              radius: feature.properties._group === 1 ? 6 : 5,
+              color: "#ffffff",
+              weight: 1.2,
+              fillColor: color,
+              fillOpacity: 1
+            });
+          },
+          onEachFeature: function(feature, layer) {
+            const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
+            layer.bindPopup(makeMemberPopup(feature, groupLabel, `District ${district.id + 1}`));
+          }
+        });
+
+        pointLayers.push(pointLayer);
+      }
+
+      districtHullLayerGroup = L.layerGroup(hullLayers).addTo(map);
+      filteredLayerGroup = L.layerGroup(pointLayers).addTo(map);
+    }
+
+    function renderGerrySummary(districts, targets) {
+      resetGerrySummary();
+
+      const intro = document.createElement("div");
+      intro.className = "district-row";
+      intro.innerHTML = `
+        <strong>Generated provisional seeded districts</strong><br>
+        These are balanced by point counts and can be regenerated with a different seed arrangement.
+      `;
+      gerrySummary.appendChild(intro);
+
+      for (const district of districts) {
+        const row = document.createElement("div");
+        row.className = "district-row";
+        row.innerHTML = `
+          <strong>District ${district.id + 1}</strong><br>
+          Group 1: ${district.group1} / target ${district.xTarget}<br>
+          Group 2: ${district.group2} / target ${district.yTarget}<br>
+          Total: ${district.total} / target ${district.sTarget}<br>
+          Estimated companionships: ${Math.floor(district.group1 / 2)}<br>
+          Average assignments if used now: ${
+            Math.floor(district.group1 / 2) > 0
+              ? round2(district.total / Math.floor(district.group1 / 2))
+              : 0
+          }
+        `;
+        gerrySummary.appendChild(row);
+      }
+    }
+
+    function runGerrymander() {
+      if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
+        setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
+        return;
+      }
+
+      gerrymanderRunCount++;
+      const runSeed = Date.now() + gerrymanderRunCount * 99991;
+
+      const districts = generateDistricts(
+        currentFiltered.map(item => ({
+          feature: JSON.parse(JSON.stringify(item.feature)),
+          group: item.group
+        })),
+        currentDistrictTargets,
+        runSeed
+      );
+
+      currentDistrictResult = districts;
+      addDistrictLayers(districts);
+      renderGerrySummary(districts, currentDistrictTargets);
+
+      if (allMembersLayer) {
+        allMembersLayer.setStyle({
+          radius: 3,
+          color: "#ffffff",
+          weight: 0.7,
+          fillColor: "#cc3344",
+          fillOpacity: 0.08,
+          opacity: 0.14
+        });
+      }
+
+      regerrymanderBtn.disabled = false;
+      setStatus(
+        gerryStatus,
+        `Generated ${districts.length} provisional seeded districts. Click Re-gerrymander to try a different layout.`,
+        "good"
+      );
     }
 
     function runFilter() {
@@ -829,6 +1236,15 @@
         setStatus(filterStatus, "Data is not ready yet.", "error");
         return;
       }
+
+      removeDistrictLayers();
+      resetDistrictSummary();
+      resetGerrySummary();
+      currentDistrictTargets = null;
+      currentDistrictResult = null;
+      regerrymanderBtn.disabled = true;
+      gerrymanderBtn.disabled = true;
+      setStatus(gerryStatus, "Calculate targets first.");
 
       const chosenGender = getSelectedGender();
       const features = membersData.features || [];
@@ -875,25 +1291,21 @@
       currentStats = computeStats(filteredItems, outsideWardExcluded);
 
       updateMetricCards(currentStats);
-      addFilteredLayer(filteredItems);
 
       if (allMembersLayer) {
         allMembersLayer.setStyle({
-          radius: 3,
+          radius: 4,
           color: "#ffffff",
           weight: 0.7,
           fillColor: "#cc3344",
-          fillOpacity: 0.12,
-          opacity: 0.18
+          fillOpacity: 0.20,
+          opacity: 0.25
         });
       }
 
       calcDistrictBtn.disabled = false;
       districtCountSelect.disabled = false;
-      continueBtn.disabled = false;
       zoomFilteredBtn.disabled = filteredItems.length === 0;
-
-      resetDistrictSummary();
 
       const chosenLabel = chosenGender === "M" ? "male" : "female";
       const message = [
@@ -922,26 +1334,31 @@
         return;
       }
 
-      createDistrictSummary(currentStats, districtCount);
+      currentDistrictTargets = createDistrictTargets(currentStats, districtCount);
+      renderTargetSummary(currentDistrictTargets, currentStats);
+
+      gerrymanderBtn.disabled = false;
+      regerrymanderBtn.disabled = true;
 
       const note = currentStats.trioNeeded
         ? "Targets computed. Group 1 is odd, so one trio will be needed later."
         : "Targets computed successfully.";
 
       setStatus(districtStatus, note, "good");
+      setStatus(gerryStatus, "Click Gerrymander Districts to generate seeded districts.", "good");
     }
 
     function resetPage() {
       currentFiltered = [];
       currentStats = null;
+      currentDistrictTargets = null;
+      currentDistrictResult = null;
+      gerrymanderRunCount = 0;
 
       clearMetricCards();
       resetDistrictSummary();
-
-      if (filteredLayerGroup) {
-        map.removeLayer(filteredLayerGroup);
-        filteredLayerGroup = null;
-      }
+      resetGerrySummary();
+      removeDistrictLayers();
 
       if (allMembersLayer) {
         allMembersLayer.setStyle({
@@ -956,11 +1373,13 @@
 
       calcDistrictBtn.disabled = true;
       districtCountSelect.disabled = true;
-      continueBtn.disabled = true;
       zoomFilteredBtn.disabled = true;
+      gerrymanderBtn.disabled = true;
+      regerrymanderBtn.disabled = true;
 
       setStatus(filterStatus, "Choose a gender and click Run Filter.");
       setStatus(districtStatus, "Run the filter first.");
+      setStatus(gerryStatus, "Calculate targets first.");
 
       fitMapToWard();
     }
@@ -1054,13 +1473,8 @@
     calcDistrictBtn.addEventListener("click", calculateDistrictTargets);
     zoomFilteredBtn.addEventListener("click", fitToFiltered);
     resetBtn.addEventListener("click", resetPage);
-
-    continueBtn.addEventListener("click", () => {
-      alert(
-        "Phase 1 is complete: your data is loaded, the filter works, and the district target math is computed. " +
-        "The next step is wiring in the actual Gerrymander Districts and Re-gerrymander logic."
-      );
-    });
+    gerrymanderBtn.addEventListener("click", runGerrymander);
+    regerrymanderBtn.addEventListener("click", runGerrymander);
 
     initMap();
   </script>
