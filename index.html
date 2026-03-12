@@ -1,1735 +1,335 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Gerrymandering Ministering Districts</title>
-
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    crossorigin=""
-  />
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    crossorigin=""
-  ></script>
-  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
-
-  <style>
-    :root {
-      --bg: #f5f7fb;
-      --panel: #ffffff;
-      --panel-soft: #f8fafc;
-      --border: #d9dfeb;
-      --text: #1c2430;
-      --muted: #5f6b7a;
-      --accent: #1f6feb;
-      --accent-dark: #1557b0;
-      --success: #1f883d;
-      --warning: #9a6700;
-      --danger: #cf222e;
-      --shadow: 0 8px 28px rgba(27, 39, 51, 0.08);
-      --radius: 14px;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    html,
-    body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      font-family: Arial, Helvetica, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-    }
-
-    body {
-      display: flex;
-      flex-direction: column;
-    }
-
-    .app {
-      display: grid;
-      grid-template-columns: 390px 1fr;
-      grid-template-rows: 100%;
-      height: 100vh;
-      overflow: hidden;
-    }
-
-    .sidebar {
-      background: var(--panel);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      min-width: 320px;
-      overflow: hidden;
-    }
-
-    .sidebar-header {
-      padding: 18px 18px 12px 18px;
-      border-bottom: 1px solid var(--border);
-      background: linear-gradient(to bottom, #ffffff, #fbfcfe);
-    }
-
-    .sidebar-header h1 {
-      margin: 0 0 8px 0;
-      font-size: 22px;
-      line-height: 1.2;
-    }
-
-    .sidebar-header p {
-      margin: 0;
-      font-size: 13px;
-      color: var(--muted);
-      line-height: 1.45;
-    }
-
-    .sidebar-scroll {
-      flex: 1;
-      overflow: auto;
-      padding: 14px;
-    }
-
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      margin-bottom: 14px;
-      overflow: hidden;
-    }
-
-    .panel h2 {
-      margin: 0;
-      padding: 12px 14px;
-      font-size: 15px;
-      border-bottom: 1px solid var(--border);
-      background: var(--panel-soft);
-    }
-
-    .panel-body {
-      padding: 12px 14px 14px 14px;
-    }
-
-    .row {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .row:last-child {
-      margin-bottom: 0;
-    }
-
-    label {
-      font-size: 12px;
-      color: var(--muted);
-      display: block;
-      margin-bottom: 4px;
-      font-weight: 600;
-    }
-
-    input[type="text"],
-    input[type="number"],
-    select,
-    textarea {
-      width: 100%;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 11px;
-      font-size: 14px;
-      color: var(--text);
-      background: #fff;
-      outline: none;
-    }
-
-    input[type="text"]:focus,
-    input[type="number"]:focus,
-    select:focus,
-    textarea:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.12);
-    }
-
-    button {
-      border: none;
-      border-radius: 10px;
-      padding: 10px 12px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      background: var(--accent);
-      color: white;
-      transition: 0.15s ease;
-    }
-
-    button:hover {
-      background: var(--accent-dark);
-    }
-
-    button.secondary {
-      background: #eef3fb;
-      color: #21406b;
-      border: 1px solid #d3e0f5;
-    }
-
-    button.secondary:hover {
-      background: #e3edf9;
-    }
-
-    button.success {
-      background: var(--success);
-    }
-
-    button.success:hover {
-      filter: brightness(0.95);
-    }
-
-    button.warning {
-      background: #fff4d6;
-      color: #7a5800;
-      border: 1px solid #efd48a;
-    }
-
-    button.warning:hover {
-      background: #ffedba;
-    }
-
-    button.danger {
-      background: var(--danger);
-    }
-
-    button.danger:hover {
-      filter: brightness(0.95);
-    }
-
-    button:disabled {
-      opacity: 0.55;
-      cursor: not-allowed;
-    }
-
-    .grow {
-      flex: 1;
-    }
-
-    .small {
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.45;
-    }
-
-    .tiny {
-      font-size: 11px;
-      color: var(--muted);
-      line-height: 1.4;
-    }
-
-    .stats-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-    }
-
-    .stat-card {
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 10px 11px;
-      background: #fff;
-    }
-
-    .stat-card .label {
-      font-size: 11px;
-      color: var(--muted);
-      margin-bottom: 4px;
-      text-transform: uppercase;
-      letter-spacing: 0.03em;
-    }
-
-    .stat-card .value {
-      font-size: 20px;
-      font-weight: 700;
-    }
-
-    .district-list {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
-    .district-card {
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: #fff;
-      overflow: hidden;
-    }
-
-    .district-card-header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--border);
-      background: #fafcff;
-    }
-
-    .district-swatch {
-      width: 16px;
-      height: 16px;
-      border-radius: 999px;
-      border: 1px solid rgba(0, 0, 0, 0.15);
-      flex: 0 0 auto;
-    }
-
-    .district-title-wrap {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .district-title {
-      font-size: 14px;
-      font-weight: 700;
-      margin: 0 0 2px 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .district-subtitle {
-      font-size: 11px;
-      color: var(--muted);
-      margin: 0;
-    }
-
-    .district-card-body {
-      padding: 10px 12px 12px 12px;
-    }
-
-    .pill-row {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-      margin-bottom: 10px;
-    }
-
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 11px;
-      border-radius: 999px;
-      padding: 5px 8px;
-      background: #f1f5fb;
-      color: #304560;
-      border: 1px solid #d9e4f0;
-    }
-
-    .member-mini-list {
-      max-height: 120px;
-      overflow: auto;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 8px;
-      background: #fcfdff;
-    }
-
-    .member-mini-item {
-      font-size: 12px;
-      color: var(--text);
-      padding: 3px 0;
-      border-bottom: 1px dashed #e7edf5;
-    }
-
-    .member-mini-item:last-child {
-      border-bottom: none;
-    }
-
-    .active-district-box {
-      border: 1px solid #bfd4f4;
-      background: #f4f8ff;
-      border-radius: 12px;
-      padding: 10px 11px;
-    }
-
-    .badge {
-      display: inline-block;
-      padding: 3px 7px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 700;
-      background: #e9f2ff;
-      color: #1a4f9e;
-      border: 1px solid #c9dcfb;
-    }
-
-    .map-wrap {
-      position: relative;
-      height: 100%;
-      width: 100%;
-      overflow: hidden;
-    }
-
-    #map {
-      width: 100%;
-      height: 100%;
-    }
-
-    .map-floating {
-      position: absolute;
-      top: 14px;
-      right: 14px;
-      z-index: 1000;
-      width: 320px;
-      max-width: calc(100% - 28px);
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      pointer-events: none;
-    }
-
-    .floating-box {
-      pointer-events: auto;
-      background: rgba(255, 255, 255, 0.96);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      box-shadow: var(--shadow);
-      padding: 10px 12px;
-      backdrop-filter: blur(6px);
-    }
-
-    .legend-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-      margin-top: 6px;
-    }
-
-    .legend-line {
-      width: 18px;
-      height: 0;
-      border-top: 3px solid #000;
-      flex: 0 0 auto;
-    }
-
-    .legend-dot {
-      width: 12px;
-      height: 12px;
-      border-radius: 999px;
-      border: 1px solid rgba(0, 0, 0, 0.2);
-      flex: 0 0 auto;
-    }
-
-    .member-count-box {
-      font-size: 13px;
-      line-height: 1.45;
-    }
-
-    .hidden {
-      display: none !important;
-    }
-
-    .footer-note {
-      font-size: 11px;
-      color: var(--muted);
-      margin-top: 10px;
-      line-height: 1.45;
-    }
-
-    .hr {
-      height: 1px;
-      background: var(--border);
-      margin: 10px 0;
-    }
-
-    .file-input {
-      display: block;
-      width: 100%;
-      font-size: 12px;
-    }
-
-    .checkbox-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 13px;
-      color: var(--text);
-      margin-bottom: 8px;
-    }
-
-    .checkbox-row input {
-      margin: 0;
-    }
-
-    .district-actions {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-      margin-top: 10px;
-    }
-
-    .district-card.active {
-      border-color: #8eb4ef;
-      box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.09);
-    }
-
-    @media (max-width: 980px) {
-      .app {
-        grid-template-columns: 1fr;
-        grid-template-rows: 420px 1fr;
-      }
-
-      .sidebar {
-        order: 2;
-        border-right: none;
-        border-top: 1px solid var(--border);
-      }
-
-      .map-wrap {
-        order: 1;
-      }
-
-      .map-floating {
-        width: 280px;
-      }
-    }
-  </style>
+<meta charset="utf-8">
+<title>Ministering District Builder</title>
+
+<link rel="stylesheet"
+href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+<style>
+
+html,body{
+margin:0;
+height:100%;
+font-family:Arial;
+}
+
+#map{
+height:100%;
+width:100%;
+}
+
+.panel{
+position:absolute;
+top:10px;
+left:10px;
+background:white;
+padding:10px;
+border-radius:6px;
+box-shadow:0 4px 12px rgba(0,0,0,.25);
+z-index:999;
+max-width:260px;
+}
+
+button{
+margin-top:6px;
+width:100%;
+}
+
+</style>
 </head>
+
 <body>
-  <div class="app">
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <h1>Gerrymandering Ministering Districts</h1>
-        <p>
-          Build and rebalance districts by clicking households on the map.
-          Select an active district, click members to assign or unassign them,
-          and the district shape and statistics will update automatically.
-        </p>
-      </div>
-
-      <div class="sidebar-scroll">
-        <div class="panel">
-          <h2>Data Sources</h2>
-          <div class="panel-body">
-            <div class="small">
-              This file expects GeoJSON files for ward boundaries and member locations.
-              Update the file paths in the JavaScript section if needed.
-            </div>
-            <div class="footer-note">
-              Default expected files:
-              <br />
-              <strong>ward_boundaries_JSO.geojson</strong>
-              <br />
-              <strong>member_locations_JSO.geojson</strong>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>District Builder</h2>
-          <div class="panel-body">
-            <div class="row">
-              <div class="grow">
-                <label for="newDistrictName">New district name</label>
-                <input type="text" id="newDistrictName" placeholder="District 1" />
-              </div>
-            </div>
-
-            <div class="row">
-              <button id="createDistrictBtn">Create District</button>
-              <button id="clearSelectionBtn" class="secondary">Clear Active</button>
-            </div>
-
-            <div class="hr"></div>
-
-            <div id="activeDistrictBox" class="active-district-box hidden">
-              <div class="row" style="justify-content: space-between;">
-                <div>
-                  <div class="tiny">Active district</div>
-                  <div id="activeDistrictLabel" style="font-size: 16px; font-weight: 700;">None</div>
-                </div>
-                <span class="badge" id="activeDistrictCountBadge">0 homes</span>
-              </div>
-
-              <div class="row">
-                <div class="grow">
-                  <label for="renameDistrictInput">Rename active district</label>
-                  <input type="text" id="renameDistrictInput" placeholder="Enter new name" />
-                </div>
-              </div>
-
-              <div class="row">
-                <button id="renameDistrictBtn" class="secondary">Rename</button>
-                <button id="fitActiveDistrictBtn" class="secondary">Zoom To</button>
-                <button id="deleteActiveDistrictBtn" class="danger">Delete</button>
-              </div>
-
-              <div class="footer-note">
-                With a district active, click member markers on the map to add or remove them.
-              </div>
-            </div>
-
-            <div id="noActiveDistrictMsg" class="small">
-              No district is currently active. Create one, then click it in the district list.
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>Map Options</h2>
-          <div class="panel-body">
-            <label class="checkbox-row">
-              <input type="checkbox" id="toggleMembers" checked />
-              Show member markers
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="toggleWardBoundary" checked />
-              Show ward boundary
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="toggleDistrictLabels" checked />
-              Show district labels
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="toggleBufferMode" checked />
-              Use buffered hull around assigned households
-            </label>
-
-            <div class="row">
-              <div class="grow">
-                <label for="bufferFeetInput">District shape buffer (feet)</label>
-                <input type="number" id="bufferFeetInput" min="25" step="25" value="250" />
-              </div>
-              <div class="grow">
-                <label for="targetHomesInput">Target homes per district</label>
-                <input type="number" id="targetHomesInput" min="1" step="1" value="12" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>Summary</h2>
-          <div class="panel-body">
-            <div class="stats-grid">
-              <div class="stat-card">
-                <div class="label">Total Members</div>
-                <div class="value" id="totalMembersStat">0</div>
-              </div>
-              <div class="stat-card">
-                <div class="label">Total Households</div>
-                <div class="value" id="totalHouseholdsStat">0</div>
-              </div>
-              <div class="stat-card">
-                <div class="label">Districts</div>
-                <div class="value" id="districtCountStat">0</div>
-              </div>
-              <div class="stat-card">
-                <div class="label">Unassigned Homes</div>
-                <div class="value" id="unassignedHomesStat">0</div>
-              </div>
-            </div>
-            <div class="footer-note" id="balanceSummary">
-              No districts yet.
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>Districts</h2>
-          <div class="panel-body">
-            <div id="districtList" class="district-list"></div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>Import / Export</h2>
-          <div class="panel-body">
-            <div class="row">
-              <button id="exportDistrictsBtn" class="success">Export Districts GeoJSON</button>
-            </div>
-            <div class="row">
-              <label for="importDistrictsInput">Import districts GeoJSON</label>
-              <input
-                type="file"
-                id="importDistrictsInput"
-                class="file-input"
-                accept=".geojson,.json,application/geo+json,application/json"
-              />
-            </div>
-            <div class="small">
-              Export saves district polygons and assigned household IDs. Import restores them.
-            </div>
-          </div>
-        </div>
-      </div>
-    </aside>
-
-    <div class="map-wrap">
-      <div id="map"></div>
-
-      <div class="map-floating">
-        <div class="floating-box">
-          <strong>How to use</strong>
-          <div class="small" style="margin-top: 6px;">
-            1. Create a district.<br />
-            2. Click the district in the sidebar to make it active.<br />
-            3. Click member markers to assign or unassign households.<br />
-            4. Watch the district shape and totals update live.
-          </div>
-        </div>
-
-        <div class="floating-box">
-          <strong>Legend</strong>
-          <div class="legend-item">
-            <span class="legend-line" style="border-top-color:#2b6cb0;"></span>
-            Ward boundary
-          </div>
-          <div class="legend-item">
-            <span class="legend-dot" style="background:#666;"></span>
-            Unassigned household
-          </div>
-          <div class="legend-item">
-            <span class="legend-dot" style="background:#1f6feb;"></span>
-            Assigned household
-          </div>
-          <div class="legend-item">
-            <span class="legend-line" style="border-top-color:#1f6feb;"></span>
-            District outline
-          </div>
-        </div>
-
-        <div class="floating-box member-count-box" id="hoverInfoBox">
-          <strong>Hover info</strong>
-          <div class="small" style="margin-top: 6px;">
-            Hover over a member marker or district polygon for details.
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    /**********************************************************************
-     * CONFIG
-     **********************************************************************/
-    const MEMBER_FILE = "member_locations_JSO.geojson";
-    const WARD_FILE = "ward_boundaries_JSO.geojson";
-
-    const DISTRICT_COLORS = [
-      "#1f6feb",
-      "#d73a49",
-      "#2da44e",
-      "#8250df",
-      "#bf8700",
-      "#0969da",
-      "#bc4c00",
-      "#1b7f83",
-      "#9a6700",
-      "#6f42c1",
-      "#cf222e",
-      "#0a7f38"
-    ];
-
-    /**********************************************************************
-     * STATE
-     **********************************************************************/
-    const state = {
-      map: null,
-      wardBoundaryData: null,
-      memberData: null,
-      districts: [],
-      activeDistrictId: null,
-      memberMarkers: new Map(),
-      householdIndex: new Map(),
-      householdAssignment: new Map(),
-      districtLayers: new Map(),
-      districtLabelLayers: new Map(),
-      wardLayer: null,
-      membersLayerGroup: null,
-      nextDistrictId: 1
-    };
-
-    /**********************************************************************
-     * MAP INIT
-     **********************************************************************/
-    function initMap() {
-      state.map = L.map("map", {
-        zoomControl: true
-      }).setView([37.14, -113.63], 12);
-
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 22,
-        attribution: "&copy; OpenStreetMap contributors"
-      }).addTo(state.map);
-
-      state.membersLayerGroup = L.layerGroup().addTo(state.map);
-    }
-
-    /**********************************************************************
-     * HELPERS
-     **********************************************************************/
-    function safeString(value) {
-      if (value === null || value === undefined) return "";
-      return String(value).trim();
-    }
-
-    function getProp(feature, names, fallback = "") {
-      for (const name of names) {
-        if (feature.properties && feature.properties[name] !== undefined && feature.properties[name] !== null) {
-          return feature.properties[name];
-        }
-      }
-      return fallback;
-    }
-
-    function normalizeNamePart(value) {
-      return safeString(value)
-        .toLowerCase()
-        .replace(/\s+/g, " ")
-        .replace(/[^a-z0-9\s'-]/g, "")
-        .trim();
-    }
-
-    function normalizeAddress(value) {
-      return safeString(value)
-        .toLowerCase()
-        .replace(/\s+/g, " ")
-        .replace(/\./g, "")
-        .replace(/,/g, "")
-        .trim();
-    }
-
-    function getHouseholdId(feature) {
-      const explicitId =
-        getProp(feature, ["household_id", "Household_ID", "HOUSEHOLD_ID", "hh_id", "HH_ID"], "");
-      if (safeString(explicitId)) {
-        return safeString(explicitId);
-      }
-
-      const address = normalizeAddress(
-        getProp(feature, ["Address", "address", "FullAddress", "full_address", "FULLADDR"], "")
-      );
-      const apt = normalizeAddress(getProp(feature, ["Apt_Number", "apt_number", "Apartment", "apt"], ""));
-      const lastName = normalizeNamePart(getProp(feature, ["Last_Name", "last_name", "LAST_NAME"], ""));
-      const firstName = normalizeNamePart(getProp(feature, ["First_Name", "first_name", "FIRST_NAME"], ""));
-
-      return [address, apt, lastName, firstName].join("|");
-    }
-
-    function getDisplayName(feature) {
-      const first = safeString(getProp(feature, ["First_Name", "first_name", "FIRST_NAME"], ""));
-      const last = safeString(getProp(feature, ["Last_Name", "last_name", "LAST_NAME"], ""));
-      const full = [first, last].filter(Boolean).join(" ");
-      return full || "Unnamed Member";
-    }
-
-    function getDisplayAddress(feature) {
-      const address = safeString(getProp(feature, ["Address", "address", "FullAddress", "full_address"], ""));
-      const apt = safeString(getProp(feature, ["Apt_Number", "apt_number", "Apartment", "apt"], ""));
-      return [address, apt].filter(Boolean).join(" ");
-    }
-
-    function getMemberGender(feature) {
-      return safeString(getProp(feature, ["Gender", "gender"], ""));
-    }
-
-    function getColorForDistrictIndex(index) {
-      return DISTRICT_COLORS[index % DISTRICT_COLORS.length];
-    }
-
-    function getDistrictById(districtId) {
-      return state.districts.find(d => d.id === districtId) || null;
-    }
-
-    function getActiveDistrict() {
-      return getDistrictById(state.activeDistrictId);
-    }
-
-    function getHouseholdFeatureById(householdId) {
-      return state.householdIndex.get(householdId) || null;
-    }
-
-    function feetToKilometers(feet) {
-      return Number(feet) * 0.0003048;
-    }
-
-    function getAllHouseholdIds() {
-      return Array.from(state.householdIndex.keys());
-    }
-
-    function getAssignedDistrictIdForHousehold(householdId) {
-      return state.householdAssignment.get(householdId) || null;
-    }
-
-    function setHoverInfo(html) {
-      document.getElementById("hoverInfoBox").innerHTML = html;
-    }
-
-    function clearHoverInfo() {
-      document.getElementById("hoverInfoBox").innerHTML = `
-        <strong>Hover info</strong>
-        <div class="small" style="margin-top: 6px;">
-          Hover over a member marker or district polygon for details.
-        </div>
-      `;
-    }
-
-    function escapeHtml(str) {
-      return safeString(str)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-    }
-
-    /**********************************************************************
-     * DATA LOAD
-     **********************************************************************/
-    async function loadData() {
-      try {
-        const [wardResp, membersResp] = await Promise.all([
-          fetch(WARD_FILE),
-          fetch(MEMBER_FILE)
-        ]);
-
-        if (!wardResp.ok) {
-          throw new Error(`Failed to load ward boundary file: ${WARD_FILE}`);
-        }
-        if (!membersResp.ok) {
-          throw new Error(`Failed to load member file: ${MEMBER_FILE}`);
-        }
-
-        state.wardBoundaryData = await wardResp.json();
-        state.memberData = await membersResp.json();
-
-        buildHouseholdIndex();
-        drawWardBoundary();
-        drawMembers();
-        fitInitialView();
-        updateSummary();
-      } catch (error) {
-        console.error(error);
-        alert(
-          "There was a problem loading your GeoJSON files.\n\n" +
-          error.message +
-          "\n\nMake sure the HTML file is in the correct folder and the file names match."
-        );
-      }
-    }
-
-    function buildHouseholdIndex() {
-      state.householdIndex.clear();
-
-      if (!state.memberData || !Array.isArray(state.memberData.features)) return;
-
-      for (const feature of state.memberData.features) {
-        if (!feature.geometry || feature.geometry.type !== "Point") continue;
-        const householdId = getHouseholdId(feature);
-        if (!householdId) continue;
-
-        if (!state.householdIndex.has(householdId)) {
-          state.householdIndex.set(householdId, feature);
-        }
-      }
-    }
-
-    /**********************************************************************
-     * DRAW WARD BOUNDARY
-     **********************************************************************/
-    function drawWardBoundary() {
-      if (state.wardLayer) {
-        state.map.removeLayer(state.wardLayer);
-      }
-
-      state.wardLayer = L.geoJSON(state.wardBoundaryData, {
-        style: {
-          color: "#2b6cb0",
-          weight: 3,
-          fillColor: "#63b3ed",
-          fillOpacity: 0.08
-        }
-      });
-
-      if (document.getElementById("toggleWardBoundary").checked) {
-        state.wardLayer.addTo(state.map);
-      }
-    }
-
-    /**********************************************************************
-     * DRAW MEMBERS
-     **********************************************************************/
-    function drawMembers() {
-      state.membersLayerGroup.clearLayers();
-      state.memberMarkers.clear();
-
-      if (!state.memberData || !Array.isArray(state.memberData.features)) return;
-
-      const householdSeen = new Set();
-
-      for (const feature of state.memberData.features) {
-        if (!feature.geometry || feature.geometry.type !== "Point") continue;
-
-        const householdId = getHouseholdId(feature);
-        if (!householdId || householdSeen.has(householdId)) continue;
-        householdSeen.add(householdId);
-
-        const [lng, lat] = feature.geometry.coordinates;
-        const districtId = getAssignedDistrictIdForHousehold(householdId);
-        const district = districtId ? getDistrictById(districtId) : null;
-
-        const marker = L.circleMarker([lat, lng], {
-          radius: 7,
-          color: district ? district.color : "#555",
-          weight: 2,
-          fillColor: district ? district.color : "#888",
-          fillOpacity: 0.85
-        });
-
-        marker.on("click", () => {
-          handleHouseholdMarkerClick(householdId);
-        });
-
-        marker.on("mouseover", () => {
-          const assignedDistrictId = getAssignedDistrictIdForHousehold(householdId);
-          const assignedDistrict = assignedDistrictId ? getDistrictById(assignedDistrictId) : null;
-
-          setHoverInfo(`
-            <strong>${escapeHtml(getDisplayName(feature))}</strong>
-            <div class="small" style="margin-top:6px;">
-              <div><strong>Address:</strong> ${escapeHtml(getDisplayAddress(feature) || "Unknown")}</div>
-              <div><strong>Gender:</strong> ${escapeHtml(getMemberGender(feature) || "Unknown")}</div>
-              <div><strong>Household ID:</strong> ${escapeHtml(householdId)}</div>
-              <div><strong>District:</strong> ${escapeHtml(assignedDistrict ? assignedDistrict.name : "Unassigned")}</div>
-            </div>
-          `);
-        });
-
-        marker.on("mouseout", clearHoverInfo);
-
-        marker.bindPopup(`
-          <div style="min-width:220px;">
-            <strong>${escapeHtml(getDisplayName(feature))}</strong><br />
-            <div style="margin-top:6px; font-size:12px;">
-              ${escapeHtml(getDisplayAddress(feature) || "Unknown address")}<br />
-              Gender: ${escapeHtml(getMemberGender(feature) || "Unknown")}<br />
-              Assigned district: ${escapeHtml(district ? district.name : "Unassigned")}
-            </div>
-          </div>
-        `);
-
-        marker.addTo(state.membersLayerGroup);
-        state.memberMarkers.set(householdId, marker);
-      }
-
-      if (!document.getElementById("toggleMembers").checked) {
-        state.map.removeLayer(state.membersLayerGroup);
-      } else if (!state.map.hasLayer(state.membersLayerGroup)) {
-        state.membersLayerGroup.addTo(state.map);
-      }
-    }
-
-    function updateMemberMarkerStyles() {
-      for (const [householdId, marker] of state.memberMarkers.entries()) {
-        const districtId = getAssignedDistrictIdForHousehold(householdId);
-        const district = districtId ? getDistrictById(districtId) : null;
-        const isActive = state.activeDistrictId && districtId === state.activeDistrictId;
-
-        marker.setStyle({
-          color: district ? district.color : "#555",
-          fillColor: district ? district.color : "#888",
-          radius: isActive ? 9 : 7,
-          weight: isActive ? 3 : 2,
-          fillOpacity: 0.85
-        });
-      }
-    }
-
-    /**********************************************************************
-     * DISTRICT OPERATIONS
-     **********************************************************************/
-    function createDistrict(name) {
-      const districtName = safeString(name) || `District ${state.nextDistrictId}`;
-      const district = {
-        id: `district_${state.nextDistrictId++}`,
-        name: districtName,
-        color: getColorForDistrictIndex(state.districts.length),
-        householdIds: [],
-        polygonGeoJSON: null
-      };
-
-      state.districts.push(district);
-      setActiveDistrict(district.id);
-      redrawDistricts();
-      updateSummary();
-      renderDistrictList();
-      updateActiveDistrictUI();
-    }
-
-    function deleteDistrict(districtId) {
-      const district = getDistrictById(districtId);
-      if (!district) return;
-
-      for (const householdId of district.householdIds) {
-        state.householdAssignment.delete(householdId);
-      }
-
-      const idx = state.districts.findIndex(d => d.id === districtId);
-      if (idx >= 0) {
-        state.districts.splice(idx, 1);
-      }
-
-      if (state.activeDistrictId === districtId) {
-        state.activeDistrictId = null;
-      }
-
-      removeDistrictLayers(districtId);
-      redrawDistricts();
-      drawMembers();
-      updateSummary();
-      renderDistrictList();
-      updateActiveDistrictUI();
-    }
-
-    function setActiveDistrict(districtId) {
-      state.activeDistrictId = districtId;
-      updateActiveDistrictUI();
-      renderDistrictList();
-      updateMemberMarkerStyles();
-    }
-
-    function renameActiveDistrict(newName) {
-      const district = getActiveDistrict();
-      if (!district) return;
-
-      const cleanName = safeString(newName);
-      if (!cleanName) return;
-
-      district.name = cleanName;
-      redrawDistricts();
-      renderDistrictList();
-      updateActiveDistrictUI();
-      drawMembers();
-    }
-
-    function handleHouseholdMarkerClick(householdId) {
-      const activeDistrict = getActiveDistrict();
-      if (!activeDistrict) {
-        alert("Create or select a district first.");
-        return;
-      }
-
-      const currentlyAssignedDistrictId = getAssignedDistrictIdForHousehold(householdId);
-
-      if (currentlyAssignedDistrictId === activeDistrict.id) {
-        removeHouseholdFromDistrict(householdId, activeDistrict.id);
-      } else {
-        if (currentlyAssignedDistrictId) {
-          removeHouseholdFromDistrict(householdId, currentlyAssignedDistrictId);
-        }
-        addHouseholdToDistrict(householdId, activeDistrict.id);
-      }
-
-      redrawDistricts();
-      drawMembers();
-      updateSummary();
-      renderDistrictList();
-      updateActiveDistrictUI();
-    }
-
-    function addHouseholdToDistrict(householdId, districtId) {
-      const district = getDistrictById(districtId);
-      if (!district) return;
-      if (district.householdIds.includes(householdId)) return;
-
-      district.householdIds.push(householdId);
-      state.householdAssignment.set(householdId, districtId);
-      recomputeDistrictPolygon(district);
-    }
-
-    function removeHouseholdFromDistrict(householdId, districtId) {
-      const district = getDistrictById(districtId);
-      if (!district) return;
-
-      district.householdIds = district.householdIds.filter(id => id !== householdId);
-      if (state.householdAssignment.get(householdId) === districtId) {
-        state.householdAssignment.delete(householdId);
-      }
-      recomputeDistrictPolygon(district);
-    }
-
-    /**********************************************************************
-     * DISTRICT GEOMETRY
-     **********************************************************************/
-    function recomputeDistrictPolygon(district) {
-      const points = district.householdIds
-        .map(householdId => getHouseholdFeatureById(householdId))
-        .filter(Boolean)
-        .map(feature => turf.point(feature.geometry.coordinates, { householdId: getHouseholdId(feature) }));
-
-      if (points.length === 0) {
-        district.polygonGeoJSON = null;
-        return;
-      }
-
-      if (points.length === 1) {
-        const bufferFeet = Number(document.getElementById("bufferFeetInput").value) || 250;
-        const pointBuffer = turf.buffer(
-          points[0],
-          feetToKilometers(bufferFeet),
-          { units: "kilometers" }
-        );
-        district.polygonGeoJSON = clipToWard(pointBuffer);
-        return;
-      }
-
-      const useBufferMode = document.getElementById("toggleBufferMode").checked;
-      const bufferFeet = Number(document.getElementById("bufferFeetInput").value) || 250;
-
-      let geometry = null;
-
-      try {
-        const fc = turf.featureCollection(points);
-
-        if (useBufferMode) {
-          const hull = turf.concave(fc, { maxEdge: feetToKilometers(bufferFeet * 4), units: "kilometers" })
-            || turf.convex(fc);
-
-          if (hull) {
-            geometry = turf.buffer(hull, feetToKilometers(bufferFeet), { units: "kilometers" });
-          } else {
-            geometry = turf.buffer(fc, feetToKilometers(bufferFeet), { units: "kilometers" });
-          }
-        } else {
-          geometry = turf.convex(fc) || turf.concave(fc, { maxEdge: 1, units: "kilometers" });
-          if (geometry) {
-            geometry = turf.buffer(geometry, feetToKilometers(50), { units: "kilometers" });
-          }
-        }
-
-        if (!geometry) {
-          geometry = turf.buffer(fc, feetToKilometers(bufferFeet), { units: "kilometers" });
-        }
-
-        district.polygonGeoJSON = clipToWard(geometry);
-      } catch (error) {
-        console.error("Error recomputing district polygon:", error);
-        district.polygonGeoJSON = null;
-      }
-    }
-
-    function clipToWard(feature) {
-      if (!feature || !state.wardBoundaryData) return feature;
-
-      try {
-        const wardFeatures = state.wardBoundaryData.features || [];
-        if (!wardFeatures.length) return feature;
-
-        let clipped = feature;
-
-        for (const wardFeature of wardFeatures) {
-          if (!clipped) break;
-          const intersected = turf.intersect(
-            turf.featureCollection([clipped, wardFeature])
-          );
-          if (intersected) {
-            clipped = intersected;
-          }
-        }
-
-        return clipped || feature;
-      } catch (error) {
-        console.warn("Clip to ward failed, using unclipped geometry.", error);
-        return feature;
-      }
-    }
-
-    /**********************************************************************
-     * DRAW DISTRICTS
-     **********************************************************************/
-    function redrawDistricts() {
-      for (const district of state.districts) {
-        recomputeDistrictPolygon(district);
-      }
-
-      clearAllDistrictLayers();
-
-      for (const district of state.districts) {
-        if (!district.polygonGeoJSON) continue;
-
-        const polygonLayer = L.geoJSON(district.polygonGeoJSON, {
-          style: {
-            color: district.color,
-            weight: district.id === state.activeDistrictId ? 4 : 3,
-            fillColor: district.color,
-            fillOpacity: district.id === state.activeDistrictId ? 0.22 : 0.12
-          }
-        });
-
-        polygonLayer.on("mouseover", () => {
-          setHoverInfo(`
-            <strong>${escapeHtml(district.name)}</strong>
-            <div class="small" style="margin-top:6px;">
-              <div><strong>Homes:</strong> ${district.householdIds.length}</div>
-              <div><strong>Color:</strong> ${escapeHtml(district.color)}</div>
-            </div>
-          `);
-        });
-
-        polygonLayer.on("mouseout", clearHoverInfo);
-
-        polygonLayer.on("click", () => {
-          setActiveDistrict(district.id);
-          redrawDistricts();
-        });
-
-        polygonLayer.bindPopup(`
-          <div style="min-width:220px;">
-            <strong>${escapeHtml(district.name)}</strong><br />
-            <div style="margin-top:6px; font-size:12px;">
-              Households: ${district.householdIds.length}<br />
-              Click polygon to activate this district.
-            </div>
-          </div>
-        `);
-
-        polygonLayer.addTo(state.map);
-        state.districtLayers.set(district.id, polygonLayer);
-
-        if (document.getElementById("toggleDistrictLabels").checked) {
-          addDistrictLabel(district);
-        }
-      }
-
-      updateMemberMarkerStyles();
-    }
-
-    function addDistrictLabel(district) {
-      if (!district.polygonGeoJSON) return;
-
-      try {
-        const center = turf.centroid(district.polygonGeoJSON);
-        const [lng, lat] = center.geometry.coordinates;
-
-        const label = L.marker([lat, lng], {
-          interactive: false,
-          icon: L.divIcon({
-            className: "",
-            html: `
-              <div style="
-                background: rgba(255,255,255,0.92);
-                border: 1px solid ${district.color};
-                color: #1f2937;
-                border-radius: 999px;
-                padding: 4px 8px;
-                font-size: 12px;
-                font-weight: 700;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-                white-space: nowrap;
-              ">
-                ${escapeHtml(district.name)} (${district.householdIds.length})
-              </div>
-            `,
-            iconSize: [1, 1],
-            iconAnchor: [0, 0]
-          })
-        });
-
-        label.addTo(state.map);
-        state.districtLabelLayers.set(district.id, label);
-      } catch (error) {
-        console.warn("Failed to create district label:", error);
-      }
-    }
-
-    function removeDistrictLayers(districtId) {
-      const polygonLayer = state.districtLayers.get(districtId);
-      if (polygonLayer) {
-        state.map.removeLayer(polygonLayer);
-      }
-      state.districtLayers.delete(districtId);
-
-      const labelLayer = state.districtLabelLayers.get(districtId);
-      if (labelLayer) {
-        state.map.removeLayer(labelLayer);
-      }
-      state.districtLabelLayers.delete(districtId);
-    }
-
-    function clearAllDistrictLayers() {
-      for (const layer of state.districtLayers.values()) {
-        state.map.removeLayer(layer);
-      }
-      for (const layer of state.districtLabelLayers.values()) {
-        state.map.removeLayer(layer);
-      }
-      state.districtLayers.clear();
-      state.districtLabelLayers.clear();
-    }
-
-    /**********************************************************************
-     * UI RENDERING
-     **********************************************************************/
-    function updateActiveDistrictUI() {
-      const activeDistrict = getActiveDistrict();
-      const activeBox = document.getElementById("activeDistrictBox");
-      const noMsg = document.getElementById("noActiveDistrictMsg");
-      const label = document.getElementById("activeDistrictLabel");
-      const badge = document.getElementById("activeDistrictCountBadge");
-      const renameInput = document.getElementById("renameDistrictInput");
-
-      if (!activeDistrict) {
-        activeBox.classList.add("hidden");
-        noMsg.classList.remove("hidden");
-        return;
-      }
-
-      activeBox.classList.remove("hidden");
-      noMsg.classList.add("hidden");
-
-      label.textContent = activeDistrict.name;
-      badge.textContent = `${activeDistrict.householdIds.length} homes`;
-      renameInput.value = activeDistrict.name;
-    }
-
-    function renderDistrictList() {
-      const container = document.getElementById("districtList");
-      container.innerHTML = "";
-
-      if (!state.districts.length) {
-        container.innerHTML = `<div class="small">No districts created yet.</div>`;
-        return;
-      }
-
-      const targetHomes = Number(document.getElementById("targetHomesInput").value) || 12;
-
-      for (const district of state.districts) {
-        const card = document.createElement("div");
-        card.className = "district-card" + (district.id === state.activeDistrictId ? " active" : "");
-
-        const delta = district.householdIds.length - targetHomes;
-        let balanceText = "On target";
-        if (delta > 0) balanceText = `${delta} over target`;
-        if (delta < 0) balanceText = `${Math.abs(delta)} under target`;
-
-        const membersHtml = district.householdIds
-          .map(householdId => {
-            const feature = getHouseholdFeatureById(householdId);
-            return `<div class="member-mini-item">${escapeHtml(feature ? getDisplayName(feature) : householdId)}</div>`;
-          })
-          .join("");
-
-        card.innerHTML = `
-          <div class="district-card-header">
-            <div class="district-swatch" style="background:${district.color};"></div>
-            <div class="district-title-wrap">
-              <div class="district-title">${escapeHtml(district.name)}</div>
-              <div class="district-subtitle">${escapeHtml(district.id)}</div>
-            </div>
-          </div>
-          <div class="district-card-body">
-            <div class="pill-row">
-              <span class="pill">Homes: ${district.householdIds.length}</span>
-              <span class="pill">${escapeHtml(balanceText)}</span>
-            </div>
-            <div class="member-mini-list">
-              ${membersHtml || `<div class="small">No households assigned.</div>`}
-            </div>
-            <div class="district-actions">
-              <button class="secondary district-select-btn">Select</button>
-              <button class="secondary district-zoom-btn">Zoom</button>
-              <button class="danger district-delete-btn">Delete</button>
-            </div>
-          </div>
-        `;
-
-        card.querySelector(".district-select-btn").addEventListener("click", () => {
-          setActiveDistrict(district.id);
-          redrawDistricts();
-        });
-
-        card.querySelector(".district-zoom-btn").addEventListener("click", () => {
-          zoomToDistrict(district.id);
-        });
-
-        card.querySelector(".district-delete-btn").addEventListener("click", () => {
-          const ok = confirm(`Delete ${district.name}?`);
-          if (ok) {
-            deleteDistrict(district.id);
-          }
-        });
-
-        container.appendChild(card);
-      }
-    }
-
-    function updateSummary() {
-      const totalMembers = Array.isArray(state.memberData?.features) ? state.memberData.features.length : 0;
-      const totalHouseholds = state.householdIndex.size;
-      const districtCount = state.districts.length;
-      const unassignedHomes = getAllHouseholdIds().filter(id => !state.householdAssignment.has(id)).length;
-
-      document.getElementById("totalMembersStat").textContent = totalMembers;
-      document.getElementById("totalHouseholdsStat").textContent = totalHouseholds;
-      document.getElementById("districtCountStat").textContent = districtCount;
-      document.getElementById("unassignedHomesStat").textContent = unassignedHomes;
-
-      const targetHomes = Number(document.getElementById("targetHomesInput").value) || 12;
-      if (!districtCount) {
-        document.getElementById("balanceSummary").textContent = "No districts yet.";
-        return;
-      }
-
-      const counts = state.districts.map(d => d.householdIds.length);
-      const min = Math.min(...counts);
-      const max = Math.max(...counts);
-      const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
-
-      document.getElementById("balanceSummary").textContent =
-        `Target: ${targetHomes} homes each. Current range: ${min} to ${max}. Average: ${avg.toFixed(1)}.`;
-    }
-
-    /**********************************************************************
-     * ZOOM HELPERS
-     **********************************************************************/
-    function fitInitialView() {
-      const layers = [];
-
-      if (state.wardLayer) layers.push(state.wardLayer);
-      if (state.membersLayerGroup && state.membersLayerGroup.getLayers().length) {
-        layers.push(state.membersLayerGroup);
-      }
-
-      if (!layers.length) return;
-
-      let bounds = null;
-      for (const layer of layers) {
-        const b = layer.getBounds ? layer.getBounds() : null;
-        if (!b || !b.isValid()) continue;
-        bounds = bounds ? bounds.extend(b) : b;
-      }
-
-      if (bounds && bounds.isValid()) {
-        state.map.fitBounds(bounds.pad(0.08));
-      }
-    }
-
-    function zoomToDistrict(districtId) {
-      const layer = state.districtLayers.get(districtId);
-      if (layer && layer.getBounds && layer.getBounds().isValid()) {
-        state.map.fitBounds(layer.getBounds().pad(0.2));
-        setActiveDistrict(districtId);
-        redrawDistricts();
-      }
-    }
-
-    /**********************************************************************
-     * IMPORT / EXPORT
-     **********************************************************************/
-    function exportDistrictsGeoJSON() {
-      const features = state.districts.map(district => {
-        const geometryFeature = district.polygonGeoJSON
-          ? JSON.parse(JSON.stringify(district.polygonGeoJSON))
-          : turf.feature(null);
-
-        geometryFeature.properties = {
-          district_id: district.id,
-          district_name: district.name,
-          color: district.color,
-          household_ids: [...district.householdIds]
-        };
-
-        return geometryFeature;
-      });
-
-      const fc = {
-        type: "FeatureCollection",
-        features
-      };
-
-      const blob = new Blob([JSON.stringify(fc, null, 2)], { type: "application/geo+json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "ministering_districts.geojson";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    }
-
-    async function importDistrictsGeoJSON(file) {
-      const text = await file.text();
-      const data = JSON.parse(text);
-
-      if (!data || data.type !== "FeatureCollection" || !Array.isArray(data.features)) {
-        throw new Error("Invalid GeoJSON file.");
-      }
-
-      state.districts = [];
-      state.householdAssignment.clear();
-      state.activeDistrictId = null;
-      state.nextDistrictId = 1;
-
-      for (const feature of data.features) {
-        const props = feature.properties || {};
-        const districtId = safeString(props.district_id) || `district_${state.nextDistrictId}`;
-        const districtName = safeString(props.district_name) || `District ${state.nextDistrictId}`;
-        const color = safeString(props.color) || getColorForDistrictIndex(state.districts.length);
-        const householdIds = Array.isArray(props.household_ids) ? props.household_ids.map(String) : [];
-
-        const district = {
-          id: districtId,
-          name: districtName,
-          color,
-          householdIds: [],
-          polygonGeoJSON: feature.geometry ? {
-            type: "Feature",
-            geometry: feature.geometry,
-            properties: {}
-          } : null
-        };
-
-        state.districts.push(district);
-
-        const numericPart = districtId.match(/(\d+)/);
-        if (numericPart) {
-          state.nextDistrictId = Math.max(state.nextDistrictId, Number(numericPart[1]) + 1);
-        }
-
-        for (const householdId of householdIds) {
-          if (!state.householdIndex.has(householdId)) continue;
-          if (state.householdAssignment.has(householdId)) continue;
-          district.householdIds.push(householdId);
-          state.householdAssignment.set(householdId, district.id);
-        }
-
-        recomputeDistrictPolygon(district);
-      }
-
-      if (state.districts.length) {
-        state.activeDistrictId = state.districts[0].id;
-      }
-
-      redrawDistricts();
-      drawMembers();
-      updateSummary();
-      renderDistrictList();
-      updateActiveDistrictUI();
-    }
-
-    /**********************************************************************
-     * EVENTS
-     **********************************************************************/
-    function bindUIEvents() {
-      document.getElementById("createDistrictBtn").addEventListener("click", () => {
-        const name = document.getElementById("newDistrictName").value.trim();
-        createDistrict(name);
-        document.getElementById("newDistrictName").value = "";
-      });
-
-      document.getElementById("clearSelectionBtn").addEventListener("click", () => {
-        state.activeDistrictId = null;
-        updateActiveDistrictUI();
-        renderDistrictList();
-        updateMemberMarkerStyles();
-        redrawDistricts();
-      });
-
-      document.getElementById("renameDistrictBtn").addEventListener("click", () => {
-        const newName = document.getElementById("renameDistrictInput").value.trim();
-        if (!newName) return;
-        renameActiveDistrict(newName);
-      });
-
-      document.getElementById("fitActiveDistrictBtn").addEventListener("click", () => {
-        const activeDistrict = getActiveDistrict();
-        if (!activeDistrict) return;
-        zoomToDistrict(activeDistrict.id);
-      });
-
-      document.getElementById("deleteActiveDistrictBtn").addEventListener("click", () => {
-        const activeDistrict = getActiveDistrict();
-        if (!activeDistrict) return;
-
-        const ok = confirm(`Delete ${activeDistrict.name}?`);
-        if (ok) {
-          deleteDistrict(activeDistrict.id);
-        }
-      });
-
-      document.getElementById("toggleMembers").addEventListener("change", (e) => {
-        if (e.target.checked) {
-          state.membersLayerGroup.addTo(state.map);
-        } else {
-          state.map.removeLayer(state.membersLayerGroup);
-        }
-      });
-
-      document.getElementById("toggleWardBoundary").addEventListener("change", (e) => {
-        if (!state.wardLayer) return;
-        if (e.target.checked) {
-          state.wardLayer.addTo(state.map);
-        } else {
-          state.map.removeLayer(state.wardLayer);
-        }
-      });
-
-      document.getElementById("toggleDistrictLabels").addEventListener("change", () => {
-        redrawDistricts();
-      });
-
-      document.getElementById("toggleBufferMode").addEventListener("change", () => {
-        redrawDistricts();
-      });
-
-      document.getElementById("bufferFeetInput").addEventListener("change", () => {
-        redrawDistricts();
-      });
-
-      document.getElementById("targetHomesInput").addEventListener("change", () => {
-        updateSummary();
-        renderDistrictList();
-      });
-
-      document.getElementById("exportDistrictsBtn").addEventListener("click", () => {
-        exportDistrictsGeoJSON();
-      });
-
-      document.getElementById("importDistrictsInput").addEventListener("change", async (e) => {
-        const file = e.target.files && e.target.files[0];
-        if (!file) return;
-
-        try {
-          await importDistrictsGeoJSON(file);
-        } catch (error) {
-          console.error(error);
-          alert("Could not import the district file.\n\n" + error.message);
-        } finally {
-          e.target.value = "";
-        }
-      });
-    }
-
-    /**********************************************************************
-     * START
-     **********************************************************************/
-    async function startApp() {
-      initMap();
-      bindUIEvents();
-      await loadData();
-      renderDistrictList();
-      updateActiveDistrictUI();
-      clearHoverInfo();
-    }
-
-    startApp();
-  </script>
+
+<div id="map"></div>
+
+<div class="panel">
+
+<b>District Builder</b>
+
+<input id="districtName"
+placeholder="District name"/>
+
+<button onclick="createDistrict()">Create District</button>
+
+<button onclick="exportDistricts()">Export Districts</button>
+
+<div id="districtList"></div>
+
+</div>
+
+<script>
+
+/* -------------------- DATA SOURCES -------------------- */
+
+const WARD_URL =
+"https://kdidso.github.io/snow-canyon-map/ward_boundaries_JSO.geojson";
+
+const MEMBERS_URL =
+"https://kdidso.github.io/snow-canyon-map/member_locations_JSO.geojson";
+
+const CELLS_URL =
+"https://kdidso.github.io/snow-canyon-map/ward_cells.geojson";
+
+/* -------------------- MAP -------------------- */
+
+const map = L.map('map').setView([37.14,-113.63],13);
+
+L.tileLayer(
+'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+).addTo(map);
+
+/* -------------------- STATE -------------------- */
+
+let members;
+let cells;
+let districts=[];
+let activeDistrict=null;
+
+let memberMarkers=[];
+let cellLayer;
+
+/* -------------------- LOAD DATA -------------------- */
+
+Promise.all([
+fetch(WARD_URL).then(r=>r.json()),
+fetch(MEMBERS_URL).then(r=>r.json()),
+fetch(CELLS_URL).then(r=>r.json())
+])
+.then(([wardData,memberData,cellData])=>{
+
+members=memberData;
+cells=cellData;
+
+L.geoJSON(wardData,{
+style:{color:"#2b6cb0",weight:3,fillOpacity:.05}
+}).addTo(map);
+
+drawCells();
+drawMembers();
+
+});
+
+function drawCells(){
+
+cellLayer=L.geoJSON(cells,{
+style:{
+color:"#888",
+weight:1,
+fillOpacity:.05
+}
+}).addTo(map);
+
+}
+
+/* -------------------- MEMBERS -------------------- */
+
+function drawMembers(){
+
+members.features.forEach(feature=>{
+
+const [lng,lat]=feature.geometry.coordinates;
+
+const marker=L.circleMarker([lat,lng],{
+radius:6,
+color:"#444",
+fillColor:"#888",
+fillOpacity:.9
+}).addTo(map);
+
+marker.feature=feature;
+
+marker.on("click",()=>assignMember(marker));
+
+memberMarkers.push(marker);
+
+});
+
+}
+
+/* -------------------- DISTRICTS -------------------- */
+
+function createDistrict(){
+
+const name=document.getElementById("districtName").value || "District";
+
+const district={
+id:Date.now(),
+name:name,
+cells:new Set()
+};
+
+districts.push(district);
+
+activeDistrict=district;
+
+updateDistrictList();
+
+}
+
+function updateDistrictList(){
+
+const div=document.getElementById("districtList");
+
+div.innerHTML="";
+
+districts.forEach(d=>{
+
+const b=document.createElement("button");
+
+b.innerText=d.name;
+
+b.onclick=()=>activeDistrict=d;
+
+div.appendChild(b);
+
+});
+
+}
+
+/* -------------------- CELL LOOKUP -------------------- */
+
+function findCell(point){
+
+for(const cell of cells.features){
+
+if(turf.booleanPointInPolygon(point,cell))
+return cell;
+
+}
+
+return null;
+
+}
+
+/* -------------------- ASSIGN MEMBER -------------------- */
+
+function assignMember(marker){
+
+if(!activeDistrict){
+alert("Create/select a district first.");
+return;
+}
+
+const point=turf.point(marker.feature.geometry.coordinates);
+
+const cell=findCell(point);
+
+if(!cell){
+alert("No cell found.");
+return;
+}
+
+const cellId=cell.properties.id || JSON.stringify(cell.geometry);
+
+const assignedDistrict=districts.find(d=>d.cells.has(cellId));
+
+if(assignedDistrict && assignedDistrict!==activeDistrict){
+
+alert("This cell already belongs to another district.");
+return;
+
+}
+
+activeDistrict.cells.add(cellId);
+
+updateDistrictPolygons();
+
+}
+
+/* -------------------- DISSOLVE CELLS -------------------- */
+
+let districtLayer;
+
+function updateDistrictPolygons(){
+
+if(districtLayer)map.removeLayer(districtLayer);
+
+const features=[];
+
+districts.forEach(d=>{
+
+const districtCells=cells.features.filter(c=>{
+const id=c.properties.id || JSON.stringify(c.geometry);
+return d.cells.has(id);
+});
+
+if(!districtCells.length)return;
+
+const fc=turf.featureCollection(districtCells);
+
+const dissolved=turf.dissolve(fc);
+
+dissolved.properties={
+district:d.name
+};
+
+features.push(dissolved);
+
+});
+
+districtLayer=L.geoJSON(features,{
+style:f=>({
+color:"black",
+weight:3,
+fillOpacity:.3
+})
+}).addTo(map);
+
+}
+
+/* -------------------- EXPORT -------------------- */
+
+function exportDistricts(){
+
+const features=[];
+
+districts.forEach(d=>{
+
+const districtCells=cells.features.filter(c=>{
+const id=c.properties.id || JSON.stringify(c.geometry);
+return d.cells.has(id);
+});
+
+if(!districtCells.length)return;
+
+const dissolved=turf.dissolve(
+turf.featureCollection(districtCells)
+);
+
+dissolved.properties={
+district:d.name
+};
+
+features.push(dissolved);
+
+});
+
+const geojson={
+type:"FeatureCollection",
+features:features
+};
+
+const blob=new Blob(
+[JSON.stringify(geojson,null,2)],
+{type:"application/json"}
+);
+
+const url=URL.createObjectURL(blob);
+
+const a=document.createElement("a");
+
+a.href=url;
+a.download="districts.geojson";
+a.click();
+
+}
+
+</script>
+
 </body>
 </html>
