@@ -5,10 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Gerrymandering Ministering Districts</title>
 
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css"
-  />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
 
@@ -27,307 +24,55 @@
       --group1: #d97706;
       --group2: #2563eb;
       --ward: #0f766e;
-      --network: #6b7280;
+      --cells: #64748b;
       --rawpoints: #cc3344;
     }
 
-    * {
-      box-sizing: border-box;
-    }
-
-    html, body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      font-family: Arial, Helvetica, sans-serif;
-      color: var(--text);
-      background: var(--bg);
-    }
-
-    .app {
-      display: grid;
-      grid-template-columns: 390px 1fr;
-      height: 100vh;
-      width: 100%;
-    }
-
-    .sidebar {
-      overflow-y: auto;
-      background: var(--panel);
-      border-right: 1px solid var(--border);
-      padding: 18px;
-    }
-
-    .map-wrap {
-      position: relative;
-      min-width: 0;
-    }
-
-    #map {
-      width: 100%;
-      height: 100%;
-    }
-
-    .title {
-      margin: 0 0 8px 0;
-      font-size: 24px;
-      line-height: 1.2;
-    }
-
-    .subtitle {
-      margin: 0 0 18px 0;
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.5;
-    }
-
-    .card {
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 14px;
-      margin-bottom: 14px;
-      background: #fff;
-    }
-
-    .card h2,
-    .card h3 {
-      margin: 0 0 10px 0;
-      font-size: 18px;
-    }
-
-    .card p {
-      margin: 0 0 10px 0;
-      line-height: 1.45;
-      color: var(--muted);
-      font-size: 14px;
-    }
-
-    .step-badge {
-      display: inline-block;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--accent);
-      margin-bottom: 8px;
-    }
-
-    .row {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .radio-group,
-    .checkbox-group {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin: 8px 0 14px 0;
-    }
-
-    label.option {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      padding: 10px 12px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: #fbfcfe;
-      cursor: pointer;
-      color: var(--text);
-    }
-
-    label.option input {
-      margin-top: 2px;
-    }
-
-    button,
-    select {
-      font: inherit;
-    }
-
-    button {
-      appearance: none;
-      border: 1px solid var(--accent);
-      background: var(--accent);
-      color: #fff;
-      border-radius: 10px;
-      padding: 10px 14px;
-      font-weight: 700;
-      cursor: pointer;
-      transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
-    }
-
-    button:hover:not(:disabled) {
-      background: var(--accent-dark);
-      border-color: var(--accent-dark);
-    }
-
-    button.secondary {
-      background: #fff;
-      color: var(--accent);
-    }
-
-    button.secondary:hover:not(:disabled) {
-      background: #eef4ff;
-    }
-
-    button:disabled,
-    select:disabled {
-      cursor: not-allowed;
-      opacity: 0.55;
-    }
-
-    select {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 12px;
-      background: #fff;
-      min-width: 130px;
-    }
-
-    .status {
-      margin-top: 10px;
-      font-size: 13px;
-      color: var(--muted);
-      line-height: 1.4;
-    }
-
-    .status.good {
-      color: var(--success);
-      font-weight: 700;
-    }
-
-    .status.warn {
-      color: var(--warning);
-      font-weight: 700;
-    }
-
-    .status.error {
-      color: var(--danger);
-      font-weight: 700;
-    }
-
-    .metrics {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
-      margin-top: 10px;
-    }
-
-    .metric {
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 10px;
-      background: #fbfcfe;
-    }
-
-    .metric .label {
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 4px;
-    }
-
-    .metric .value {
-      font-size: 22px;
-      font-weight: 800;
-    }
-
-    .metric .sub {
-      font-size: 12px;
-      color: var(--muted);
-      margin-top: 3px;
-    }
-
-    .legend {
-      position: absolute;
-      right: 12px;
-      bottom: 12px;
-      z-index: 800;
-      background: rgba(255,255,255,0.95);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 10px 12px;
-      box-shadow: 0 4px 18px rgba(0,0,0,0.08);
-      font-size: 13px;
-      min-width: 220px;
-    }
-
-    .legend h4 {
-      margin: 0 0 8px 0;
-      font-size: 13px;
-    }
-
-    .legend-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin: 6px 0;
-    }
-
-    .swatch {
-      width: 14px;
-      height: 14px;
-      border-radius: 50%;
-      border: 1px solid rgba(0,0,0,0.15);
-      flex: 0 0 auto;
-    }
-
-    .swatch.line {
-      width: 18px;
-      height: 3px;
-      border-radius: 999px;
-    }
-
-    .small-note {
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.4;
-      margin-top: 8px;
-    }
-
-    .district-summary {
-      margin-top: 12px;
-      display: grid;
-      gap: 8px;
-    }
-
-    .district-row {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: #fbfcfe;
-      padding: 10px;
-      font-size: 14px;
-      line-height: 1.4;
-    }
-
-    .footer-note {
-      margin-top: 12px;
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.4;
-    }
-
-    code {
-      background: #f1f3f8;
-      padding: 1px 4px;
-      border-radius: 4px;
-      font-size: 12px;
-    }
-
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; font-family: Arial, Helvetica, sans-serif; color: var(--text); background: var(--bg); }
+    .app { display: grid; grid-template-columns: 390px 1fr; height: 100vh; width: 100%; }
+    .sidebar { overflow-y: auto; background: var(--panel); border-right: 1px solid var(--border); padding: 18px; }
+    .map-wrap { position: relative; min-width: 0; }
+    #map { width: 100%; height: 100%; }
+    .title { margin: 0 0 8px 0; font-size: 24px; line-height: 1.2; }
+    .subtitle { margin: 0 0 18px 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+    .card { border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin-bottom: 14px; background: #fff; }
+    .card h2, .card h3 { margin: 0 0 10px 0; font-size: 18px; }
+    .card p { margin: 0 0 10px 0; line-height: 1.45; color: var(--muted); font-size: 14px; }
+    .step-badge { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .radio-group, .checkbox-group { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 14px 0; }
+    label.option { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: #fbfcfe; cursor: pointer; color: var(--text); }
+    label.option input { margin-top: 2px; }
+    button, select { font: inherit; }
+    button { appearance: none; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 10px; padding: 10px 14px; font-weight: 700; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease; }
+    button:hover:not(:disabled) { background: var(--accent-dark); border-color: var(--accent-dark); }
+    button.secondary { background: #fff; color: var(--accent); }
+    button.secondary:hover:not(:disabled) { background: #eef4ff; }
+    button:disabled, select:disabled { cursor: not-allowed; opacity: 0.55; }
+    select { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: #fff; min-width: 130px; }
+    .status { margin-top: 10px; font-size: 13px; color: var(--muted); line-height: 1.4; }
+    .status.good { color: var(--success); font-weight: 700; }
+    .status.warn { color: var(--warning); font-weight: 700; }
+    .status.error { color: var(--danger); font-weight: 700; }
+    .metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+    .metric { border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: #fbfcfe; }
+    .metric .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    .metric .value { font-size: 22px; font-weight: 800; }
+    .metric .sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+    .legend { position: absolute; right: 12px; bottom: 12px; z-index: 800; background: rgba(255,255,255,0.96); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; box-shadow: 0 4px 18px rgba(0,0,0,0.08); font-size: 13px; min-width: 220px; }
+    .legend h4 { margin: 0 0 8px 0; font-size: 13px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+    .swatch { width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.15); flex: 0 0 auto; }
+    .swatch.line { width: 18px; height: 3px; border-radius: 999px; }
+    .small-note { font-size: 12px; color: var(--muted); line-height: 1.4; margin-top: 8px; }
+    .district-summary { margin-top: 12px; display: grid; gap: 8px; }
+    .district-row { border: 1px solid var(--border); border-radius: 10px; background: #fbfcfe; padding: 10px; font-size: 14px; line-height: 1.4; }
+    .footer-note { margin-top: 12px; font-size: 12px; color: var(--muted); line-height: 1.4; }
+    code { background: #f1f3f8; padding: 1px 4px; border-radius: 4px; font-size: 12px; }
     @media (max-width: 980px) {
-      .app {
-        grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr;
-      }
-
-      .sidebar {
-        max-height: 48vh;
-        border-right: none;
-        border-bottom: 1px solid var(--border);
-      }
+      .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      .sidebar { max-height: 48vh; border-right: none; border-bottom: 1px solid var(--border); }
     }
   </style>
 </head>
@@ -336,9 +81,10 @@
     <aside class="sidebar">
       <h1 class="title">Gerrymandering Ministering Districts</h1>
       <p class="subtitle">
-        This phase loads the ward, member points, and network layer, applies your ministering filters,
-        calculates the district target math, and generates provisional seeded districts with a
-        re-gerrymander button.
+        This version builds districts from <strong>ward cells</strong> instead of network lines.
+        Filter the ministering pool, compute district targets, then color districts and fill the
+        whole ward by assigning every cell to one district. If two districts land in the same cell,
+        that cell is temporarily split only for drawing and district assignment.
       </p>
 
       <div class="card">
@@ -346,18 +92,9 @@
         <h2>Layer loading</h2>
         <p>This page loads:</p>
         <div class="checkbox-group">
-          <label class="option">
-            <input type="checkbox" id="chkWardLoaded" disabled />
-            <span>Ward boundary polygon</span>
-          </label>
-          <label class="option">
-            <input type="checkbox" id="chkMembersLoaded" disabled />
-            <span>Member locations</span>
-          </label>
-          <label class="option">
-            <input type="checkbox" id="chkNetworkLoaded" disabled />
-            <span>District network lines</span>
-          </label>
+          <label class="option"><input type="checkbox" id="chkWardLoaded" disabled /><span>Ward boundary polygon</span></label>
+          <label class="option"><input type="checkbox" id="chkMembersLoaded" disabled /><span>Member locations</span></label>
+          <label class="option"><input type="checkbox" id="chkCellsLoaded" disabled /><span>Ward cells polygons</span></label>
         </div>
         <div id="loadStatus" class="status">Loading data...</div>
       </div>
@@ -373,28 +110,16 @@
         <div class="radio-group">
           <label class="option">
             <input type="radio" name="genderChoice" value="M" checked />
-            <span>
-              <strong>Gender = M</strong><br />
-              Include only men with <code>Is_assigned_ministers = yes</code>
-            </span>
+            <span><strong>Gender = M</strong><br />Include only men with <code>Is_assigned_ministers = yes</code></span>
           </label>
-
           <label class="option">
             <input type="radio" name="genderChoice" value="F" />
-            <span>
-              <strong>Gender = F</strong><br />
-              Include only women with <code>Is_assigned_ministers = yes</code>
-            </span>
+            <span><strong>Gender = F</strong><br />Include only women with <code>Is_assigned_ministers = yes</code></span>
           </label>
         </div>
 
         <div class="checkbox-group">
-          <label class="option">
-            <input type="checkbox" checked disabled />
-            <span>
-              <strong>Hard rule:</strong> exclude anyone outside the ward boundary
-            </span>
-          </label>
+          <label class="option"><input type="checkbox" checked disabled /><span><strong>Hard rule:</strong> exclude anyone outside the ward boundary</span></label>
         </div>
 
         <div class="row">
@@ -403,48 +128,20 @@
           <button id="resetBtn" class="secondary">Reset</button>
         </div>
 
-        <div id="filterStatus" class="status">
-          Choose a gender and click <strong>Run Filter</strong>.
-        </div>
+        <div id="filterStatus" class="status">Choose a gender and click <strong>Run Filter</strong>.</div>
 
         <div class="metrics">
-          <div class="metric">
-            <div class="label">Group 1 (X)</div>
-            <div class="value" id="metricGroup1">0</div>
-            <div class="sub">Assigned_to_minister = yes</div>
-          </div>
-          <div class="metric">
-            <div class="label">Group 2 (Y)</div>
-            <div class="value" id="metricGroup2">0</div>
-            <div class="sub">Assigned_to_minister = no</div>
-          </div>
-          <div class="metric">
-            <div class="label">Total (S)</div>
-            <div class="value" id="metricTotal">0</div>
-            <div class="sub">Is_assigned_ministers = yes</div>
-          </div>
-          <div class="metric">
-            <div class="label">Companionships (C)</div>
-            <div class="value" id="metricCompanionships">0</div>
-            <div class="sub">Based on Group 1</div>
-          </div>
-          <div class="metric">
-            <div class="label">Avg assignments (A)</div>
-            <div class="value" id="metricAssignments">0</div>
-            <div class="sub">S ÷ C</div>
-          </div>
-          <div class="metric">
-            <div class="label">Outside ward excluded</div>
-            <div class="value" id="metricOutside">0</div>
-            <div class="sub">Filtered out</div>
-          </div>
+          <div class="metric"><div class="label">Group 1 (X)</div><div class="value" id="metricGroup1">0</div><div class="sub">Assigned_to_minister = yes</div></div>
+          <div class="metric"><div class="label">Group 2 (Y)</div><div class="value" id="metricGroup2">0</div><div class="sub">Assigned_to_minister = no</div></div>
+          <div class="metric"><div class="label">Total (S)</div><div class="value" id="metricTotal">0</div><div class="sub">Is_assigned_ministers = yes</div></div>
+          <div class="metric"><div class="label">Companionships (C)</div><div class="value" id="metricCompanionships">0</div><div class="sub">Based on Group 1</div></div>
+          <div class="metric"><div class="label">Avg assignments (A)</div><div class="value" id="metricAssignments">0</div><div class="sub">S ÷ C</div></div>
+          <div class="metric"><div class="label">Outside ward excluded</div><div class="value" id="metricOutside">0</div><div class="sub">Filtered out</div></div>
         </div>
 
         <div class="footer-note">
-          Group 1 = <code>Assigned_to_minister = yes</code> and
-          <code>Is_assigned_ministers = yes</code>.<br />
-          Group 2 = <code>Assigned_to_minister = no</code> and
-          <code>Is_assigned_ministers = yes</code>.
+          Group 1 = <code>Assigned_to_minister = yes</code> and <code>Is_assigned_ministers = yes</code>.<br />
+          Group 2 = <code>Assigned_to_minister = no</code> and <code>Is_assigned_ministers = yes</code>.
         </div>
       </div>
 
@@ -469,23 +166,20 @@
             <option value="9">9 districts</option>
             <option value="10">10 districts</option>
           </select>
-
           <button id="calcDistrictBtn" disabled>Calculate Targets</button>
         </div>
 
-        <div id="districtStatus" class="status">
-          Run the filter first.
-        </div>
-
+        <div id="districtStatus" class="status">Run the filter first.</div>
         <div class="district-summary" id="districtSummary"></div>
       </div>
 
       <div class="card">
         <div class="step-badge">Step 3</div>
-        <h2>Seeded district generation</h2>
+        <h2>Cell-based district generation</h2>
         <p>
-          This version creates provisional districts from the filtered people points and balances them
-          by your target counts. It is the seed logic first, before legal road/parcel boundary carving.
+          Points are colored into provisional districts first. Then cells are assigned and dissolved
+          into closed district areas so the whole ward is filled. Same-cell conflicts are handled by
+          temporary sub-cell splits only when needed.
         </p>
 
         <div class="row">
@@ -493,44 +187,25 @@
           <button id="regerrymanderBtn" class="secondary" disabled>Re-gerrymander</button>
         </div>
 
-        <div id="gerryStatus" class="status">
-          Calculate targets first.
-        </div>
-
+        <div id="gerryStatus" class="status">Calculate targets first.</div>
         <div class="district-summary" id="gerrySummary"></div>
 
         <div class="small-note">
-          Current phase colors the filtered people by district and draws soft district hulls. The next
-          phase will use the network to build legal district edges.
+          Member points stay visible. Original cells are faint outlines, district pieces are filled,
+          and dissolved district borders are drawn on top.
         </div>
       </div>
     </aside>
 
     <div class="map-wrap">
       <div id="map"></div>
-
       <div class="legend">
         <h4>Map legend</h4>
-        <div class="legend-item">
-          <span class="swatch line" style="background: var(--network);"></span>
-          <span>District network lines</span>
-        </div>
-        <div class="legend-item">
-          <span class="swatch" style="background: rgba(15,118,110,0.18); border-color: #0f766e;"></span>
-          <span>Ward boundary polygon</span>
-        </div>
-        <div class="legend-item">
-          <span class="swatch" style="background: var(--rawpoints);"></span>
-          <span>All member points</span>
-        </div>
-        <div class="legend-item">
-          <span class="swatch" style="background: #e11d48;"></span>
-          <span>District-colored filtered points</span>
-        </div>
-        <div class="small-note">
-          Raw points show immediately. Filtered points become district-colored after running the seed
-          district engine.
-        </div>
+        <div class="legend-item"><span class="swatch line" style="background: var(--cells);"></span><span>Ward cell outlines</span></div>
+        <div class="legend-item"><span class="swatch" style="background: rgba(15,118,110,0.18); border-color: #0f766e;"></span><span>Ward boundary polygon</span></div>
+        <div class="legend-item"><span class="swatch" style="background: var(--rawpoints);"></span><span>All member points</span></div>
+        <div class="legend-item"><span class="swatch" style="background: #e11d48;"></span><span>District-colored filtered points</span></div>
+        <div class="small-note">If two different district colors occur in the same cell, that cell is temporarily subdivided for the district result only.</div>
       </div>
     </div>
   </div>
@@ -538,33 +213,24 @@
   <script>
     const WARD_URL = "https://kdidso.github.io/snow-canyon-map/ward_boundaries_JSO.geojson";
     const MEMBERS_URL = "https://kdidso.github.io/snow-canyon-map/member_locations_JSO.geojson";
-    const NETWORK_URL = "./district_netwo_FeaturesToJSO1.geojson";
+    const CELLS_URL = "./ward_cells.geojson";
 
-    const DISTRICT_COLORS = [
-      "#e11d48",
-      "#2563eb",
-      "#16a34a",
-      "#d97706",
-      "#7c3aed",
-      "#0891b2",
-      "#dc2626",
-      "#65a30d",
-      "#c2410c",
-      "#0f766e"
-    ];
+    const DISTRICT_COLORS = ["#e11d48", "#2563eb", "#16a34a", "#d97706", "#7c3aed", "#0891b2", "#dc2626", "#65a30d", "#c2410c", "#0f766e"];
 
     let map;
-
     let wardData = null;
     let membersData = null;
-    let networkData = null;
-
+    let cellsData = null;
     let wardPolygonFeatures = [];
-    let allMembersLayer = null;
+    let wardArea = 0;
+
     let wardLayer = null;
-    let networkLayer = null;
+    let cellsOutlineLayer = null;
+    let allMembersLayer = null;
+    let filteredPreviewLayer = null;
     let filteredLayerGroup = null;
-    let districtHullLayerGroup = null;
+    let districtFillLayer = null;
+    let districtOutlineLayer = null;
 
     let currentFiltered = [];
     let currentStats = null;
@@ -572,26 +238,24 @@
     let currentDistrictResult = null;
     let gerrymanderRunCount = 0;
 
+    let cellsWorking = [];
+
     const chkWardLoaded = document.getElementById("chkWardLoaded");
     const chkMembersLoaded = document.getElementById("chkMembersLoaded");
-    const chkNetworkLoaded = document.getElementById("chkNetworkLoaded");
-
+    const chkCellsLoaded = document.getElementById("chkCellsLoaded");
     const loadStatus = document.getElementById("loadStatus");
     const filterStatus = document.getElementById("filterStatus");
     const districtStatus = document.getElementById("districtStatus");
     const gerryStatus = document.getElementById("gerryStatus");
-
     const runFilterBtn = document.getElementById("runFilterBtn");
     const zoomFilteredBtn = document.getElementById("zoomFilteredBtn");
     const resetBtn = document.getElementById("resetBtn");
     const calcDistrictBtn = document.getElementById("calcDistrictBtn");
     const gerrymanderBtn = document.getElementById("gerrymanderBtn");
     const regerrymanderBtn = document.getElementById("regerrymanderBtn");
-
     const districtCountSelect = document.getElementById("districtCountSelect");
     const districtSummary = document.getElementById("districtSummary");
     const gerrySummary = document.getElementById("gerrySummary");
-
     const metricGroup1 = document.getElementById("metricGroup1");
     const metricGroup2 = document.getElementById("metricGroup2");
     const metricTotal = document.getElementById("metricTotal");
@@ -604,76 +268,22 @@
       el.className = "status" + (cls ? " " + cls : "");
     }
 
-    function normalize(value) {
-      return String(value ?? "").trim().toLowerCase();
-    }
-
-    function normYes(value) {
-      return normalize(value) === "yes";
-    }
-
-    function normGender(value) {
-      return String(value ?? "").trim().toUpperCase();
-    }
-
-    function getProp(feature, key) {
-      return feature?.properties?.[key];
-    }
-
-    function formatNumber(value, decimals = 0) {
-      return Number(value).toLocaleString(undefined, {
-        minimumFractionDigits: decimals,
-        maximumFractionDigits: decimals
-      });
-    }
-
-    function round2(value) {
-      return Math.round(value * 100) / 100;
-    }
-
-    function distributeTotal(total, parts) {
-      const base = Math.floor(total / parts);
-      const remainder = total % parts;
-      const arr = [];
-      for (let i = 0; i < parts; i++) {
-        arr.push(base + (i < remainder ? 1 : 0));
-      }
-      return arr;
-    }
-
-    function assignmentsRange(avg) {
-      if (!isFinite(avg) || avg <= 0) return "0";
-      const lo = Math.floor(avg);
-      const hi = Math.ceil(avg);
-      return lo === hi ? String(lo) : `${lo}-${hi}`;
-    }
-
-    function isPolygonLike(feature) {
-      const type = feature?.geometry?.type;
-      return type === "Polygon" || type === "MultiPolygon";
-    }
-
-    function getSelectedGender() {
-      const checked = document.querySelector('input[name="genderChoice"]:checked');
-      return checked ? checked.value : "M";
-    }
-
-    function escapeHtml(str) {
-      return String(str)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#39;");
-    }
+    function normalize(value) { return String(value ?? "").trim().toLowerCase(); }
+    function normYes(value) { return normalize(value) === "yes"; }
+    function normGender(value) { return String(value ?? "").trim().toUpperCase(); }
+    function getProp(feature, key) { return feature?.properties?.[key]; }
+    function formatNumber(value, decimals = 0) { return Number(value).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals }); }
+    function round2(value) { return Math.round(value * 100) / 100; }
+    function distributeTotal(total, parts) { const base = Math.floor(total / parts); const remainder = total % parts; return Array.from({length: parts}, (_, i) => base + (i < remainder ? 1 : 0)); }
+    function assignmentsRange(avg) { if (!isFinite(avg) || avg <= 0) return "0"; const lo = Math.floor(avg); const hi = Math.ceil(avg); return lo === hi ? String(lo) : `${lo}-${hi}`; }
+    function isPolygonLike(feature) { const type = feature?.geometry?.type; return type === "Polygon" || type === "MultiPolygon"; }
+    function getSelectedGender() { const checked = document.querySelector('input[name="genderChoice"]:checked'); return checked ? checked.value : "M"; }
+    function escapeHtml(str) { return String(str ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"); }
 
     function pointInsideWard(pointFeature) {
       return wardPolygonFeatures.some(poly => {
-        try {
-          return turf.booleanPointInPolygon(pointFeature, poly);
-        } catch (err) {
-          return false;
-        }
+        try { return turf.booleanPointInPolygon(pointFeature, poly); }
+        catch (err) { return false; }
       });
     }
 
@@ -702,50 +312,18 @@
       const companionships = group1 > 0 ? Math.floor(group1 / 2) : 0;
       const trioNeeded = group1 % 2 === 1 && group1 >= 3;
       const avgAssignments = companionships > 0 ? total / companionships : 0;
-      const avgAssignmentsDisplay = companionships > 0 ? round2(avgAssignments) : 0;
-
-      return {
-        group1,
-        group2,
-        total,
-        companionships,
-        trioNeeded,
-        avgAssignments,
-        avgAssignmentsDisplay,
-        avgAssignmentsRange: assignmentsRange(avgAssignments),
-        outsideWardExcluded
-      };
+      return { group1, group2, total, companionships, trioNeeded, avgAssignments, avgAssignmentsDisplay: companionships > 0 ? round2(avgAssignments) : 0, avgAssignmentsRange: assignmentsRange(avgAssignments), outsideWardExcluded };
     }
 
-    function resetDistrictSummary() {
-      districtSummary.innerHTML = "";
-    }
-
-    function resetGerrySummary() {
-      gerrySummary.innerHTML = "";
-    }
-
-    function fitMapToWard() {
-      if (!wardLayer) return;
-      map.fitBounds(wardLayer.getBounds(), { padding: [20, 20] });
-    }
+    function resetDistrictSummary() { districtSummary.innerHTML = ""; }
+    function resetGerrySummary() { gerrySummary.innerHTML = ""; }
+    function fitMapToWard() { if (wardLayer) map.fitBounds(wardLayer.getBounds(), { padding: [20, 20] }); }
 
     function fitToFiltered() {
-      if (!currentFiltered.length) {
-        fitMapToWard();
-        return;
-      }
-
-      const fc = {
-        type: "FeatureCollection",
-        features: currentFiltered.map(item => item.feature)
-      };
-
+      if (!currentFiltered.length) { fitMapToWard(); return; }
+      const fc = { type: "FeatureCollection", features: currentFiltered.map(item => item.feature) };
       const bbox = turf.bbox(fc);
-      const bounds = L.latLngBounds(
-        [bbox[1], bbox[0]],
-        [bbox[3], bbox[2]]
-      );
+      const bounds = L.latLngBounds([bbox[1], bbox[0]], [bbox[3], bbox[2]]);
       map.fitBounds(bounds, { padding: [20, 20] });
     }
 
@@ -756,19 +334,13 @@
       const gender = p.Gender || "";
       const assignedToMinister = p.Assigned_to_minister || "";
       const isAssignedMinisters = p.Is_assigned_ministers || "";
-
       return `
         <div style="font-size:13px;line-height:1.45;">
           <strong>${escapeHtml(`${first} ${last}`.trim() || "Member")}</strong><br>
           Gender: ${escapeHtml(gender)}<br>
           Assigned_to_minister: ${escapeHtml(assignedToMinister)}<br>
-          Is_assigned_ministers: ${escapeHtml(isAssignedMinisters)}${
-            groupLabel ? `<br>Filter group: ${escapeHtml(groupLabel)}` : ""
-          }${
-            districtLabel ? `<br>District: ${escapeHtml(districtLabel)}` : ""
-          }
-        </div>
-      `;
+          Is_assigned_ministers: ${escapeHtml(isAssignedMinisters)}${groupLabel ? `<br>Filter group: ${escapeHtml(groupLabel)}` : ""}${districtLabel ? `<br>District: ${escapeHtml(districtLabel)}` : ""}
+        </div>`;
     }
 
     function createDistrictTargets(stats, districtCount) {
@@ -776,486 +348,555 @@
       const yDist = distributeTotal(stats.group2, districtCount);
       const sDist = distributeTotal(stats.total, districtCount);
       const cDist = xDist.map(x => Math.floor(x / 2));
-      const rangeText = assignmentsRange(stats.avgAssignments);
-
-      return {
-        districtCount,
-        xDist,
-        yDist,
-        sDist,
-        cDist,
-        rangeText
-      };
+      return { districtCount, xDist, yDist, sDist, cDist, rangeText: assignmentsRange(stats.avgAssignments) };
     }
 
     function renderTargetSummary(targets, stats) {
       resetDistrictSummary();
-
       const intro = document.createElement("div");
       intro.className = "district-row";
-      intro.innerHTML = `
-        <strong>Computed targets for ${targets.districtCount} district${targets.districtCount === 1 ? "" : "s"}:</strong><br>
-        Group 1 target(s): ${targets.xDist.join(", ")}<br>
-        Group 2 target(s): ${targets.yDist.join(", ")}<br>
-        Total target(s): ${targets.sDist.join(", ")}<br>
-        Estimated companionship count(s): ${targets.cDist.join(", ")}<br>
-        Assignments per companionship target: ${targets.rangeText}
-      `;
+      intro.innerHTML = `<strong>Computed targets for ${targets.districtCount} district${targets.districtCount === 1 ? "" : "s"}:</strong><br>Group 1 target(s): ${targets.xDist.join(", ")}<br>Group 2 target(s): ${targets.yDist.join(", ")}<br>Total target(s): ${targets.sDist.join(", ")}<br>Estimated companionship count(s): ${targets.cDist.join(", ")}<br>Assignments per companionship target: ${targets.rangeText}`;
       districtSummary.appendChild(intro);
-
       for (let i = 0; i < targets.districtCount; i++) {
         const row = document.createElement("div");
         row.className = "district-row";
-        row.innerHTML = `
-          <strong>District ${i + 1}</strong><br>
-          Group 1 (X): ${targets.xDist[i]}<br>
-          Group 2 (Y): ${targets.yDist[i]}<br>
-          Total (S): ${targets.sDist[i]}<br>
-          Estimated companionships: ${targets.cDist[i]}<br>
-          Expected assignment load per companionship: ${targets.rangeText}
-        `;
+        row.innerHTML = `<strong>District ${i + 1}</strong><br>Group 1 (X): ${targets.xDist[i]}<br>Group 2 (Y): ${targets.yDist[i]}<br>Total (S): ${targets.sDist[i]}<br>Estimated companionships: ${targets.cDist[i]}<br>Expected assignment load per companionship: ${targets.rangeText}`;
         districtSummary.appendChild(row);
       }
-
       if (stats.trioNeeded) {
         const trioRow = document.createElement("div");
         trioRow.className = "district-row";
-        trioRow.innerHTML = `
-          <strong>Trio note</strong><br>
-          Group 1 is odd, so one companionship of 3 will be needed later during the pairing step.
-        `;
+        trioRow.innerHTML = `<strong>Trio note</strong><br>Group 1 is odd, so one companionship of 3 will be needed later during the pairing step.`;
         districtSummary.appendChild(trioRow);
       }
     }
 
-    function distanceBetweenFeatures(a, b) {
-      return turf.distance(a.feature, b.feature, { units: "kilometers" });
+    function getCellId(feature, index) {
+      const props = feature.properties || {};
+      return String(props.OBJECTID ?? props.cell_id ?? props.CELL_ID ?? props.id ?? props.ID ?? index + 1);
     }
 
-    function createEmptyDistrictStates(targets) {
-      return targets.xDist.map((xTarget, idx) => ({
-        id: idx,
-        xTarget,
-        yTarget: targets.yDist[idx],
-        sTarget: targets.sDist[idx],
-        cTarget: targets.cDist[idx],
-        members: [],
-        group1: 0,
-        group2: 0,
-        total: 0,
-        seed: null,
-        centroidLng: null,
-        centroidLat: null
-      }));
-    }
-
-    function updateDistrictCentroid(district) {
-      if (!district.members.length) return;
-      let sumLng = 0;
-      let sumLat = 0;
-
-      for (const item of district.members) {
-        const coords = item.feature.geometry.coordinates;
-        sumLng += coords[0];
-        sumLat += coords[1];
+    function computeWardArea() {
+      let total = 0;
+      for (const feature of wardPolygonFeatures) {
+        try { total += turf.area(feature); } catch (err) {}
       }
+      return total;
+    }
 
-      district.centroidLng = sumLng / district.members.length;
-      district.centroidLat = sumLat / district.members.length;
+    function prepareCellsWorkingSet() {
+      cellsWorking = [];
+      const giantThreshold = wardArea * 0.98;
+      (cellsData.features || []).forEach((feature, index) => {
+        if (!isPolygonLike(feature)) return;
+        let area = 0;
+        try { area = turf.area(feature); } catch (err) { return; }
+        if (area >= giantThreshold) return;
+        const centroid = turf.centroid(feature).geometry.coordinates;
+        const bbox = turf.bbox(feature);
+        cellsWorking.push({ id: getCellId(feature, index), feature, area, bbox, centroidLng: centroid[0], centroidLat: centroid[1], pointMembers: [], pieces: [] });
+      });
+    }
+
+    function pointInBBox(coords, bbox) {
+      return coords[0] >= bbox[0] && coords[0] <= bbox[2] && coords[1] >= bbox[1] && coords[1] <= bbox[3];
+    }
+
+    function assignFilteredPointsToCells(filteredItems) {
+      for (const cell of cellsWorking) { cell.pointMembers = []; }
+      let assignedCount = 0;
+      for (const item of filteredItems) {
+        item.cellId = null;
+        const coords = item.feature.geometry.coordinates;
+        for (const cell of cellsWorking) {
+          if (!pointInBBox(coords, cell.bbox)) continue;
+          let inside = false;
+          try { inside = turf.booleanPointInPolygon(item.feature, cell.feature); } catch (err) { inside = false; }
+          if (inside) {
+            item.cellId = cell.id;
+            cell.pointMembers.push(item);
+            assignedCount++;
+            break;
+          }
+        }
+      }
+      return assignedCount;
+    }
+
+    function distanceBetweenPointItems(a, b) {
+      const ac = a.feature.geometry.coordinates;
+      const bc = b.feature.geometry.coordinates;
+      const dx = ac[0] - bc[0];
+      const dy = ac[1] - bc[1];
+      return Math.sqrt(dx * dx + dy * dy);
     }
 
     function seededShuffle(arr, seed) {
       const result = arr.slice();
       let s = seed >>> 0;
-
-      function rnd() {
-        s = (1664525 * s + 1013904223) >>> 0;
-        return s / 4294967296;
-      }
-
+      function rnd() { s = (1664525 * s + 1013904223) >>> 0; return s / 4294967296; }
       for (let i = result.length - 1; i > 0; i--) {
         const j = Math.floor(rnd() * (i + 1));
         [result[i], result[j]] = [result[j], result[i]];
       }
-
       return result;
     }
 
-    function chooseSeeds(items, districtCount, runSeed) {
+    function choosePointSeeds(items, districtCount, runSeed) {
       const shuffled = seededShuffle(items, runSeed + 101);
       const seeds = [];
       if (!shuffled.length) return seeds;
-
       seeds.push(shuffled[0]);
-
       while (seeds.length < districtCount && seeds.length < shuffled.length) {
         let bestCandidate = null;
         let bestScore = -Infinity;
-
         for (const candidate of shuffled) {
           if (seeds.includes(candidate)) continue;
-
           let minDist = Infinity;
           for (const seed of seeds) {
-            const d = distanceBetweenFeatures(candidate, seed);
+            const d = distanceBetweenPointItems(candidate, seed);
             if (d < minDist) minDist = d;
           }
-
-          if (minDist > bestScore) {
-            bestScore = minDist;
-            bestCandidate = candidate;
-          }
+          if (minDist > bestScore) { bestScore = minDist; bestCandidate = candidate; }
         }
-
         if (!bestCandidate) break;
         seeds.push(bestCandidate);
       }
-
       return seeds;
     }
 
-    function computePointScore(item, district, targetWeight = 1) {
-      const coords = item.feature.geometry.coordinates;
-      const dLng = district.centroidLng == null ? 0 : coords[0] - district.centroidLng;
-      const dLat = district.centroidLat == null ? 0 : coords[1] - district.centroidLat;
-      const distPenalty = Math.sqrt(dLng * dLng + dLat * dLat);
+    function createEmptyPointDistricts(targets) {
+      return targets.xDist.map((xTarget, idx) => ({ id: idx, xTarget, yTarget: targets.yDist[idx], sTarget: targets.sDist[idx], members: [], group1: 0, group2: 0, total: 0, centroidLng: null, centroidLat: null }));
+    }
 
+    function updatePointDistrictCentroid(district) {
+      if (!district.members.length) return;
+      let sumLng = 0, sumLat = 0;
+      for (const item of district.members) {
+        const c = item.feature.geometry.coordinates;
+        sumLng += c[0];
+        sumLat += c[1];
+      }
+      district.centroidLng = sumLng / district.members.length;
+      district.centroidLat = sumLat / district.members.length;
+    }
+
+    function scorePointForDistrict(item, district) {
+      const c = item.feature.geometry.coordinates;
+      const dx = district.centroidLng == null ? 0 : c[0] - district.centroidLng;
+      const dy = district.centroidLat == null ? 0 : c[1] - district.centroidLat;
+      const distPenalty = Math.sqrt(dx * dx + dy * dy);
       const xAfter = district.group1 + (item.group === 1 ? 1 : 0);
       const yAfter = district.group2 + (item.group === 2 ? 1 : 0);
       const sAfter = district.total + 1;
-
       const xPenalty = Math.max(0, xAfter - district.xTarget);
       const yPenalty = Math.max(0, yAfter - district.yTarget);
       const sPenalty = Math.max(0, sAfter - district.sTarget);
-
-      const underX = Math.max(0, district.xTarget - xAfter);
-      const underY = Math.max(0, district.yTarget - yAfter);
-      const underS = Math.max(0, district.sTarget - sAfter);
-
-      return (
-        distPenalty * 1.0 +
-        (xPenalty * 10 + yPenalty * 10 + sPenalty * 14) * targetWeight +
-        (underX * 0.1 + underY * 0.1 + underS * 0.1)
-      );
+      return distPenalty + xPenalty * 12 + yPenalty * 12 + sPenalty * 14;
     }
 
-    function assignBySeeds(items, targets, runSeed) {
-      const districts = createEmptyDistrictStates(targets);
-      const seeds = chooseSeeds(items, targets.districtCount, runSeed);
-
+    function gerrymanderPoints(filteredItems, targets, runSeed) {
+      const working = filteredItems.map(item => ({ ...item, assignedDistrict: null }));
+      const districts = createEmptyPointDistricts(targets);
+      const seeds = choosePointSeeds(working, targets.districtCount, runSeed);
       for (let i = 0; i < districts.length; i++) {
         const district = districts[i];
-        const seedItem = seeds[i] || items[i] || null;
-        district.seed = seedItem;
-
-        if (seedItem) {
-          district.members.push(seedItem);
-          district.group1 += seedItem.group === 1 ? 1 : 0;
-          district.group2 += seedItem.group === 2 ? 1 : 0;
-          district.total += 1;
-          updateDistrictCentroid(district);
-          seedItem._assignedDistrict = district.id;
-        }
+        const seed = seeds[i] || working[i];
+        if (!seed) continue;
+        seed.assignedDistrict = district.id;
+        district.members.push(seed);
+        district.group1 += seed.group === 1 ? 1 : 0;
+        district.group2 += seed.group === 2 ? 1 : 0;
+        district.total += 1;
+        updatePointDistrictCentroid(district);
       }
-
-      const remaining = items.filter(item => item._assignedDistrict == null);
-
-      const orderedRemaining = seededShuffle(remaining, runSeed + 909);
-
-      for (const item of orderedRemaining) {
+      const remaining = seededShuffle(working.filter(item => item.assignedDistrict == null), runSeed + 909);
+      for (const item of remaining) {
         let bestDistrict = null;
         let bestScore = Infinity;
-
         for (const district of districts) {
-          const score = computePointScore(item, district, 1.6);
-          if (score < bestScore) {
-            bestScore = score;
-            bestDistrict = district;
-          }
+          const score = scorePointForDistrict(item, district);
+          if (score < bestScore) { bestScore = score; bestDistrict = district; }
         }
-
+        item.assignedDistrict = bestDistrict.id;
         bestDistrict.members.push(item);
         bestDistrict.group1 += item.group === 1 ? 1 : 0;
         bestDistrict.group2 += item.group === 2 ? 1 : 0;
         bestDistrict.total += 1;
-        item._assignedDistrict = bestDistrict.id;
-        updateDistrictCentroid(bestDistrict);
+        updatePointDistrictCentroid(bestDistrict);
       }
-
       return districts;
     }
 
-    function rebalanceDistricts(districts, targets) {
-      let improved = true;
-      let passCount = 0;
-
-      while (improved && passCount < 12) {
-        improved = false;
-        passCount++;
-
-        for (const district of districts) {
-          for (const other of districts) {
-            if (district.id === other.id) continue;
-
-            const districtOver =
-              (district.group1 > district.xTarget) ||
-              (district.group2 > district.yTarget) ||
-              (district.total > district.sTarget);
-
-            const otherUnder =
-              (other.group1 < other.xTarget) ||
-              (other.group2 < other.yTarget) ||
-              (other.total < other.sTarget);
-
-            if (!districtOver || !otherUnder) continue;
-
-            let bestMoveIndex = -1;
-            let bestMoveScore = Infinity;
-
-            for (let i = 0; i < district.members.length; i++) {
-              const item = district.members[i];
-
-              const couldHelp =
-                (item.group === 1 && other.group1 < other.xTarget) ||
-                (item.group === 2 && other.group2 < other.yTarget) ||
-                (other.total < other.sTarget);
-
-              if (!couldHelp) continue;
-
-              const coords = item.feature.geometry.coordinates;
-              const d1 =
-                district.centroidLng == null
-                  ? 0
-                  : Math.sqrt(
-                      Math.pow(coords[0] - district.centroidLng, 2) +
-                      Math.pow(coords[1] - district.centroidLat, 2)
-                    );
-
-              const d2 =
-                other.centroidLng == null
-                  ? 0
-                  : Math.sqrt(
-                      Math.pow(coords[0] - other.centroidLng, 2) +
-                      Math.pow(coords[1] - other.centroidLat, 2)
-                    );
-
-              const moveScore = d2 - d1;
-              if (moveScore < bestMoveScore) {
-                bestMoveScore = moveScore;
-                bestMoveIndex = i;
-              }
-            }
-
-            if (bestMoveIndex >= 0) {
-              const [item] = district.members.splice(bestMoveIndex, 1);
-
-              district.group1 -= item.group === 1 ? 1 : 0;
-              district.group2 -= item.group === 2 ? 1 : 0;
-              district.total -= 1;
-
-              other.members.push(item);
-              other.group1 += item.group === 1 ? 1 : 0;
-              other.group2 += item.group === 2 ? 1 : 0;
-              other.total += 1;
-
-              item._assignedDistrict = other.id;
-
-              updateDistrictCentroid(district);
-              updateDistrictCentroid(other);
-
-              improved = true;
-            }
-          }
+    function buildCellPieces(pointDistricts) {
+      const pieces = [];
+      let pieceCounter = 1;
+      const districtPointMap = new Map();
+      for (const district of pointDistricts) {
+        for (const item of district.members) {
+          if (!districtPointMap.has(item.cellId)) districtPointMap.set(item.cellId, []);
+          districtPointMap.get(item.cellId).push(item);
         }
       }
 
+      for (const cell of cellsWorking) {
+        const members = districtPointMap.get(cell.id) || [];
+        const districtSet = [...new Set(members.map(m => m.assignedDistrict).filter(v => v != null))];
+        cell.pieces = [];
+
+        if (districtSet.length <= 1) {
+          const piece = {
+            id: `piece_${pieceCounter++}`,
+            parentCellId: cell.id,
+            feature: JSON.parse(JSON.stringify(cell.feature)),
+            bbox: cell.bbox,
+            centroidLng: cell.centroidLng,
+            centroidLat: cell.centroidLat,
+            assignedDistrict: districtSet.length === 1 ? districtSet[0] : null,
+            pointMembers: members.slice(),
+            neighbors: new Set()
+          };
+          cell.pieces.push(piece);
+          pieces.push(piece);
+          continue;
+        }
+
+        const splitSeedFeatures = members.map((m, idx) => turf.point(m.feature.geometry.coordinates, { assignedDistrict: m.assignedDistrict, idx }));
+        let subPiecesMade = 0;
+        try {
+          const bbox = turf.bbox(cell.feature);
+          const voronoi = turf.voronoi(turf.featureCollection(splitSeedFeatures), { bbox });
+          if (voronoi && voronoi.features) {
+            for (const vCell of voronoi.features) {
+              if (!vCell) continue;
+              let clipped = null;
+              try { clipped = turf.intersect(vCell, cell.feature); } catch (err) { clipped = null; }
+              if (!clipped || !clipped.geometry) continue;
+
+              const sampleMembers = members.filter(m => {
+                try { return turf.booleanPointInPolygon(m.feature, clipped); } catch (err) { return false; }
+              });
+              if (!sampleMembers.length) continue;
+
+              const districtCounts = {};
+              for (const m of sampleMembers) districtCounts[m.assignedDistrict] = (districtCounts[m.assignedDistrict] || 0) + 1;
+              const assignedDistrict = Number(Object.entries(districtCounts).sort((a,b) => b[1]-a[1])[0][0]);
+              const centroid = turf.centroid(clipped).geometry.coordinates;
+              const piece = { id: `piece_${pieceCounter++}`, parentCellId: cell.id, feature: clipped, bbox: turf.bbox(clipped), centroidLng: centroid[0], centroidLat: centroid[1], assignedDistrict, pointMembers: sampleMembers.slice(), neighbors: new Set() };
+              cell.pieces.push(piece);
+              pieces.push(piece);
+              subPiecesMade++;
+            }
+          }
+        } catch (err) {
+          console.warn("Cell split failed, falling back to whole-cell majority assignment.", err);
+        }
+
+        if (!subPiecesMade) {
+          const districtCounts = {};
+          for (const m of members) districtCounts[m.assignedDistrict] = (districtCounts[m.assignedDistrict] || 0) + 1;
+          const assignedDistrict = Number(Object.entries(districtCounts).sort((a,b) => b[1]-a[1])[0][0]);
+          const piece = { id: `piece_${pieceCounter++}`, parentCellId: cell.id, feature: JSON.parse(JSON.stringify(cell.feature)), bbox: cell.bbox, centroidLng: cell.centroidLng, centroidLat: cell.centroidLat, assignedDistrict, pointMembers: members.slice(), neighbors: new Set() };
+          cell.pieces.push(piece);
+          pieces.push(piece);
+        }
+      }
+      return pieces;
+    }
+
+    function buildPieceAdjacency(pieces) {
+      for (const piece of pieces) piece.neighbors = new Set();
+      for (let i = 0; i < pieces.length; i++) {
+        for (let j = i + 1; j < pieces.length; j++) {
+          const a = pieces[i];
+          const b = pieces[j];
+          if (a.bbox[2] < b.bbox[0] || a.bbox[0] > b.bbox[2] || a.bbox[3] < b.bbox[1] || a.bbox[1] > b.bbox[3]) continue;
+          let touches = false;
+          try { touches = turf.booleanIntersects(a.feature, b.feature); } catch (err) { touches = false; }
+          if (touches) {
+            a.neighbors.add(b.id);
+            b.neighbors.add(a.id);
+          }
+        }
+      }
+    }
+
+    function seedPieceDistricts(pointDistricts, pieces) {
+      const pieceMap = new Map(pieces.map(p => [p.id, p]));
+      const districts = pointDistricts.map(d => ({ id: d.id, xTarget: d.xTarget, yTarget: d.yTarget, sTarget: d.sTarget, pieceIds: new Set(), group1: 0, group2: 0, total: 0 }));
+      for (const piece of pieces) {
+        if (piece.assignedDistrict == null) continue;
+        const district = districts[piece.assignedDistrict];
+        district.pieceIds.add(piece.id);
+        for (const member of piece.pointMembers) {
+          if (member.group === 1) district.group1++;
+          if (member.group === 2) district.group2++;
+          district.total++;
+        }
+      }
+      return { districts, pieceMap };
+    }
+
+    function getFrontierPiecesForDistrict(district, pieceMap) {
+      const frontier = new Set();
+      for (const pieceId of district.pieceIds) {
+        const piece = pieceMap.get(pieceId);
+        if (!piece) continue;
+        for (const neighborId of piece.neighbors) {
+          const neighbor = pieceMap.get(neighborId);
+          if (neighbor && neighbor.assignedDistrict == null) frontier.add(neighbor.id);
+        }
+      }
+      return Array.from(frontier).map(id => pieceMap.get(id)).filter(Boolean);
+    }
+
+    function computeDistrictPieceCentroid(district, pieceMap) {
+      let sumLng = 0, sumLat = 0, count = 0;
+      for (const pieceId of district.pieceIds) {
+        const piece = pieceMap.get(pieceId);
+        if (!piece) continue;
+        sumLng += piece.centroidLng;
+        sumLat += piece.centroidLat;
+        count++;
+      }
+      return count ? { lng: sumLng / count, lat: sumLat / count } : null;
+    }
+
+    function scoreUnassignedPieceForDistrict(piece, district, pieceMap) {
+      const center = computeDistrictPieceCentroid(district, pieceMap);
+      let distPenalty = 0;
+      if (center) {
+        const dx = piece.centroidLng - center.lng;
+        const dy = piece.centroidLat - center.lat;
+        distPenalty = Math.sqrt(dx * dx + dy * dy);
+      }
+      const cellGroup1 = piece.pointMembers.filter(m => m.group === 1).length;
+      const cellGroup2 = piece.pointMembers.filter(m => m.group === 2).length;
+      const xAfter = district.group1 + cellGroup1;
+      const yAfter = district.group2 + cellGroup2;
+      const sAfter = district.total + piece.pointMembers.length;
+      const xPenalty = Math.max(0, xAfter - district.xTarget);
+      const yPenalty = Math.max(0, yAfter - district.yTarget);
+      const sPenalty = Math.max(0, sAfter - district.sTarget);
+      return distPenalty + xPenalty * 20 + yPenalty * 20 + sPenalty * 28;
+    }
+
+    function assignPieceToDistrict(piece, district) {
+      if (piece.assignedDistrict != null) return;
+      piece.assignedDistrict = district.id;
+      district.pieceIds.add(piece.id);
+      for (const member of piece.pointMembers) {
+        if (member.group === 1) district.group1++;
+        if (member.group === 2) district.group2++;
+        district.total++;
+      }
+    }
+
+    function growDistrictsAcrossPieces(pointDistricts, pieces, runSeed) {
+      const { districts, pieceMap } = seedPieceDistricts(pointDistricts, pieces);
+      let guard = 0;
+      while (pieces.some(p => p.assignedDistrict == null) && guard < 100000) {
+        guard++;
+        let progress = false;
+        const order = seededShuffle(districts, runSeed + guard);
+        for (const district of order) {
+          const frontier = getFrontierPiecesForDistrict(district, pieceMap);
+          if (!frontier.length) continue;
+          let bestPiece = null;
+          let bestScore = Infinity;
+          for (const piece of frontier) {
+            const score = scoreUnassignedPieceForDistrict(piece, district, pieceMap);
+            if (score < bestScore) { bestScore = score; bestPiece = piece; }
+          }
+          if (bestPiece) { assignPieceToDistrict(bestPiece, district); progress = true; }
+        }
+        if (!progress) {
+          const leftovers = pieces.filter(p => p.assignedDistrict == null);
+          for (const piece of leftovers) {
+            let bestDistrict = null;
+            let bestScore = Infinity;
+            for (const district of districts) {
+              const score = scoreUnassignedPieceForDistrict(piece, district, pieceMap);
+              if (score < bestScore) { bestScore = score; bestDistrict = district; }
+            }
+            if (bestDistrict) assignPieceToDistrict(piece, bestDistrict);
+          }
+        }
+      }
       return districts;
     }
 
-    function generateDistricts(filteredItems, targets, runSeed) {
-      for (const item of filteredItems) {
-        item._assignedDistrict = null;
+    function smoothHoleLikePieces(pieces) {
+      let changed = true;
+      let passes = 0;
+      const pieceMap = new Map(pieces.map(p => [p.id, p]));
+      while (changed && passes < 5) {
+        changed = false;
+        passes++;
+        for (const piece of pieces) {
+          const neighbors = Array.from(piece.neighbors).map(id => pieceMap.get(id)).filter(Boolean);
+          const neighborDistricts = neighbors.map(n => n.assignedDistrict).filter(v => v != null);
+          if (!neighborDistricts.length) continue;
+          const unique = [...new Set(neighborDistricts)];
+          if (unique.length === 1 && unique[0] !== piece.assignedDistrict && piece.pointMembers.length === 0) {
+            piece.assignedDistrict = unique[0];
+            changed = true;
+          }
+        }
       }
-
-      let districts = assignBySeeds(filteredItems, targets, runSeed);
-      districts = rebalanceDistricts(districts, targets);
-
-      return districts;
     }
 
     function removeDistrictLayers() {
-      if (filteredLayerGroup) {
-        map.removeLayer(filteredLayerGroup);
-        filteredLayerGroup = null;
-      }
-
-      if (districtHullLayerGroup) {
-        map.removeLayer(districtHullLayerGroup);
-        districtHullLayerGroup = null;
-      }
-    }
-
-    
-    function addDistrictLayers(districts) {
-  removeDistrictLayers();
-
-  const pointLayers = [];
-  const polygonLayers = [];
-
-  const seedFeatures = [];
-
-  for (const district of districts) {
-    if (district.centroidLng == null || district.centroidLat == null) continue;
-
-    seedFeatures.push(
-      turf.point([district.centroidLng, district.centroidLat], {
-        districtId: district.id
-      })
-    );
+  if (filteredPreviewLayer) {
+    map.removeLayer(filteredPreviewLayer);
+    filteredPreviewLayer = null;
   }
+  if (filteredLayerGroup) {
+    map.removeLayer(filteredLayerGroup);
+    filteredLayerGroup = null;
+  }
+  if (districtFillLayer) {
+    map.removeLayer(districtFillLayer);
+    districtFillLayer = null;
+  }
+  if (districtOutlineLayer) {
+    map.removeLayer(districtOutlineLayer);
+    districtOutlineLayer = null;
+  }
+}
 
-  const wardBbox = turf.bbox(wardData);
-
-  const voronoi = turf.voronoi(
-    turf.featureCollection(seedFeatures),
-    {
-      bbox: wardBbox
-    }
-  );
-
-  if (voronoi && voronoi.features) {
-    for (const cell of voronoi.features) {
-      if (!cell) continue;
-
-      const districtId = cell.properties.districtId;
-      const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
-
-      for (const wardPoly of wardPolygonFeatures) {
+    function unionFeatures(features) {
+      if (!features.length) return null;
+      let merged = JSON.parse(JSON.stringify(features[0]));
+      for (let i = 1; i < features.length; i++) {
         try {
-          const clipped = turf.intersect(cell, wardPoly);
-
-          if (clipped) {
-            const polyLayer = L.geoJSON(clipped, {
-              style: {
-                color,
-                weight: 2,
-                fillColor: color,
-                fillOpacity: 0.12
-              }
-            });
-
-            polygonLayers.push(polyLayer);
-          }
+          const unioned = turf.union(merged, features[i]);
+          if (unioned) merged = unioned;
         } catch (err) {
-          console.warn("Voronoi clip failed", err);
+          console.warn("Union failed for district dissolve.", err);
         }
       }
+      return merged;
     }
-  }
 
-  for (const district of districts) {
-    const color = DISTRICT_COLORS[district.id % DISTRICT_COLORS.length];
-
-    const fc = {
-      type: "FeatureCollection",
-      features: district.members.map(m => m.feature)
-    };
-
-    const pointLayer = L.geoJSON(fc, {
-      pointToLayer: function(feature, latlng) {
-        return L.circleMarker(latlng, {
-          radius: feature.properties._group === 1 ? 6 : 5,
-          color: "#ffffff",
-          weight: 1.2,
-          fillColor: color,
-          fillOpacity: 1
-        });
-      },
-      onEachFeature: function(feature, layer) {
-        const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
-        layer.bindPopup(makeMemberPopup(feature, groupLabel, `District ${district.id + 1}`));
+    function addDistrictLayers(pointDistricts, pieces) {
+      removeDistrictLayers();
+      const fillFeatures = [];
+      const dissolved = [];
+      for (const piece of pieces) {
+        if (piece.assignedDistrict == null) continue;
+        const clone = JSON.parse(JSON.stringify(piece.feature));
+        clone.properties = clone.properties || {};
+        clone.properties._district = piece.assignedDistrict;
+        clone.properties._parentCellId = piece.parentCellId;
+        fillFeatures.push(clone);
       }
-    });
 
-    pointLayers.push(pointLayer);
-  }
+      districtFillLayer = L.geoJSON({ type: "FeatureCollection", features: fillFeatures }, {
+        style: feature => {
+          const color = DISTRICT_COLORS[feature.properties._district % DISTRICT_COLORS.length];
+          return { color, weight: 0.9, opacity: 0.55, fillColor: color, fillOpacity: 0.24 };
+        }
+      }).addTo(map);
 
-  districtHullLayerGroup = L.layerGroup(polygonLayers).addTo(map);
-  filteredLayerGroup = L.layerGroup(pointLayers).addTo(map);
-}   
-    function renderGerrySummary(districts, targets) {
+      for (const district of pointDistricts) {
+        const districtFeatures = fillFeatures.filter(f => f.properties._district === district.id).map(f => JSON.parse(JSON.stringify(f)));
+        if (!districtFeatures.length) continue;
+        const merged = unionFeatures(districtFeatures);
+        if (!merged) continue;
+        merged.properties = { _district: district.id };
+        dissolved.push(merged);
+      }
+
+      districtOutlineLayer = L.geoJSON({ type: "FeatureCollection", features: dissolved }, {
+        style: feature => {
+          const color = DISTRICT_COLORS[feature.properties._district % DISTRICT_COLORS.length];
+          return { color, weight: 3, opacity: 0.95, fillOpacity: 0 };
+        }
+      }).addTo(map);
+
+      const pointFeatures = [];
+      for (const district of pointDistricts) {
+        for (const item of district.members) {
+          const clone = JSON.parse(JSON.stringify(item.feature));
+          clone.properties = clone.properties || {};
+          clone.properties._group = item.group;
+          clone.properties._district = district.id;
+          pointFeatures.push(clone);
+        }
+      }
+
+      filteredLayerGroup = L.geoJSON({ type: "FeatureCollection", features: pointFeatures }, {
+        pointToLayer: (feature, latlng) => {
+          const districtId = feature.properties._district;
+          const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+          return L.circleMarker(latlng, { radius: feature.properties._group === 1 ? 8 : 7, color: "#ffffff", weight: 2.2, fillColor: color, fillOpacity: 1, opacity: 1 });
+        },
+        onEachFeature: (feature, layer) => {
+          const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
+          layer.bindPopup(makeMemberPopup(feature, groupLabel, `District ${feature.properties._district + 1}`));
+        }
+      }).addTo(map);
+    }
+
+    function renderGerrySummary(pointDistricts, pieces) {
       resetGerrySummary();
-
+      const splitCells = new Set(pieces.filter(p => {
+        const parent = p.parentCellId;
+        return pieces.filter(x => x.parentCellId === parent).length > 1;
+      }).map(p => p.parentCellId));
       const intro = document.createElement("div");
       intro.className = "district-row";
-      intro.innerHTML = `
-        <strong>Generated provisional seeded districts</strong><br>
-        These are balanced by point counts and can be regenerated with a different seed arrangement.
-      `;
+      intro.innerHTML = `<strong>Generated full ward coverage</strong><br>Districts were colored from the filtered member points, then the ward cells were assigned and dissolved into closed district areas. Temporary split cells used: ${splitCells.size}.`;
       gerrySummary.appendChild(intro);
-
-      for (const district of districts) {
+      for (const district of pointDistricts) {
+        const companionships = Math.floor(district.group1 / 2);
+        const avgAssignmentsNow = companionships > 0 ? round2(district.total / companionships) : 0;
         const row = document.createElement("div");
         row.className = "district-row";
-        row.innerHTML = `
-          <strong>District ${district.id + 1}</strong><br>
-          Group 1: ${district.group1} / target ${district.xTarget}<br>
-          Group 2: ${district.group2} / target ${district.yTarget}<br>
-          Total: ${district.total} / target ${district.sTarget}<br>
-          Estimated companionships: ${Math.floor(district.group1 / 2)}<br>
-          Average assignments if used now: ${
-            Math.floor(district.group1 / 2) > 0
-              ? round2(district.total / Math.floor(district.group1 / 2))
-              : 0
-          }
-        `;
+        row.innerHTML = `<strong>District ${district.id + 1}</strong><br>Group 1: ${district.group1} / target ${district.xTarget}<br>Group 2: ${district.group2} / target ${district.yTarget}<br>Total: ${district.total} / target ${district.sTarget}<br>Estimated companionships: ${companionships}<br>Average assignments if used now: ${avgAssignmentsNow}`;
         gerrySummary.appendChild(row);
       }
     }
 
-    function runGerrymander() {
-      if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
-        setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
-        return;
-      }
+    function showFilteredPreview(filteredItems) {
+  if (filteredPreviewLayer) {
+    map.removeLayer(filteredPreviewLayer);
+    filteredPreviewLayer = null;
+  }
 
-      gerrymanderRunCount++;
-      const runSeed = Date.now() + gerrymanderRunCount * 99991;
+  const features = filteredItems.map(item => {
+    const clone = JSON.parse(JSON.stringify(item.feature));
+    clone.properties = clone.properties || {};
+    clone.properties._group = item.group;
+    return clone;
+  });
 
-      const districts = generateDistricts(
-        currentFiltered.map(item => ({
-          feature: JSON.parse(JSON.stringify(item.feature)),
-          group: item.group
-        })),
-        currentDistrictTargets,
-        runSeed
-      );
+  filteredPreviewLayer = L.geoJSON(
+    { type: "FeatureCollection", features },
+    {
+      pointToLayer: (feature, latlng) => {
+        const group = feature.properties._group;
+        const color = group === 1 ? "#d97706" : "#2563eb";
 
-      currentDistrictResult = districts;
-      addDistrictLayers(districts);
-      renderGerrySummary(districts, currentDistrictTargets);
-
-      if (allMembersLayer) {
-        allMembersLayer.setStyle({
-          radius: 3,
+        return L.circleMarker(latlng, {
+          radius: group === 1 ? 8 : 7,
           color: "#ffffff",
-          weight: 0.7,
-          fillColor: "#cc3344",
-          fillOpacity: 0.08,
-          opacity: 0.14
+          weight: 2.2,
+          fillColor: color,
+          fillOpacity: 1,
+          opacity: 1
         });
+      },
+      onEachFeature: (feature, layer) => {
+        const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
+        layer.bindPopup(makeMemberPopup(feature, groupLabel));
       }
-
-      regerrymanderBtn.disabled = false;
-      setStatus(
-        gerryStatus,
-        `Generated ${districts.length} provisional seeded districts. Click Re-gerrymander to try a different layout.`,
-        "good"
-      );
     }
-
+  ).addTo(map);
+}
     function runFilter() {
-      if (!membersData || !wardPolygonFeatures.length) {
+      if (!membersData || !wardPolygonFeatures.length || !cellsWorking.length) {
         setStatus(filterStatus, "Data is not ready yet.", "error");
         return;
       }
@@ -1271,60 +912,39 @@
 
       const chosenGender = getSelectedGender();
       const features = membersData.features || [];
-
       let outsideWardExcluded = 0;
       const filteredItems = [];
 
       for (const feature of features) {
         if (!feature?.geometry || feature.geometry.type !== "Point") continue;
-
         const gender = normGender(getProp(feature, "Gender"));
         const assignedToMinister = normYes(getProp(feature, "Assigned_to_minister"));
         const isAssignedMinisters = normYes(getProp(feature, "Is_assigned_ministers"));
-
         if (gender !== chosenGender) continue;
         if (!isAssignedMinisters) continue;
-
-        if (!pointInsideWard(feature)) {
-          outsideWardExcluded++;
-          continue;
-        }
+        if (!pointInsideWard(feature)) { outsideWardExcluded++; continue; }
 
         let group = 0;
-
-        if (assignedToMinister && isAssignedMinisters) {
-          group = 1;
-        } else if (!assignedToMinister && isAssignedMinisters) {
-          group = 2;
-        } else {
-          continue;
-        }
+        if (assignedToMinister && isAssignedMinisters) group = 1;
+        else if (!assignedToMinister && isAssignedMinisters) group = 2;
+        else continue;
 
         const cloned = JSON.parse(JSON.stringify(feature));
         cloned.properties = cloned.properties || {};
         cloned.properties._group = group;
-
-        filteredItems.push({
-          feature: cloned,
-          group
-        });
+        filteredItems.push({ feature: cloned, group, cellId: null });
       }
 
       currentFiltered = filteredItems;
+      const assignedCount = assignFilteredPointsToCells(currentFiltered);
       currentStats = computeStats(filteredItems, outsideWardExcluded);
-
       updateMetricCards(currentStats);
 
-      if (allMembersLayer) {
-        allMembersLayer.setStyle({
-          radius: 4,
-          color: "#ffffff",
-          weight: 0.7,
-          fillColor: "#cc3344",
-          fillOpacity: 0.20,
-          opacity: 0.25
-        });
-      }
+      if (allMembersLayer && map.hasLayer(allMembersLayer)) {
+  map.removeLayer(allMembersLayer);
+}
+
+showFilteredPreview(filteredItems);
 
       calcDistrictBtn.disabled = false;
       districtCountSelect.disabled = false;
@@ -1336,159 +956,124 @@
         `Group 1 = ${currentStats.group1}, Group 2 = ${currentStats.group2}, Total = ${currentStats.total}.`,
         `Companionships = ${currentStats.companionships}.`,
         `Average assignments per companionship = ${currentStats.avgAssignmentsDisplay}.`,
-        `Outside ward excluded = ${currentStats.outsideWardExcluded}.`
+        `Outside ward excluded = ${currentStats.outsideWardExcluded}.`,
+        `Points assigned to cells = ${assignedCount}/${filteredItems.length}.`
       ].join(" ");
 
       setStatus(filterStatus, message, filteredItems.length ? "good" : "warn");
       setStatus(districtStatus, "Choose district count and click Calculate Targets.", "good");
-
       fitToFiltered();
     }
 
     function calculateDistrictTargets() {
-      if (!currentStats) {
-        setStatus(districtStatus, "Run the filter first.", "warn");
-        return;
-      }
-
+      if (!currentStats) { setStatus(districtStatus, "Run the filter first.", "warn"); return; }
       const districtCount = Number(districtCountSelect.value);
-      if (!districtCount || districtCount < 1 || districtCount > 10) {
-        setStatus(districtStatus, "Choose a district count from 1 to 10.", "warn");
-        return;
-      }
-
+      if (!districtCount || districtCount < 1 || districtCount > 10) { setStatus(districtStatus, "Choose a district count from 1 to 10.", "warn"); return; }
+      if (districtCount > currentFiltered.length) { setStatus(districtStatus, "District count cannot be greater than the number of filtered people.", "warn"); return; }
       currentDistrictTargets = createDistrictTargets(currentStats, districtCount);
       renderTargetSummary(currentDistrictTargets, currentStats);
-
       gerrymanderBtn.disabled = false;
       regerrymanderBtn.disabled = true;
+      setStatus(districtStatus, currentStats.trioNeeded ? "Targets computed. Group 1 is odd, so one trio will be needed later." : "Targets computed successfully.", "good");
+      setStatus(gerryStatus, "Click Gerrymander Districts to generate cell-based districts.", "good");
+    }
 
-      const note = currentStats.trioNeeded
-        ? "Targets computed. Group 1 is odd, so one trio will be needed later."
-        : "Targets computed successfully.";
-
-      setStatus(districtStatus, note, "good");
-      setStatus(gerryStatus, "Click Gerrymander Districts to generate seeded districts.", "good");
+    function runGerrymander() {
+      if (!currentFiltered.length || !currentStats || !currentDistrictTargets) { setStatus(gerryStatus, "Run filter and calculate targets first.", "warn"); return; }
+      gerrymanderRunCount++;
+      const runSeed = Date.now() + gerrymanderRunCount * 99991;
+      const pointDistricts = gerrymanderPoints(currentFiltered, currentDistrictTargets, runSeed);
+      const pieces = buildCellPieces(pointDistricts);
+      buildPieceAdjacency(pieces);
+      growDistrictsAcrossPieces(pointDistricts, pieces, runSeed);
+      smoothHoleLikePieces(pieces);
+      currentDistrictResult = { pointDistricts, pieces };
+      if (filteredPreviewLayer) {
+      map.removeLayer(filteredPreviewLayer);
+      filteredPreviewLayer = null;
+}
+      addDistrictLayers(pointDistricts, pieces);
+      renderGerrySummary(pointDistricts, pieces)
+      regerrymanderBtn.disabled = false;
+      setStatus(gerryStatus, `Generated ${pointDistricts.length} full-coverage districts from ward cells. Click Re-gerrymander to try a different layout.`, "good");
     }
 
     function resetPage() {
-      currentFiltered = [];
-      currentStats = null;
-      currentDistrictTargets = null;
-      currentDistrictResult = null;
-      gerrymanderRunCount = 0;
+  currentFiltered = [];
+  currentStats = null;
+  currentDistrictTargets = null;
+  currentDistrictResult = null;
+  gerrymanderRunCount = 0;
 
-      clearMetricCards();
-      resetDistrictSummary();
-      resetGerrySummary();
-      removeDistrictLayers();
+  clearMetricCards();
+  resetDistrictSummary();
+  resetGerrySummary();
+  removeDistrictLayers();
 
-      if (allMembersLayer) {
-        allMembersLayer.setStyle({
-          radius: 4,
-          color: "#ffffff",
-          weight: 0.7,
-          fillColor: "#cc3344",
-          fillOpacity: 0.35,
-          opacity: 0.7
-        });
-      }
+  if (allMembersLayer && !map.hasLayer(allMembersLayer)) {
+    allMembersLayer.addTo(map);
+  }
 
-      calcDistrictBtn.disabled = true;
-      districtCountSelect.disabled = true;
-      zoomFilteredBtn.disabled = true;
-      gerrymanderBtn.disabled = true;
-      regerrymanderBtn.disabled = true;
+  if (allMembersLayer) {
+    allMembersLayer.setStyle({
+      radius: 5.5,
+      color: "#ffffff",
+      weight: 1.4,
+      fillColor: "#cc3344",
+      fillOpacity: 0.78,
+      opacity: 1
+    });
+  }
 
-      setStatus(filterStatus, "Choose a gender and click Run Filter.");
-      setStatus(districtStatus, "Run the filter first.");
-      setStatus(gerryStatus, "Calculate targets first.");
+  calcDistrictBtn.disabled = true;
+  districtCountSelect.disabled = true;
+  zoomFilteredBtn.disabled = true;
+  gerrymanderBtn.disabled = true;
+  regerrymanderBtn.disabled = true;
 
-      fitMapToWard();
-    }
+  setStatus(filterStatus, "Choose a gender and click Run Filter.");
+  setStatus(districtStatus, "Run the filter first.");
+  setStatus(gerryStatus, "Calculate targets first.");
+
+  fitMapToWard();
+}
 
     function initMap() {
-      map = L.map("map", {
-        zoomControl: true
-      });
-
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap contributors"
-      }).addTo(map);
-
+      map = L.map("map", { zoomControl: true });
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap contributors" }).addTo(map);
       loadAllData();
     }
 
     async function loadAllData() {
       setStatus(loadStatus, "Loading data...");
-
       try {
-        const [wardResponse, membersResponse, networkResponse] = await Promise.all([
-          fetch(WARD_URL),
-          fetch(MEMBERS_URL),
-          fetch(NETWORK_URL)
-        ]);
-
+        const [wardResponse, membersResponse, cellsResponse] = await Promise.all([fetch(WARD_URL), fetch(MEMBERS_URL), fetch(CELLS_URL)]);
         if (!wardResponse.ok) throw new Error(`Ward boundary failed to load: ${wardResponse.status}`);
         if (!membersResponse.ok) throw new Error(`Member locations failed to load: ${membersResponse.status}`);
-        if (!networkResponse.ok) throw new Error(`Network failed to load: ${networkResponse.status}`);
-
+        if (!cellsResponse.ok) throw new Error(`Ward cells failed to load: ${cellsResponse.status}`);
         wardData = await wardResponse.json();
         membersData = await membersResponse.json();
-        networkData = await networkResponse.json();
-
+        cellsData = await cellsResponse.json();
         wardPolygonFeatures = (wardData.features || []).filter(isPolygonLike);
-        if (!wardPolygonFeatures.length) {
-          throw new Error("No polygon features were found in the ward boundary GeoJSON.");
-        }
+        if (!wardPolygonFeatures.length) throw new Error("No polygon features were found in the ward boundary GeoJSON.");
+        wardArea = computeWardArea();
+        prepareCellsWorkingSet();
 
-        wardLayer = L.geoJSON(wardData, {
-          style: function() {
-            return {
-              color: "#0f766e",
-              weight: 3,
-              fillOpacity: 0,
-              opacity: 1
-            };
-          }
-        }).addTo(map);
-
-        networkLayer = L.geoJSON(networkData, {
-          style: function() {
-            return {
-              color: "#6b7280",
-              weight: 1,
-              opacity: 0.45
-            };
-          }
-        }).addTo(map);
-
+        wardLayer = L.geoJSON(wardData, { style: () => ({ color: "#0f766e", weight: 3, fillOpacity: 0, opacity: 1 }) }).addTo(map);
+        cellsOutlineLayer = L.geoJSON(cellsData, { style: () => ({ color: "#64748b", weight: 0.8, opacity: 0.28, fillOpacity: 0 }) }).addTo(map);
         allMembersLayer = L.geoJSON(membersData, {
-          pointToLayer: function(feature, latlng) {
-            return L.circleMarker(latlng, {
-              radius: 4,
-              color: "#ffffff",
-              weight: 0.7,
-              fillColor: "#cc3344",
-              fillOpacity: 0.35,
-              opacity: 0.7
-            });
-          },
-          onEachFeature: function(feature, layer) {
-            layer.bindPopup(makeMemberPopup(feature));
-          }
+          pointToLayer: (feature, latlng) => L.circleMarker(latlng, { radius: 5.5, color: "#ffffff", weight: 1.4, fillColor: "#cc3344", fillOpacity: 0.78, opacity: 1 }),
+          onEachFeature: (feature, layer) => layer.bindPopup(makeMemberPopup(feature))
         }).addTo(map);
 
         chkWardLoaded.checked = true;
         chkMembersLoaded.checked = true;
-        chkNetworkLoaded.checked = true;
-
-        setStatus(loadStatus, "All layers loaded successfully.", "good");
+        chkCellsLoaded.checked = true;
+        setStatus(loadStatus, `All layers loaded successfully. Working cells: ${cellsWorking.length}.`, "good");
         fitMapToWard();
-
       } catch (error) {
         console.error(error);
-        setStatus(loadStatus, "A layer failed to load. Check the browser console.", "error");
+        setStatus(loadStatus, error.message || "A layer failed to load. Check the browser console.", "error");
       }
     }
 
@@ -1498,7 +1083,6 @@
     resetBtn.addEventListener("click", resetPage);
     gerrymanderBtn.addEventListener("click", runGerrymander);
     regerrymanderBtn.addEventListener("click", runGerrymander);
-
     initMap();
   </script>
 </body>
