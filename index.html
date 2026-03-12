@@ -212,6 +212,7 @@
     <button id="gerrymanderBtn" disabled>Gerrymander People</button>
     <button id="regerrymanderBtn" class="secondary" disabled>Re-gerrymander</button>
     <button id="connectLinesBtn" class="secondary" disabled>Connect District Lines</button>
+    <button id="claimCellsBtn" class="secondary" disabled>Claim Cells From Lines</button>
   </div>
   <div id="gerryStatus" class="status">Calculate targets first.</div>
   <div class="district-summary" id="gerrySummary"></div>
@@ -264,6 +265,7 @@
     let currentDistrictTargets = null;
     let currentDistrictResult = null;
     let currentPointDistricts = null;
+    let currentLineFeatures = null;
     let gerrymanderRunCount = 0;
 
     let cellsWorking = [];
@@ -287,6 +289,7 @@
     const gerrymanderBtn = document.getElementById("gerrymanderBtn");
     const regerrymanderBtn = document.getElementById("regerrymanderBtn");
     const connectLinesBtn = document.getElementById("connectLinesBtn");
+    const claimCellsBtn = document.getElementById("claimCellsBtn");
     const districtCountSelect = document.getElementById("districtCountSelect");
     const districtSummary = document.getElementById("districtSummary");
     const gerrySummary = document.getElementById("gerrySummary");
@@ -1044,9 +1047,11 @@
       currentDistrictTargets = null;
       currentDistrictResult = null;
       currentPointDistricts = null;
+      currentLineFeatures = null;
       regerrymanderBtn.disabled = true;
       gerrymanderBtn.disabled = true;
       connectLinesBtn.disabled = true;
+      claimCellsBtn.disabled = true;
       removeDistrictLineLayer();
       setStatus(gerryStatus, "Calculate targets first.");
 
@@ -1159,6 +1164,7 @@ filteredPreviewLayer = L.geoJSON(
       gerrymanderBtn.disabled = false;
       regerrymanderBtn.disabled = true;
       connectLinesBtn.disabled = true;
+      claimCellsBtn.disabled = true;
       setStatus(districtStatus, currentStats.trioNeeded ? "Targets computed. Group 1 is odd, so one trio will be needed later." : "Targets computed successfully.", "good");
       setStatus(gerryStatus, "Click Gerrymander Districts to generate cell-based districts.", "good");
     }
@@ -1192,6 +1198,8 @@ filteredPreviewLayer = L.geoJSON(
 
       currentPointDistricts = districts;
       currentDistrictResult = null;
+      currentLineFeatures = null;
+      claimCellsBtn.disabled = true;
 
       removeFilteredPreviewLayer();
 
@@ -1348,6 +1356,7 @@ function connectDistrictLines() {
   setTimeout(() => {
     try {
       const lineFeatures = buildDistrictLineFeatures(currentPointDistricts);
+      currentLineFeatures = lineFeatures;
 
       districtLineLayer = L.geoJSON(
         {
@@ -1367,16 +1376,192 @@ function connectDistrictLines() {
         }
       ).addTo(map);
 
+      claimCellsBtn.disabled = false;
+
       setStatus(
         gerryStatus,
-        `Created ${lineFeatures.length} district connection line segments.`,
+        `Created ${lineFeatures.length} district connection line segments. Click Claim Cells From Lines for the next step.`,
+        "good"
+);
+    } catch (error) {
+      console.error(error);
+      setStatus(
+        gerryStatus,
+        `Connecting lines failed: ${error?.message || error}`,
+        "error"
+      );
+    }
+  }, 40);
+}
+    function getPointCellDistrictSets(pointDistricts) {
+  const result = new Map();
+
+  for (const district of pointDistricts) {
+    for (const item of district.members) {
+      const cellId = item.cellId ? String(item.cellId) : null;
+      if (!cellId) continue;
+      if (!result.has(cellId)) result.set(cellId, new Set());
+      result.get(cellId).add(district.id);
+    }
+  }
+
+  return result;
+}
+
+function lineTouchesCell(lineFeature, cellFeature) {
+  try {
+    return turf.booleanIntersects(lineFeature, cellFeature);
+  } catch (err) {
+    return false;
+  }
+}
+
+function buildLineTouchedCellClaims(lineFeatures, pointDistricts) {
+  const pointCellDistrictSets = getPointCellDistrictSets(pointDistricts);
+  const touchedByDistricts = new Map();
+
+  for (const cell of cellsWorking) {
+    touchedByDistricts.set(cell.id, new Set());
+  }
+
+  for (const lineFeature of lineFeatures) {
+    const districtId = lineFeature.properties._district;
+
+    for (const cell of cellsWorking) {
+      const pointSet = pointCellDistrictSets.get(cell.id);
+      if (pointSet && [...pointSet].some(d => d !== districtId)) {
+        continue;
+      }
+
+      if (lineTouchesCell(lineFeature, cell.feature)) {
+        touchedByDistricts.get(cell.id).add(districtId);
+      }
+    }
+  }
+
+  const claimedFeatures = [];
+  const conflictCellIds = [];
+  const claimedCountByDistrict = new Map();
+
+  for (const district of pointDistricts) {
+    claimedCountByDistrict.set(district.id, 0);
+  }
+
+  for (const cell of cellsWorking) {
+    const touched = touchedByDistricts.get(cell.id) || new Set();
+    const pointSet = pointCellDistrictSets.get(cell.id);
+
+    if (pointSet && pointSet.size > 1) {
+      conflictCellIds.push(cell.id);
+      continue;
+    }
+
+    if (touched.size === 1) {
+      const districtId = [...touched][0];
+      const clone = JSON.parse(JSON.stringify(cell.feature));
+      clone.properties = {
+        ...(clone.properties || {}),
+        _district: districtId,
+        _pieceType: "line-claimed"
+      };
+      claimedFeatures.push(clone);
+      claimedCountByDistrict.set(
+        districtId,
+        (claimedCountByDistrict.get(districtId) || 0) + 1
+      );
+    } else if (touched.size > 1) {
+      conflictCellIds.push(cell.id);
+    }
+  }
+
+  return {
+    claimedFeatures,
+    conflictCellIds,
+    claimedCountByDistrict
+  };
+}
+
+function claimCellsFromLines() {
+  if (!currentPointDistricts || !currentPointDistricts.length) {
+    setStatus(gerryStatus, "Gerrymander people first.", "warn");
+    return;
+  }
+
+  if (!currentLineFeatures || !currentLineFeatures.length) {
+    setStatus(gerryStatus, "Connect district lines first.", "warn");
+    return;
+  }
+
+  setStatus(gerryStatus, "Claiming cells touched by lines...", "warn");
+
+  setTimeout(() => {
+    try {
+      const result = buildLineTouchedCellClaims(currentLineFeatures, currentPointDistricts);
+
+      removeDistrictLineLayer();
+
+      if (districtFillLayer) {
+        map.removeLayer(districtFillLayer);
+        districtFillLayer = null;
+      }
+
+      districtFillLayer = L.geoJSON(
+        {
+          type: "FeatureCollection",
+          features: result.claimedFeatures
+        },
+        {
+          style: function(feature) {
+            const districtId = feature.properties._district;
+            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+            return {
+              color: color,
+              weight: 0.8,
+              opacity: 0.5,
+              fillColor: color,
+              fillOpacity: 0.24
+            };
+          }
+        }
+      ).addTo(map);
+
+      currentDistrictResult = result;
+
+      resetGerrySummary();
+
+      const intro = document.createElement("div");
+      intro.className = "district-row";
+      intro.innerHTML = `<strong>Cells claimed from lines</strong><br>Cells touched by only one district's lines were claimed. Conflict cells touched by more than one district were left unassigned.`;
+      gerrySummary.appendChild(intro);
+
+      for (const district of currentPointDistricts) {
+        const row = document.createElement("div");
+        row.className = "district-row";
+        row.innerHTML = `
+          <strong>District ${district.id + 1}</strong><br>
+          Claimed cells from lines: ${result.claimedCountByDistrict.get(district.id) || 0}
+        `;
+        gerrySummary.appendChild(row);
+      }
+
+      const conflictRow = document.createElement("div");
+      conflictRow.className = "district-row";
+      conflictRow.innerHTML = `
+        <strong>Conflict cells left unassigned</strong><br>
+        ${result.conflictCellIds.length}
+      `;
+      gerrySummary.appendChild(conflictRow);
+
+      setStatus(
+        gerryStatus,
+        `Claimed ${result.claimedFeatures.length} cells from lines. ${result.conflictCellIds.length} conflict cells were left unassigned.`,
         "good"
       );
     } catch (error) {
       console.error(error);
       setStatus(
         gerryStatus,
-        `Connecting lines failed: ${error?.message || error}`,
+        `Claiming cells failed: ${error?.message || error}`,
         "error"
       );
     }
@@ -1389,6 +1574,7 @@ function connectDistrictLines() {
       currentDistrictTargets = null;
       currentDistrictResult = null;
       currentPointDistricts = null;
+      currentLineFeatures = null;
       gerrymanderRunCount = 0;
       clearMetricCards();
       resetDistrictSummary();
@@ -1405,6 +1591,7 @@ function connectDistrictLines() {
       gerrymanderBtn.disabled = true;
       regerrymanderBtn.disabled = true;
       connectLinesBtn.disabled = true;
+      claimCellsBtn.disabled = true;
       setStatus(filterStatus, "Choose a gender and click Run Filter.");
       setStatus(districtStatus, "Run the filter first.");
       setStatus(gerryStatus, "Calculate targets first.");
@@ -1482,6 +1669,7 @@ function connectDistrictLines() {
     gerrymanderBtn.addEventListener("click", runGerrymander);
     regerrymanderBtn.addEventListener("click", runGerrymander);
     connectLinesBtn.addEventListener("click", connectDistrictLines);
+    claimCellsBtn.addEventListener("click", claimCellsFromLines);
     initMap();
   </script>
 </body>
