@@ -336,8 +336,9 @@
     <aside class="sidebar">
       <h1 class="title">Gerrymandering Ministering Districts</h1>
       <p class="subtitle">
-        This version uses ward cells as the actual district building blocks. Districts grow across adjacent cells,
-        fully cover the ward, do not overlap, and can be re-gerrymandered.
+        This phase loads the ward, member points, and network layer, applies your ministering filters,
+        calculates the district target math, and generates provisional seeded districts with a
+        re-gerrymander button.
       </p>
 
       <div class="card">
@@ -356,10 +357,6 @@
           <label class="option">
             <input type="checkbox" id="chkNetworkLoaded" disabled />
             <span>District network lines</span>
-          </label>
-          <label class="option">
-            <input type="checkbox" id="chkCellsLoaded" disabled />
-            <span>Ward cells polygon layer</span>
           </label>
         </div>
         <div id="loadStatus" class="status">Loading data...</div>
@@ -485,10 +482,10 @@
 
       <div class="card">
         <div class="step-badge">Step 3</div>
-        <h2>Cell-based district generation</h2>
+        <h2>Seeded district generation</h2>
         <p>
-          Districts are built by assigning adjacent ward cells until all ward space is covered. This is the first
-          true full-coverage districting phase.
+          This version creates provisional districts from the filtered people points and balances them
+          by your target counts. It is the seed logic first, before legal road/parcel boundary carving.
         </p>
 
         <div class="row">
@@ -503,8 +500,8 @@
         <div class="district-summary" id="gerrySummary"></div>
 
         <div class="small-note">
-          This version requires a polygon layer of ward cells. It does not try to polygonize your 140,000-line network
-          in-browser.
+          Current phase colors the filtered people by district and draws soft district hulls. The next
+          phase will use the network to build legal district edges.
         </div>
       </div>
     </aside>
@@ -519,8 +516,8 @@
           <span>District network lines</span>
         </div>
         <div class="legend-item">
-          <span class="swatch line" style="background: #0f766e;"></span>
-          <span>Ward boundary</span>
+          <span class="swatch" style="background: rgba(15,118,110,0.18); border-color: #0f766e;"></span>
+          <span>Ward boundary polygon</span>
         </div>
         <div class="legend-item">
           <span class="swatch" style="background: var(--rawpoints);"></span>
@@ -530,6 +527,10 @@
           <span class="swatch" style="background: #e11d48;"></span>
           <span>District-colored filtered points</span>
         </div>
+        <div class="small-note">
+          Raw points show immediately. Filtered points become district-colored after running the seed
+          district engine.
+        </div>
       </div>
     </div>
   </div>
@@ -538,7 +539,6 @@
     const WARD_URL = "https://kdidso.github.io/snow-canyon-map/ward_boundaries_JSO.geojson";
     const MEMBERS_URL = "https://kdidso.github.io/snow-canyon-map/member_locations_JSO.geojson";
     const NETWORK_URL = "./district_netwo_FeaturesToJSO1.geojson";
-    const CELLS_URL = "./ward_cells.geojson";
 
     const DISTRICT_COLORS = [
       "#e11d48",
@@ -558,14 +558,13 @@
     let wardData = null;
     let membersData = null;
     let networkData = null;
-    let cellsData = null;
 
     let wardPolygonFeatures = [];
     let allMembersLayer = null;
     let wardLayer = null;
     let networkLayer = null;
     let filteredLayerGroup = null;
-    let districtPolygonLayerGroup = null;
+    let districtHullLayerGroup = null;
 
     let currentFiltered = [];
     let currentStats = null;
@@ -573,13 +572,9 @@
     let currentDistrictResult = null;
     let gerrymanderRunCount = 0;
 
-    let cellsWorking = [];
-    let cellAdjacency = new Map();
-
     const chkWardLoaded = document.getElementById("chkWardLoaded");
     const chkMembersLoaded = document.getElementById("chkMembersLoaded");
     const chkNetworkLoaded = document.getElementById("chkNetworkLoaded");
-    const chkCellsLoaded = document.getElementById("chkCellsLoaded");
 
     const loadStatus = document.getElementById("loadStatus");
     const filterStatus = document.getElementById("filterStatus");
@@ -833,89 +828,8 @@
       }
     }
 
-    function getCellId(feature, index) {
-      const props = feature.properties || {};
-      return props.cell_id ?? props.CELL_ID ?? props.id ?? props.ID ?? `cell_${index}`;
-    }
-
-    function prepareCellsWorkingSet() {
-      cellsWorking = (cellsData.features || []).filter(isPolygonLike).map((feature, index) => {
-        const id = getCellId(feature, index);
-        const centroid = turf.centroid(feature);
-        const coords = centroid.geometry.coordinates;
-
-        return {
-          id,
-          feature,
-          centroidLng: coords[0],
-          centroidLat: coords[1],
-          group1: 0,
-          group2: 0,
-          total: 0,
-          assignedDistrict: null
-        };
-      });
-    }
-
-    function shareBoundaryApprox(a, b) {
-      const dx = a.centroidLng - b.centroidLng;
-      const dy = a.centroidLat - b.centroidLat;
-      const centroidDistance = Math.sqrt(dx * dx + dy * dy);
-      if (centroidDistance > 0.02) return false;
-
-      try {
-        return turf.booleanTouches(a.feature, b.feature) || turf.booleanIntersects(a.feature, b.feature);
-      } catch (err) {
-        return false;
-      }
-    }
-
-    function buildCellAdjacency() {
-      cellAdjacency = new Map();
-
-      for (const cell of cellsWorking) {
-        cellAdjacency.set(cell.id, []);
-      }
-
-      for (let i = 0; i < cellsWorking.length; i++) {
-        for (let j = i + 1; j < cellsWorking.length; j++) {
-          const a = cellsWorking[i];
-          const b = cellsWorking[j];
-
-          if (shareBoundaryApprox(a, b)) {
-            cellAdjacency.get(a.id).push(b.id);
-            cellAdjacency.get(b.id).push(a.id);
-          }
-        }
-      }
-    }
-
-    function recountCellsForFilteredMembers(filteredItems) {
-      for (const cell of cellsWorking) {
-        cell.group1 = 0;
-        cell.group2 = 0;
-        cell.total = 0;
-        cell.assignedDistrict = null;
-      }
-
-      for (const item of filteredItems) {
-        for (const cell of cellsWorking) {
-          let inside = false;
-          try {
-            inside = turf.booleanPointInPolygon(item.feature, cell.feature);
-          } catch (err) {
-            inside = false;
-          }
-
-          if (inside) {
-            if (item.group === 1) cell.group1++;
-            if (item.group === 2) cell.group2++;
-            cell.total++;
-            item.cellId = cell.id;
-            break;
-          }
-        }
-      }
+    function distanceBetweenFeatures(a, b) {
+      return turf.distance(a.feature, b.feature, { units: "kilometers" });
     }
 
     function createEmptyDistrictStates(targets) {
@@ -925,12 +839,29 @@
         yTarget: targets.yDist[idx],
         sTarget: targets.sDist[idx],
         cTarget: targets.cDist[idx],
-        cellIds: new Set(),
+        members: [],
         group1: 0,
         group2: 0,
         total: 0,
-        seedCellId: null
+        seed: null,
+        centroidLng: null,
+        centroidLat: null
       }));
+    }
+
+    function updateDistrictCentroid(district) {
+      if (!district.members.length) return;
+      let sumLng = 0;
+      let sumLat = 0;
+
+      for (const item of district.members) {
+        const coords = item.feature.geometry.coordinates;
+        sumLng += coords[0];
+        sumLat += coords[1];
+      }
+
+      district.centroidLng = sumLng / district.members.length;
+      district.centroidLat = sumLat / district.members.length;
     }
 
     function seededShuffle(arr, seed) {
@@ -950,11 +881,8 @@
       return result;
     }
 
-    function chooseSeedCells(cells, districtCount, runSeed) {
-      const occupied = cells.filter(c => c.total > 0);
-      const candidates = occupied.length ? occupied : cells;
-      const shuffled = seededShuffle(candidates, runSeed + 111);
-
+    function chooseSeeds(items, districtCount, runSeed) {
+      const shuffled = seededShuffle(items, runSeed + 101);
       const seeds = [];
       if (!shuffled.length) return seeds;
 
@@ -969,9 +897,7 @@
 
           let minDist = Infinity;
           for (const seed of seeds) {
-            const dx = candidate.centroidLng - seed.centroidLng;
-            const dy = candidate.centroidLat - seed.centroidLat;
-            const d = Math.sqrt(dx * dx + dy * dy);
+            const d = distanceBetweenFeatures(candidate, seed);
             if (d < minDist) minDist = d;
           }
 
@@ -988,36 +914,15 @@
       return seeds;
     }
 
-    function assignCellToDistrict(cell, district) {
-      if (cell.assignedDistrict !== null) return;
+    function computePointScore(item, district, targetWeight = 1) {
+      const coords = item.feature.geometry.coordinates;
+      const dLng = district.centroidLng == null ? 0 : coords[0] - district.centroidLng;
+      const dLat = district.centroidLat == null ? 0 : coords[1] - district.centroidLat;
+      const distPenalty = Math.sqrt(dLng * dLng + dLat * dLat);
 
-      cell.assignedDistrict = district.id;
-      district.cellIds.add(cell.id);
-      district.group1 += cell.group1;
-      district.group2 += cell.group2;
-      district.total += cell.total;
-    }
-
-    function getFrontierCells(district) {
-      const frontier = new Set();
-
-      for (const cellId of district.cellIds) {
-        const neighbors = cellAdjacency.get(cellId) || [];
-        for (const neighborId of neighbors) {
-          const neighbor = cellsWorking.find(c => c.id === neighborId);
-          if (neighbor && neighbor.assignedDistrict === null) {
-            frontier.add(neighbor.id);
-          }
-        }
-      }
-
-      return Array.from(frontier).map(id => cellsWorking.find(c => c.id === id)).filter(Boolean);
-    }
-
-    function scoreCellForDistrict(cell, district) {
-      const xAfter = district.group1 + cell.group1;
-      const yAfter = district.group2 + cell.group2;
-      const sAfter = district.total + cell.total;
+      const xAfter = district.group1 + (item.group === 1 ? 1 : 0);
+      const yAfter = district.group2 + (item.group === 2 ? 1 : 0);
+      const sAfter = district.total + 1;
 
       const xPenalty = Math.max(0, xAfter - district.xTarget);
       const yPenalty = Math.max(0, yAfter - district.yTarget);
@@ -1028,81 +933,137 @@
       const underS = Math.max(0, district.sTarget - sAfter);
 
       return (
-        xPenalty * 20 +
-        yPenalty * 20 +
-        sPenalty * 30 +
-        underX * 0.4 +
-        underY * 0.4 +
-        underS * 0.5
+        distPenalty * 1.0 +
+        (xPenalty * 10 + yPenalty * 10 + sPenalty * 14) * targetWeight +
+        (underX * 0.1 + underY * 0.1 + underS * 0.1)
       );
     }
 
-    function growDistrictsByCells(targets, runSeed) {
-      for (const cell of cellsWorking) {
-        cell.assignedDistrict = null;
-      }
-
+    function assignBySeeds(items, targets, runSeed) {
       const districts = createEmptyDistrictStates(targets);
-      const seeds = chooseSeedCells(cellsWorking, targets.districtCount, runSeed);
+      const seeds = chooseSeeds(items, targets.districtCount, runSeed);
 
       for (let i = 0; i < districts.length; i++) {
         const district = districts[i];
-        const seedCell = seeds[i] || cellsWorking[i] || null;
-        if (!seedCell) continue;
+        const seedItem = seeds[i] || items[i] || null;
+        district.seed = seedItem;
 
-        district.seedCellId = seedCell.id;
-        assignCellToDistrict(seedCell, district);
+        if (seedItem) {
+          district.members.push(seedItem);
+          district.group1 += seedItem.group === 1 ? 1 : 0;
+          district.group2 += seedItem.group === 2 ? 1 : 0;
+          district.total += 1;
+          updateDistrictCentroid(district);
+          seedItem._assignedDistrict = district.id;
+        }
       }
 
-      let unassignedExists = true;
-      let guard = 0;
+      const remaining = items.filter(item => item._assignedDistrict == null);
 
-      while (unassignedExists && guard < 100000) {
-        guard++;
-        unassignedExists = cellsWorking.some(c => c.assignedDistrict === null);
-        if (!unassignedExists) break;
+      const orderedRemaining = seededShuffle(remaining, runSeed + 909);
 
-        let progress = false;
+      for (const item of orderedRemaining) {
+        let bestDistrict = null;
+        let bestScore = Infinity;
 
-        const districtOrder = seededShuffle(districts, runSeed + guard);
-
-        for (const district of districtOrder) {
-          const frontier = getFrontierCells(district);
-          if (!frontier.length) continue;
-
-          let bestCell = null;
-          let bestScore = Infinity;
-
-          for (const cell of frontier) {
-            const score = scoreCellForDistrict(cell, district);
-            if (score < bestScore) {
-              bestScore = score;
-              bestCell = cell;
-            }
-          }
-
-          if (bestCell) {
-            assignCellToDistrict(bestCell, district);
-            progress = true;
+        for (const district of districts) {
+          const score = computePointScore(item, district, 1.6);
+          if (score < bestScore) {
+            bestScore = score;
+            bestDistrict = district;
           }
         }
 
-        if (!progress) {
-          const leftovers = cellsWorking.filter(c => c.assignedDistrict === null);
-          for (const cell of leftovers) {
-            let bestDistrict = null;
-            let bestScore = Infinity;
+        bestDistrict.members.push(item);
+        bestDistrict.group1 += item.group === 1 ? 1 : 0;
+        bestDistrict.group2 += item.group === 2 ? 1 : 0;
+        bestDistrict.total += 1;
+        item._assignedDistrict = bestDistrict.id;
+        updateDistrictCentroid(bestDistrict);
+      }
 
-            for (const district of districts) {
-              const score = scoreCellForDistrict(cell, district);
-              if (score < bestScore) {
-                bestScore = score;
-                bestDistrict = district;
+      return districts;
+    }
+
+    function rebalanceDistricts(districts, targets) {
+      let improved = true;
+      let passCount = 0;
+
+      while (improved && passCount < 12) {
+        improved = false;
+        passCount++;
+
+        for (const district of districts) {
+          for (const other of districts) {
+            if (district.id === other.id) continue;
+
+            const districtOver =
+              (district.group1 > district.xTarget) ||
+              (district.group2 > district.yTarget) ||
+              (district.total > district.sTarget);
+
+            const otherUnder =
+              (other.group1 < other.xTarget) ||
+              (other.group2 < other.yTarget) ||
+              (other.total < other.sTarget);
+
+            if (!districtOver || !otherUnder) continue;
+
+            let bestMoveIndex = -1;
+            let bestMoveScore = Infinity;
+
+            for (let i = 0; i < district.members.length; i++) {
+              const item = district.members[i];
+
+              const couldHelp =
+                (item.group === 1 && other.group1 < other.xTarget) ||
+                (item.group === 2 && other.group2 < other.yTarget) ||
+                (other.total < other.sTarget);
+
+              if (!couldHelp) continue;
+
+              const coords = item.feature.geometry.coordinates;
+              const d1 =
+                district.centroidLng == null
+                  ? 0
+                  : Math.sqrt(
+                      Math.pow(coords[0] - district.centroidLng, 2) +
+                      Math.pow(coords[1] - district.centroidLat, 2)
+                    );
+
+              const d2 =
+                other.centroidLng == null
+                  ? 0
+                  : Math.sqrt(
+                      Math.pow(coords[0] - other.centroidLng, 2) +
+                      Math.pow(coords[1] - other.centroidLat, 2)
+                    );
+
+              const moveScore = d2 - d1;
+              if (moveScore < bestMoveScore) {
+                bestMoveScore = moveScore;
+                bestMoveIndex = i;
               }
             }
 
-            if (bestDistrict) {
-              assignCellToDistrict(cell, bestDistrict);
+            if (bestMoveIndex >= 0) {
+              const [item] = district.members.splice(bestMoveIndex, 1);
+
+              district.group1 -= item.group === 1 ? 1 : 0;
+              district.group2 -= item.group === 2 ? 1 : 0;
+              district.total -= 1;
+
+              other.members.push(item);
+              other.group1 += item.group === 1 ? 1 : 0;
+              other.group2 += item.group === 2 ? 1 : 0;
+              other.total += 1;
+
+              item._assignedDistrict = other.id;
+
+              updateDistrictCentroid(district);
+              updateDistrictCentroid(other);
+
+              improved = true;
             }
           }
         }
@@ -1111,32 +1072,15 @@
       return districts;
     }
 
-    function buildDistrictPolygons(districts) {
-      const districtFeatures = [];
-
-      for (const district of districts) {
-        const districtCells = cellsWorking.filter(c => c.assignedDistrict === district.id);
-        if (!districtCells.length) continue;
-
-        let merged = districtCells[0].feature;
-
-        for (let i = 1; i < districtCells.length; i++) {
-          try {
-            const mergedTry = turf.union(merged, districtCells[i].feature);
-            if (mergedTry) {
-              merged = mergedTry;
-            }
-          } catch (err) {
-            console.warn("Union failed for district", district.id + 1, err);
-          }
-        }
-
-        merged.properties = merged.properties || {};
-        merged.properties.districtId = district.id;
-        districtFeatures.push(merged);
+    function generateDistricts(filteredItems, targets, runSeed) {
+      for (const item of filteredItems) {
+        item._assignedDistrict = null;
       }
 
-      return districtFeatures;
+      let districts = assignBySeeds(filteredItems, targets, runSeed);
+      districts = rebalanceDistricts(districts, targets);
+
+      return districts;
     }
 
     function removeDistrictLayers() {
@@ -1145,79 +1089,108 @@
         filteredLayerGroup = null;
       }
 
-      if (districtPolygonLayerGroup) {
-        map.removeLayer(districtPolygonLayerGroup);
-        districtPolygonLayerGroup = null;
+      if (districtHullLayerGroup) {
+        map.removeLayer(districtHullLayerGroup);
+        districtHullLayerGroup = null;
       }
     }
 
+    
     function addDistrictLayers(districts) {
-      removeDistrictLayers();
+  removeDistrictLayers();
 
-      const polygonLayers = [];
-      const pointLayers = [];
+  const pointLayers = [];
+  const polygonLayers = [];
 
-      const districtPolygons = buildDistrictPolygons(districts);
+  const seedFeatures = [];
 
-      for (const poly of districtPolygons) {
-        const districtId = poly.properties.districtId;
-        const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+  for (const district of districts) {
+    if (district.centroidLng == null || district.centroidLat == null) continue;
 
-        polygonLayers.push(
-          L.geoJSON(poly, {
-            style: {
-              color,
-              weight: 2,
-              fillColor: color,
-              fillOpacity: 0.18
-            }
-          })
-        );
-      }
+    seedFeatures.push(
+      turf.point([district.centroidLng, district.centroidLat], {
+        districtId: district.id
+      })
+    );
+  }
 
-      for (const district of districts) {
-        const color = DISTRICT_COLORS[district.id % DISTRICT_COLORS.length];
-        const districtMembers = currentFiltered.filter(item => {
-          const cell = cellsWorking.find(c => c.id === item.cellId);
-          return cell && cell.assignedDistrict === district.id;
-        });
+  const wardBbox = turf.bbox(wardData);
 
-        const fc = {
-          type: "FeatureCollection",
-          features: districtMembers.map(m => m.feature)
-        };
-
-        pointLayers.push(
-          L.geoJSON(fc, {
-            pointToLayer: function(feature, latlng) {
-              return L.circleMarker(latlng, {
-                radius: feature.properties._group === 1 ? 6 : 5,
-                color: "#ffffff",
-                weight: 1.2,
-                fillColor: color,
-                fillOpacity: 1
-              });
-            },
-            onEachFeature: function(feature, layer) {
-              const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
-              layer.bindPopup(makeMemberPopup(feature, groupLabel, `District ${district.id + 1}`));
-            }
-          })
-        );
-      }
-
-      districtPolygonLayerGroup = L.layerGroup(polygonLayers).addTo(map);
-      filteredLayerGroup = L.layerGroup(pointLayers).addTo(map);
+  const voronoi = turf.voronoi(
+    turf.featureCollection(seedFeatures),
+    {
+      bbox: wardBbox
     }
+  );
 
-    function renderGerrySummary(districts) {
+  if (voronoi && voronoi.features) {
+    for (const cell of voronoi.features) {
+      if (!cell) continue;
+
+      const districtId = cell.properties.districtId;
+      const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+
+      for (const wardPoly of wardPolygonFeatures) {
+        try {
+          const clipped = turf.intersect(cell, wardPoly);
+
+          if (clipped) {
+            const polyLayer = L.geoJSON(clipped, {
+              style: {
+                color,
+                weight: 2,
+                fillColor: color,
+                fillOpacity: 0.12
+              }
+            });
+
+            polygonLayers.push(polyLayer);
+          }
+        } catch (err) {
+          console.warn("Voronoi clip failed", err);
+        }
+      }
+    }
+  }
+
+  for (const district of districts) {
+    const color = DISTRICT_COLORS[district.id % DISTRICT_COLORS.length];
+
+    const fc = {
+      type: "FeatureCollection",
+      features: district.members.map(m => m.feature)
+    };
+
+    const pointLayer = L.geoJSON(fc, {
+      pointToLayer: function(feature, latlng) {
+        return L.circleMarker(latlng, {
+          radius: feature.properties._group === 1 ? 6 : 5,
+          color: "#ffffff",
+          weight: 1.2,
+          fillColor: color,
+          fillOpacity: 1
+        });
+      },
+      onEachFeature: function(feature, layer) {
+        const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
+        layer.bindPopup(makeMemberPopup(feature, groupLabel, `District ${district.id + 1}`));
+      }
+    });
+
+    pointLayers.push(pointLayer);
+  }
+
+  districtHullLayerGroup = L.layerGroup(polygonLayers).addTo(map);
+  filteredLayerGroup = L.layerGroup(pointLayers).addTo(map);
+}   
+    function renderGerrySummary(districts, targets) {
       resetGerrySummary();
 
       const intro = document.createElement("div");
       intro.className = "district-row";
       intro.innerHTML = `
-        <strong>Generated full-coverage cell-based districts</strong><br>
-        Each district is built from ward cells, so districts fill the ward and do not overlap.
+        <strong>Generated provisional seeded districts</strong><br>
+        These are balanced by point counts and can be regenerated with a different seed arrangement.
       `;
       gerrySummary.appendChild(intro);
 
@@ -1240,8 +1213,49 @@
       }
     }
 
+    function runGerrymander() {
+      if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
+        setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
+        return;
+      }
+
+      gerrymanderRunCount++;
+      const runSeed = Date.now() + gerrymanderRunCount * 99991;
+
+      const districts = generateDistricts(
+        currentFiltered.map(item => ({
+          feature: JSON.parse(JSON.stringify(item.feature)),
+          group: item.group
+        })),
+        currentDistrictTargets,
+        runSeed
+      );
+
+      currentDistrictResult = districts;
+      addDistrictLayers(districts);
+      renderGerrySummary(districts, currentDistrictTargets);
+
+      if (allMembersLayer) {
+        allMembersLayer.setStyle({
+          radius: 3,
+          color: "#ffffff",
+          weight: 0.7,
+          fillColor: "#cc3344",
+          fillOpacity: 0.08,
+          opacity: 0.14
+        });
+      }
+
+      regerrymanderBtn.disabled = false;
+      setStatus(
+        gerryStatus,
+        `Generated ${districts.length} provisional seeded districts. Click Re-gerrymander to try a different layout.`,
+        "good"
+      );
+    }
+
     function runFilter() {
-      if (!membersData || !wardPolygonFeatures.length || !cellsWorking.length) {
+      if (!membersData || !wardPolygonFeatures.length) {
         setStatus(filterStatus, "Data is not ready yet.", "error");
         return;
       }
@@ -1292,15 +1306,13 @@
 
         filteredItems.push({
           feature: cloned,
-          group,
-          cellId: null
+          group
         });
       }
 
       currentFiltered = filteredItems;
-      recountCellsForFilteredMembers(currentFiltered);
-
       currentStats = computeStats(filteredItems, outsideWardExcluded);
+
       updateMetricCards(currentStats);
 
       if (allMembersLayer) {
@@ -1356,41 +1368,7 @@
         : "Targets computed successfully.";
 
       setStatus(districtStatus, note, "good");
-      setStatus(gerryStatus, "Click Gerrymander Districts to generate cell-based districts.", "good");
-    }
-
-    function runGerrymander() {
-      if (!currentFiltered.length || !currentStats || !currentDistrictTargets || !cellsWorking.length) {
-        setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
-        return;
-      }
-
-      gerrymanderRunCount++;
-      const runSeed = Date.now() + gerrymanderRunCount * 99991;
-
-      const districts = growDistrictsByCells(currentDistrictTargets, runSeed);
-      currentDistrictResult = districts;
-
-      addDistrictLayers(districts);
-      renderGerrySummary(districts);
-
-      if (allMembersLayer) {
-        allMembersLayer.setStyle({
-          radius: 3,
-          color: "#ffffff",
-          weight: 0.7,
-          fillColor: "#cc3344",
-          fillOpacity: 0.08,
-          opacity: 0.14
-        });
-      }
-
-      regerrymanderBtn.disabled = false;
-      setStatus(
-        gerryStatus,
-        `Generated ${districts.length} full-coverage cell-based districts. Click Re-gerrymander to try a different layout.`,
-        "good"
-      );
+      setStatus(gerryStatus, "Click Gerrymander Districts to generate seeded districts.", "good");
     }
 
     function resetPage() {
@@ -1399,13 +1377,6 @@
       currentDistrictTargets = null;
       currentDistrictResult = null;
       gerrymanderRunCount = 0;
-
-      for (const cell of cellsWorking) {
-        cell.group1 = 0;
-        cell.group2 = 0;
-        cell.total = 0;
-        cell.assignedDistrict = null;
-      }
 
       clearMetricCards();
       resetDistrictSummary();
@@ -1452,37 +1423,31 @@
       setStatus(loadStatus, "Loading data...");
 
       try {
-        const [wardResponse, membersResponse, networkResponse, cellsResponse] = await Promise.all([
+        const [wardResponse, membersResponse, networkResponse] = await Promise.all([
           fetch(WARD_URL),
           fetch(MEMBERS_URL),
-          fetch(NETWORK_URL),
-          fetch(CELLS_URL)
+          fetch(NETWORK_URL)
         ]);
 
         if (!wardResponse.ok) throw new Error(`Ward boundary failed to load: ${wardResponse.status}`);
         if (!membersResponse.ok) throw new Error(`Member locations failed to load: ${membersResponse.status}`);
         if (!networkResponse.ok) throw new Error(`Network failed to load: ${networkResponse.status}`);
-        if (!cellsResponse.ok) throw new Error(`Cells failed to load: ${cellsResponse.status}`);
 
         wardData = await wardResponse.json();
         membersData = await membersResponse.json();
         networkData = await networkResponse.json();
-        cellsData = await cellsResponse.json();
 
         wardPolygonFeatures = (wardData.features || []).filter(isPolygonLike);
         if (!wardPolygonFeatures.length) {
           throw new Error("No polygon features were found in the ward boundary GeoJSON.");
         }
 
-        prepareCellsWorkingSet();
-        buildCellAdjacency();
-
         wardLayer = L.geoJSON(wardData, {
           style: function() {
             return {
               color: "#0f766e",
               weight: 3,
-              fillOpacity: 0,
+              fillOpacity: 0
               opacity: 1
             };
           }
@@ -1517,7 +1482,6 @@
         chkWardLoaded.checked = true;
         chkMembersLoaded.checked = true;
         chkNetworkLoaded.checked = true;
-        chkCellsLoaded.checked = true;
 
         setStatus(loadStatus, "All layers loaded successfully.", "good");
         fitMapToWard();
