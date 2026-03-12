@@ -1051,6 +1051,7 @@
       currentDistrictResult = null;
       currentPointDistricts = null;
       currentLineFeatures = null;
+      currentClaimResult = null;
       regerrymanderBtn.disabled = true;
       gerrymanderBtn.disabled = true;
       connectLinesBtn.disabled = true;
@@ -1530,9 +1531,9 @@ function claimCellsFromLines() {
           }
         }
       ).addTo(map);
-
+      currentClaimResult = result;
       currentDistrictResult = result;
-
+      expandCellsBtn.disabled = false; 
       resetGerrySummary();
 
       const intro = document.createElement("div");
