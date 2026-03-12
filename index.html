@@ -812,23 +812,41 @@
         cell.occupiedByDistricts = districtIds.slice();
 
         if (districtIds.length === 1) {
-          const districtId = districtIds[0];
-          const clone = JSON.parse(JSON.stringify(cell.feature));
-          clone.properties = { ...(clone.properties || {}), _district: districtId, _pieceType: "full-cell" };
-          fillFeatures.push(clone);
-          districtSeedCells.get(districtId).add(cell.id);
-          seedQueue.push({ districtId, cellId: cell.id });
-        } else {
-          const pieces = splitMixedCell(cell, cell.pointMembers);
-          for (const piece of pieces) {
-            const clone = JSON.parse(JSON.stringify(piece.feature));
-            clone.properties = { ...(clone.properties || {}), _district: piece.districtId, _pieceType: "mixed-piece", _parentCell: cell.id };
-            fillFeatures.push(clone);
-            districtSeedCells.get(piece.districtId).add(cell.id);
-            seedQueue.push({ districtId: piece.districtId, cellId: cell.id });
-          }
-        }
-      }
+  const districtId = districtIds[0];
+  const clone = JSON.parse(JSON.stringify(cell.feature));
+  clone.properties = {
+    ...(clone.properties || {}),
+    _district: districtId,
+    _pieceType: "full-cell"
+  };
+  fillFeatures.push(clone);
+
+  if (!districtSeedCells.has(districtId)) {
+    districtSeedCells.set(districtId, new Set());
+  }
+  districtSeedCells.get(districtId).add(cell.id);
+
+  seedQueue.push({ districtId, cellId: cell.id });
+} else {
+  const pieces = splitMixedCell(cell, cell.pointMembers);
+  for (const piece of pieces) {
+    const clone = JSON.parse(JSON.stringify(piece.feature));
+    clone.properties = {
+      ...(clone.properties || {}),
+      _district: piece.districtId,
+      _pieceType: "mixed-piece",
+      _parentCell: cell.id
+    };
+    fillFeatures.push(clone);
+
+    if (!districtSeedCells.has(piece.districtId)) {
+      districtSeedCells.set(piece.districtId, new Set());
+    }
+    districtSeedCells.get(piece.districtId).add(cell.id);
+
+    seedQueue.push({ districtId: piece.districtId, cellId: cell.id });
+  }
+}
 
       const owner = new Map();
       const queue = seededShuffle(seedQueue, 12345);
