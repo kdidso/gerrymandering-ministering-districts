@@ -227,7 +227,6 @@
     let wardLayer = null;
     let cellsOutlineLayer = null;
     let allMembersLayer = null;
-    let filteredPreviewLayer = null;
     let filteredLayerGroup = null;
     let districtFillLayer = null;
     let districtOutlineLayer = null;
@@ -396,6 +395,119 @@
         const bbox = turf.bbox(feature);
         cellsWorking.push({ id: getCellId(feature, index), feature, area, bbox, centroidLng: centroid[0], centroidLat: centroid[1], pointMembers: [], pieces: [] });
       });
+    }
+
+
+    function buildCellAdjacencyFast(cells) {
+      const adjacency = {};
+      const buckets = new Map();
+      const cellIdsByBucket = new Map();
+
+      if (!cells.length) return adjacency;
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const cell of cells) {
+        adjacency[cell.id] = [];
+        minX = Math.min(minX, cell.bbox[0]);
+        minY = Math.min(minY, cell.bbox[1]);
+        maxX = Math.max(maxX, cell.bbox[2]);
+        maxY = Math.max(maxY, cell.bbox[3]);
+      }
+
+      const count = cells.length;
+      const gridSize = Math.max(8, Math.min(60, Math.ceil(Math.sqrt(count) / 2)));
+      const cellWidth = Math.max((maxX - minX) / gridSize, 0.00001);
+      const cellHeight = Math.max((maxY - minY) / gridSize, 0.00001);
+
+      function bucketKey(ix, iy) {
+        return `${ix}|${iy}`;
+      }
+
+      for (const cell of cells) {
+        const startX = Math.floor((cell.bbox[0] - minX) / cellWidth);
+        const endX = Math.floor((cell.bbox[2] - minX) / cellWidth);
+        const startY = Math.floor((cell.bbox[1] - minY) / cellHeight);
+        const endY = Math.floor((cell.bbox[3] - minY) / cellHeight);
+
+        for (let ix = startX; ix <= endX; ix++) {
+          for (let iy = startY; iy <= endY; iy++) {
+            const key = bucketKey(ix, iy);
+            if (!cellIdsByBucket.has(key)) cellIdsByBucket.set(key, []);
+            cellIdsByBucket.get(key).push(cell.id);
+          }
+        }
+      }
+
+      const seenPairs = new Set();
+
+      for (const ids of cellIdsByBucket.values()) {
+        for (let i = 0; i < ids.length; i++) {
+          for (let j = i + 1; j < ids.length; j++) {
+            const aId = ids[i];
+            const bId = ids[j];
+            const pairKey = aId < bId ? `${aId}__${bId}` : `${bId}__${aId}`;
+            if (seenPairs.has(pairKey)) continue;
+            seenPairs.add(pairKey);
+
+            const a = cellLookup.get(String(aId));
+            const b = cellLookup.get(String(bId));
+            if (!a || !b) continue;
+            if (a.bbox[2] < b.bbox[0] || a.bbox[0] > b.bbox[2] || a.bbox[3] < b.bbox[1] || a.bbox[1] > b.bbox[3]) continue;
+
+            let touches = false;
+            try { touches = turf.booleanIntersects(a.feature, b.feature); } catch (err) { touches = false; }
+            if (touches) {
+              adjacency[a.id].push(b.id);
+              adjacency[b.id].push(a.id);
+            }
+          }
+        }
+      }
+
+      return adjacency;
+    }
+
+    function buildPieceAdjacencyFast(pieces) {
+      const byParentCell = new Map();
+      const pieceMap = new Map();
+
+      for (const piece of pieces) {
+        piece.neighbors = new Set();
+        pieceMap.set(piece.id, piece);
+        if (!byParentCell.has(piece.parentCellId)) byParentCell.set(piece.parentCellId, []);
+        byParentCell.get(piece.parentCellId).push(piece);
+      }
+
+      for (const siblings of byParentCell.values()) {
+        for (let i = 0; i < siblings.length; i++) {
+          for (let j = i + 1; j < siblings.length; j++) {
+            siblings[i].neighbors.add(siblings[j].id);
+            siblings[j].neighbors.add(siblings[i].id);
+          }
+        }
+      }
+
+      for (const piece of pieces) {
+        const neighborCellIds = cellAdjacency[piece.parentCellId] || [];
+        const candidatePieces = [];
+
+        for (const neighborCellId of neighborCellIds) {
+          const neighborPieces = byParentCell.get(String(neighborCellId)) || byParentCell.get(neighborCellId) || [];
+          for (const np of neighborPieces) candidatePieces.push(np);
+        }
+
+        for (const other of candidatePieces) {
+          if (!other || other.id === piece.id) continue;
+          if (piece.bbox[2] < other.bbox[0] || piece.bbox[0] > other.bbox[2] || piece.bbox[3] < other.bbox[1] || piece.bbox[1] > other.bbox[3]) continue;
+
+          let touches = false;
+          try { touches = turf.booleanIntersects(piece.feature, other.feature); } catch (err) { touches = false; }
+          if (touches) {
+            piece.neighbors.add(other.id);
+            other.neighbors.add(piece.id);
+          }
+        }
+      }
     }
 
     function pointInBBox(coords, bbox) {
@@ -604,23 +716,6 @@
       return pieces;
     }
 
-    function buildPieceAdjacency(pieces) {
-      for (const piece of pieces) piece.neighbors = new Set();
-      for (let i = 0; i < pieces.length; i++) {
-        for (let j = i + 1; j < pieces.length; j++) {
-          const a = pieces[i];
-          const b = pieces[j];
-          if (a.bbox[2] < b.bbox[0] || a.bbox[0] > b.bbox[2] || a.bbox[3] < b.bbox[1] || a.bbox[1] > b.bbox[3]) continue;
-          let touches = false;
-          try { touches = turf.booleanIntersects(a.feature, b.feature); } catch (err) { touches = false; }
-          if (touches) {
-            a.neighbors.add(b.id);
-            b.neighbors.add(a.id);
-          }
-        }
-      }
-    }
-
     function seedPieceDistricts(pointDistricts, pieces) {
       const pieceMap = new Map(pieces.map(p => [p.id, p]));
       const districts = pointDistricts.map(d => ({ id: d.id, xTarget: d.xTarget, yTarget: d.yTarget, sTarget: d.sTarget, pieceIds: new Set(), group1: 0, group2: 0, total: 0 }));
@@ -747,23 +842,10 @@
     }
 
     function removeDistrictLayers() {
-  if (filteredPreviewLayer) {
-    map.removeLayer(filteredPreviewLayer);
-    filteredPreviewLayer = null;
-  }
-  if (filteredLayerGroup) {
-    map.removeLayer(filteredLayerGroup);
-    filteredLayerGroup = null;
-  }
-  if (districtFillLayer) {
-    map.removeLayer(districtFillLayer);
-    districtFillLayer = null;
-  }
-  if (districtOutlineLayer) {
-    map.removeLayer(districtOutlineLayer);
-    districtOutlineLayer = null;
-  }
-}
+      if (filteredLayerGroup) { map.removeLayer(filteredLayerGroup); filteredLayerGroup = null; }
+      if (districtFillLayer) { map.removeLayer(districtFillLayer); districtFillLayer = null; }
+      if (districtOutlineLayer) { map.removeLayer(districtOutlineLayer); districtOutlineLayer = null; }
+    }
 
     function unionFeatures(features) {
       if (!features.length) return null;
@@ -859,42 +941,6 @@
       }
     }
 
-    function showFilteredPreview(filteredItems) {
-  if (filteredPreviewLayer) {
-    map.removeLayer(filteredPreviewLayer);
-    filteredPreviewLayer = null;
-  }
-
-  const features = filteredItems.map(item => {
-    const clone = JSON.parse(JSON.stringify(item.feature));
-    clone.properties = clone.properties || {};
-    clone.properties._group = item.group;
-    return clone;
-  });
-
-  filteredPreviewLayer = L.geoJSON(
-    { type: "FeatureCollection", features },
-    {
-      pointToLayer: (feature, latlng) => {
-        const group = feature.properties._group;
-        const color = group === 1 ? "#d97706" : "#2563eb";
-
-        return L.circleMarker(latlng, {
-          radius: group === 1 ? 8 : 7,
-          color: "#ffffff",
-          weight: 2.2,
-          fillColor: color,
-          fillOpacity: 1,
-          opacity: 1
-        });
-      },
-      onEachFeature: (feature, layer) => {
-        const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
-        layer.bindPopup(makeMemberPopup(feature, groupLabel));
-      }
-    }
-  ).addTo(map);
-}
     function runFilter() {
       if (!membersData || !wardPolygonFeatures.length || !cellsWorking.length) {
         setStatus(filterStatus, "Data is not ready yet.", "error");
@@ -940,11 +986,9 @@
       currentStats = computeStats(filteredItems, outsideWardExcluded);
       updateMetricCards(currentStats);
 
-      if (allMembersLayer && map.hasLayer(allMembersLayer)) {
-  map.removeLayer(allMembersLayer);
-}
-
-showFilteredPreview(filteredItems);
+      if (allMembersLayer) {
+        allMembersLayer.setStyle({ radius: 5.5, color: "#ffffff", weight: 1.4, fillColor: "#cc3344", fillOpacity: 0.78, opacity: 1 });
+      }
 
       calcDistrictBtn.disabled = false;
       districtCountSelect.disabled = false;
@@ -978,65 +1022,50 @@ showFilteredPreview(filteredItems);
       setStatus(gerryStatus, "Click Gerrymander Districts to generate cell-based districts.", "good");
     }
 
-    function runGerrymander() {
+    async function runGerrymander() {
       if (!currentFiltered.length || !currentStats || !currentDistrictTargets) { setStatus(gerryStatus, "Run filter and calculate targets first.", "warn"); return; }
+      setStatus(gerryStatus, "Working on districts...", "warn");
+      await new Promise(requestAnimationFrame);
       gerrymanderRunCount++;
       const runSeed = Date.now() + gerrymanderRunCount * 99991;
       const pointDistricts = gerrymanderPoints(currentFiltered, currentDistrictTargets, runSeed);
       const pieces = buildCellPieces(pointDistricts);
-      buildPieceAdjacency(pieces);
+      buildPieceAdjacencyFast(pieces);
       growDistrictsAcrossPieces(pointDistricts, pieces, runSeed);
       smoothHoleLikePieces(pieces);
       currentDistrictResult = { pointDistricts, pieces };
-      if (filteredPreviewLayer) {
-      map.removeLayer(filteredPreviewLayer);
-      filteredPreviewLayer = null;
-}
       addDistrictLayers(pointDistricts, pieces);
-      renderGerrySummary(pointDistricts, pieces)
+      renderGerrySummary(pointDistricts, pieces);
+      if (allMembersLayer) {
+        allMembersLayer.setStyle({ radius: 5.2, color: "#ffffff", weight: 1.2, fillColor: "#cc3344", fillOpacity: 0.40, opacity: 0.9 });
+      }
       regerrymanderBtn.disabled = false;
       setStatus(gerryStatus, `Generated ${pointDistricts.length} full-coverage districts from ward cells. Click Re-gerrymander to try a different layout.`, "good");
     }
 
     function resetPage() {
-  currentFiltered = [];
-  currentStats = null;
-  currentDistrictTargets = null;
-  currentDistrictResult = null;
-  gerrymanderRunCount = 0;
-
-  clearMetricCards();
-  resetDistrictSummary();
-  resetGerrySummary();
-  removeDistrictLayers();
-
-  if (allMembersLayer && !map.hasLayer(allMembersLayer)) {
-    allMembersLayer.addTo(map);
-  }
-
-  if (allMembersLayer) {
-    allMembersLayer.setStyle({
-      radius: 5.5,
-      color: "#ffffff",
-      weight: 1.4,
-      fillColor: "#cc3344",
-      fillOpacity: 0.78,
-      opacity: 1
-    });
-  }
-
-  calcDistrictBtn.disabled = true;
-  districtCountSelect.disabled = true;
-  zoomFilteredBtn.disabled = true;
-  gerrymanderBtn.disabled = true;
-  regerrymanderBtn.disabled = true;
-
-  setStatus(filterStatus, "Choose a gender and click Run Filter.");
-  setStatus(districtStatus, "Run the filter first.");
-  setStatus(gerryStatus, "Calculate targets first.");
-
-  fitMapToWard();
-}
+      currentFiltered = [];
+      currentStats = null;
+      currentDistrictTargets = null;
+      currentDistrictResult = null;
+      gerrymanderRunCount = 0;
+      clearMetricCards();
+      resetDistrictSummary();
+      resetGerrySummary();
+      removeDistrictLayers();
+      if (allMembersLayer) {
+        allMembersLayer.setStyle({ radius: 5.5, color: "#ffffff", weight: 1.4, fillColor: "#cc3344", fillOpacity: 0.78, opacity: 1 });
+      }
+      calcDistrictBtn.disabled = true;
+      districtCountSelect.disabled = true;
+      zoomFilteredBtn.disabled = true;
+      gerrymanderBtn.disabled = true;
+      regerrymanderBtn.disabled = true;
+      setStatus(filterStatus, "Choose a gender and click Run Filter.");
+      setStatus(districtStatus, "Run the filter first.");
+      setStatus(gerryStatus, "Calculate targets first.");
+      fitMapToWard();
+    }
 
     function initMap() {
       map = L.map("map", { zoomControl: true });
@@ -1058,6 +1087,7 @@ showFilteredPreview(filteredItems);
         if (!wardPolygonFeatures.length) throw new Error("No polygon features were found in the ward boundary GeoJSON.");
         wardArea = computeWardArea();
         prepareCellsWorkingSet();
+        cellAdjacency = buildCellAdjacencyFast(cellsWorking);
 
         wardLayer = L.geoJSON(wardData, { style: () => ({ color: "#0f766e", weight: 3, fillOpacity: 0, opacity: 1 }) }).addTo(map);
         cellsOutlineLayer = L.geoJSON(cellsData, { style: () => ({ color: "#64748b", weight: 0.8, opacity: 0.28, fillOpacity: 0 }) }).addTo(map);
