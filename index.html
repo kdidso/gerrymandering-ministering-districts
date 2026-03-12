@@ -256,6 +256,7 @@
     let cellsOutlineLayer = null;
     let districtFillLayer = null;
     let districtPointLayer = null;
+    let districtBoundaryLayer = null;
 
     let currentFiltered = [];
     let currentStats = null;
@@ -739,6 +740,10 @@
     map.removeLayer(districtPointLayer);
     districtPointLayer = null;
   }
+  if (districtBoundaryLayer) {
+    map.removeLayer(districtBoundaryLayer);
+    districtBoundaryLayer = null;
+  }
 }
 
     function splitMixedCell(cell, pointItems) {
@@ -888,58 +893,111 @@
 
   return { fillFeatures, districtPointFeatures };
 }
+ function unionFeatures(features) {
+  if (!features.length) return null;
+
+  let merged = JSON.parse(JSON.stringify(features[0]));
+
+  for (let i = 1; i < features.length; i++) {
+    try {
+      const unioned = turf.union(merged, features[i]);
+      if (unioned) {
+        merged = unioned;
+      }
+    } catch (err) {
+      console.warn("Union failed for district boundary build.", err);
+    }
+  }
+
+  return merged;
+}   
 
     function addDistrictLayers(pointDistricts, polygonResult) {
-      removeDistrictLayers();
+  removeDistrictLayers();
 
-      districtFillLayer = L.geoJSON(
-        { type: "FeatureCollection", features: polygonResult.fillFeatures },
-        {
-          style: function(feature) {
-            const districtId = feature.properties._district;
-            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
-            return {
-              color: color,
-              weight: feature.properties._pieceType === "mixed-piece" ? 1 : 0,
-              opacity: feature.properties._pieceType === "mixed-piece" ? 0.9 : 0,
-              fillColor: color,
-              fillOpacity: 0.20
-            };
-          }
-        }
-      ).addTo(map);
-
-      districtPointLayer = L.geoJSON(
-        {
-          type: "FeatureCollection",
-          features: polygonResult.districtPointFeatures.map(item => {
-            const clone = JSON.parse(JSON.stringify(item.feature));
-            clone.properties = clone.properties || {};
-            clone.properties._group = item.group;
-            clone.properties._district = item.districtId;
-            return clone;
-          })
-        },
-        {
-          pointToLayer: function(feature, latlng) {
-            const districtId = feature.properties._district;
-            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
-            return L.circleMarker(latlng, {
-              radius: feature.properties._group === 1 ? 8 : 7,
-              color: "#ffffff",
-              weight: 2,
-              fillColor: color,
-              fillOpacity: 1,
-              opacity: 1
-            });
-          },
-          onEachFeature: function(feature, layer) {
-            const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
-            layer.bindPopup(makeMemberPopup(feature, groupLabel, `District ${feature.properties._district + 1}`));
-          }
-        }
-      ).addTo(map);
+  districtFillLayer = L.geoJSON(
+    { type: "FeatureCollection", features: polygonResult.fillFeatures },
+    {
+      style: function(feature) {
+        const districtId = feature.properties._district;
+        const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+        return {
+          color: feature.properties._pieceType === "mixed-piece" ? color : color,
+          weight: feature.properties._pieceType === "mixed-piece" ? 1 : 0,
+          opacity: feature.properties._pieceType === "mixed-piece" ? 0.95 : 0,
+          fillColor: color,
+          fillOpacity: 0.22
+        };
+      }
     }
+  ).addTo(map);
+
+  const dissolvedDistrictFeatures = [];
+
+  for (const district of pointDistricts) {
+    const districtFeatures = polygonResult.fillFeatures
+      .filter(f => f.properties && f.properties._district === district.id)
+      .map(f => JSON.parse(JSON.stringify(f)));
+
+    if (!districtFeatures.length) continue;
+
+    const merged = unionFeatures(districtFeatures);
+    if (!merged) continue;
+
+    merged.properties = {
+      _district: district.id
+    };
+
+    dissolvedDistrictFeatures.push(merged);
+  }
+
+  districtBoundaryLayer = L.geoJSON(
+    { type: "FeatureCollection", features: dissolvedDistrictFeatures },
+    {
+      style: function(feature) {
+        const districtId = feature.properties._district;
+        const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+        return {
+          color: color,
+          weight: 3,
+          opacity: 1,
+          fillOpacity: 0
+        };
+      }
+    }
+  ).addTo(map);
+
+  districtPointLayer = L.geoJSON(
+    {
+      type: "FeatureCollection",
+      features: polygonResult.districtPointFeatures.map(item => {
+        const clone = JSON.parse(JSON.stringify(item.feature));
+        clone.properties = clone.properties || {};
+        clone.properties._group = item.group;
+        clone.properties._district = item.districtId;
+        return clone;
+      })
+    },
+    {
+      pointToLayer: function(feature, latlng) {
+        const districtId = feature.properties._district;
+        const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+        return L.circleMarker(latlng, {
+          radius: feature.properties._group === 1 ? 8 : 7,
+          color: "#ffffff",
+          weight: 2,
+          fillColor: color,
+          fillOpacity: 1,
+          opacity: 1
+        });
+      },
+      onEachFeature: function(feature, layer) {
+        const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
+        layer.bindPopup(makeMemberPopup(feature, groupLabel, `District ${feature.properties._district + 1}`));
+      }
+    }
+  ).addTo(map);
+}
 
     function renderGerrySummary(districts) {
       resetGerrySummary();
