@@ -7,15 +7,20 @@
 
   <link
     rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
   />
-  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    crossorigin=""
+  ></script>
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
 
   <style>
     :root {
       --bg: #f5f7fb;
       --panel: #ffffff;
+      --panel-soft: #f8fafc;
       --border: #d9dfeb;
       --text: #1c2430;
       --muted: #5f6b7a;
@@ -23,44 +28,350 @@
       --accent-dark: #1557b0;
       --success: #1f883d;
       --warning: #9a6700;
-      --danger: #b42318;
-      --group1: #d97706;
-      --group2: #2563eb;
-      --ward: #0f766e;
-      --network: #6b7280;
-      --rawpoints: #cc3344;
+      --danger: #cf222e;
+      --shadow: 0 8px 28px rgba(27, 39, 51, 0.08);
+      --radius: 14px;
     }
 
     * {
       box-sizing: border-box;
     }
 
-    html, body {
+    html,
+    body {
       margin: 0;
       padding: 0;
       height: 100%;
       font-family: Arial, Helvetica, sans-serif;
-      color: var(--text);
       background: var(--bg);
+      color: var(--text);
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
     }
 
     .app {
       display: grid;
       grid-template-columns: 390px 1fr;
+      grid-template-rows: 100%;
       height: 100vh;
-      width: 100%;
+      overflow: hidden;
     }
 
     .sidebar {
-      overflow-y: auto;
       background: var(--panel);
       border-right: 1px solid var(--border);
-      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      min-width: 320px;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      padding: 18px 18px 12px 18px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(to bottom, #ffffff, #fbfcfe);
+    }
+
+    .sidebar-header h1 {
+      margin: 0 0 8px 0;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    .sidebar-header p {
+      margin: 0;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .sidebar-scroll {
+      flex: 1;
+      overflow: auto;
+      padding: 14px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      margin-bottom: 14px;
+      overflow: hidden;
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 15px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel-soft);
+    }
+
+    .panel-body {
+      padding: 12px 14px 14px 14px;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .row:last-child {
+      margin-bottom: 0;
+    }
+
+    label {
+      font-size: 12px;
+      color: var(--muted);
+      display: block;
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 11px;
+      font-size: 14px;
+      color: var(--text);
+      background: #fff;
+      outline: none;
+    }
+
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.12);
+    }
+
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--accent);
+      color: white;
+      transition: 0.15s ease;
+    }
+
+    button:hover {
+      background: var(--accent-dark);
+    }
+
+    button.secondary {
+      background: #eef3fb;
+      color: #21406b;
+      border: 1px solid #d3e0f5;
+    }
+
+    button.secondary:hover {
+      background: #e3edf9;
+    }
+
+    button.success {
+      background: var(--success);
+    }
+
+    button.success:hover {
+      filter: brightness(0.95);
+    }
+
+    button.warning {
+      background: #fff4d6;
+      color: #7a5800;
+      border: 1px solid #efd48a;
+    }
+
+    button.warning:hover {
+      background: #ffedba;
+    }
+
+    button.danger {
+      background: var(--danger);
+    }
+
+    button.danger:hover {
+      filter: brightness(0.95);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .grow {
+      flex: 1;
+    }
+
+    .small {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .tiny {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .stat-card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 11px;
+      background: #fff;
+    }
+
+    .stat-card .label {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .stat-card .value {
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .district-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .district-card {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .district-card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: #fafcff;
+    }
+
+    .district-swatch {
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 0, 0, 0.15);
+      flex: 0 0 auto;
+    }
+
+    .district-title-wrap {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .district-title {
+      font-size: 14px;
+      font-weight: 700;
+      margin: 0 0 2px 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .district-subtitle {
+      font-size: 11px;
+      color: var(--muted);
+      margin: 0;
+    }
+
+    .district-card-body {
+      padding: 10px 12px 12px 12px;
+    }
+
+    .pill-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      border-radius: 999px;
+      padding: 5px 8px;
+      background: #f1f5fb;
+      color: #304560;
+      border: 1px solid #d9e4f0;
+    }
+
+    .member-mini-list {
+      max-height: 120px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px;
+      background: #fcfdff;
+    }
+
+    .member-mini-item {
+      font-size: 12px;
+      color: var(--text);
+      padding: 3px 0;
+      border-bottom: 1px dashed #e7edf5;
+    }
+
+    .member-mini-item:last-child {
+      border-bottom: none;
+    }
+
+    .active-district-box {
+      border: 1px solid #bfd4f4;
+      background: #f4f8ff;
+      border-radius: 12px;
+      padding: 10px 11px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #e9f2ff;
+      color: #1a4f9e;
+      border: 1px solid #c9dcfb;
     }
 
     .map-wrap {
       position: relative;
-      min-width: 0;
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
     }
 
     #map {
@@ -68,265 +379,123 @@
       height: 100%;
     }
 
-    .title {
-      margin: 0 0 8px 0;
-      font-size: 24px;
-      line-height: 1.2;
-    }
-
-    .subtitle {
-      margin: 0 0 18px 0;
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.5;
-    }
-
-    .card {
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 14px;
-      margin-bottom: 14px;
-      background: #fff;
-    }
-
-    .card h2,
-    .card h3 {
-      margin: 0 0 10px 0;
-      font-size: 18px;
-    }
-
-    .card p {
-      margin: 0 0 10px 0;
-      line-height: 1.45;
-      color: var(--muted);
-      font-size: 14px;
-    }
-
-    .step-badge {
-      display: inline-block;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--accent);
-      margin-bottom: 8px;
-    }
-
-    .row {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .radio-group,
-    .checkbox-group {
+    .map-floating {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      z-index: 1000;
+      width: 320px;
+      max-width: calc(100% - 28px);
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      margin: 8px 0 14px 0;
-    }
-
-    label.option {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      padding: 10px 12px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: #fbfcfe;
-      cursor: pointer;
-      color: var(--text);
-    }
-
-    label.option input {
-      margin-top: 2px;
-    }
-
-    button,
-    select {
-      font: inherit;
-    }
-
-    button {
-      appearance: none;
-      border: 1px solid var(--accent);
-      background: var(--accent);
-      color: #fff;
-      border-radius: 10px;
-      padding: 10px 14px;
-      font-weight: 700;
-      cursor: pointer;
-      transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
-    }
-
-    button:hover:not(:disabled) {
-      background: var(--accent-dark);
-      border-color: var(--accent-dark);
-    }
-
-    button.secondary {
-      background: #fff;
-      color: var(--accent);
-    }
-
-    button.secondary:hover:not(:disabled) {
-      background: #eef4ff;
-    }
-
-    button:disabled,
-    select:disabled {
-      cursor: not-allowed;
-      opacity: 0.55;
-    }
-
-    select {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 12px;
-      background: #fff;
-      min-width: 130px;
-    }
-
-    .status {
-      margin-top: 10px;
-      font-size: 13px;
-      color: var(--muted);
-      line-height: 1.4;
-    }
-
-    .status.good {
-      color: var(--success);
-      font-weight: 700;
-    }
-
-    .status.warn {
-      color: var(--warning);
-      font-weight: 700;
-    }
-
-    .status.error {
-      color: var(--danger);
-      font-weight: 700;
-    }
-
-    .metrics {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
-      margin-top: 10px;
+      pointer-events: none;
     }
 
-    .metric {
+    .floating-box {
+      pointer-events: auto;
+      background: rgba(255, 255, 255, 0.96);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 10px;
-      background: #fbfcfe;
-    }
-
-    .metric .label {
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 4px;
-    }
-
-    .metric .value {
-      font-size: 22px;
-      font-weight: 800;
-    }
-
-    .metric .sub {
-      font-size: 12px;
-      color: var(--muted);
-      margin-top: 3px;
-    }
-
-    .legend {
-      position: absolute;
-      right: 12px;
-      bottom: 12px;
-      z-index: 800;
-      background: rgba(255,255,255,0.95);
-      border: 1px solid var(--border);
-      border-radius: 12px;
+      border-radius: 14px;
+      box-shadow: var(--shadow);
       padding: 10px 12px;
-      box-shadow: 0 4px 18px rgba(0,0,0,0.08);
-      font-size: 13px;
-      min-width: 220px;
-    }
-
-    .legend h4 {
-      margin: 0 0 8px 0;
-      font-size: 13px;
+      backdrop-filter: blur(6px);
     }
 
     .legend-item {
       display: flex;
       align-items: center;
       gap: 8px;
-      margin: 6px 0;
+      font-size: 12px;
+      margin-top: 6px;
     }
 
-    .swatch {
-      width: 14px;
-      height: 14px;
-      border-radius: 50%;
-      border: 1px solid rgba(0,0,0,0.15);
+    .legend-line {
+      width: 18px;
+      height: 0;
+      border-top: 3px solid #000;
       flex: 0 0 auto;
     }
 
-    .swatch.line {
-      width: 18px;
-      height: 3px;
+    .legend-dot {
+      width: 12px;
+      height: 12px;
       border-radius: 999px;
+      border: 1px solid rgba(0, 0, 0, 0.2);
+      flex: 0 0 auto;
     }
 
-    .small-note {
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.4;
-      margin-top: 8px;
+    .member-count-box {
+      font-size: 13px;
+      line-height: 1.45;
     }
 
-    .district-summary {
-      margin-top: 12px;
-      display: grid;
-      gap: 8px;
-    }
-
-    .district-row {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: #fbfcfe;
-      padding: 10px;
-      font-size: 14px;
-      line-height: 1.4;
+    .hidden {
+      display: none !important;
     }
 
     .footer-note {
-      margin-top: 12px;
-      font-size: 12px;
+      font-size: 11px;
       color: var(--muted);
-      line-height: 1.4;
+      margin-top: 10px;
+      line-height: 1.45;
     }
 
-    code {
-      background: #f1f3f8;
-      padding: 1px 4px;
-      border-radius: 4px;
+    .hr {
+      height: 1px;
+      background: var(--border);
+      margin: 10px 0;
+    }
+
+    .file-input {
+      display: block;
+      width: 100%;
       font-size: 12px;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    .checkbox-row input {
+      margin: 0;
+    }
+
+    .district-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .district-card.active {
+      border-color: #8eb4ef;
+      box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.09);
     }
 
     @media (max-width: 980px) {
       .app {
         grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr;
+        grid-template-rows: 420px 1fr;
       }
 
       .sidebar {
-        max-height: 48vh;
+        order: 2;
         border-right: none;
-        border-bottom: 1px solid var(--border);
+        border-top: 1px solid var(--border);
+      }
+
+      .map-wrap {
+        order: 1;
+      }
+
+      .map-floating {
+        width: 280px;
       }
     }
   </style>
@@ -334,174 +503,169 @@
 <body>
   <div class="app">
     <aside class="sidebar">
-      <h1 class="title">Gerrymandering Ministering Districts</h1>
-      <p class="subtitle">
-        This phase loads the ward, member points, and network layer, applies your ministering filters,
-        calculates the district target math, and generates provisional seeded districts with a
-        re-gerrymander button.
-      </p>
-
-      <div class="card">
-        <div class="step-badge">Data status</div>
-        <h2>Layer loading</h2>
-        <p>This page loads:</p>
-        <div class="checkbox-group">
-          <label class="option">
-            <input type="checkbox" id="chkWardLoaded" disabled />
-            <span>Ward boundary polygon</span>
-          </label>
-          <label class="option">
-            <input type="checkbox" id="chkMembersLoaded" disabled />
-            <span>Member locations</span>
-          </label>
-          <label class="option">
-            <input type="checkbox" id="chkNetworkLoaded" disabled />
-            <span>District network lines</span>
-          </label>
-        </div>
-        <div id="loadStatus" class="status">Loading data...</div>
+      <div class="sidebar-header">
+        <h1>Gerrymandering Ministering Districts</h1>
+        <p>
+          Build and rebalance districts by clicking households on the map.
+          Select an active district, click members to assign or unassign them,
+          and the district shape and statistics will update automatically.
+        </p>
       </div>
 
-      <div class="card">
-        <div class="step-badge">Step 1</div>
-        <h2>Filter ministering pool</h2>
-        <p>
-          Choose the group to work on. The code keeps only points inside the ward boundary and applies
-          your ministering rules.
-        </p>
-
-        <div class="radio-group">
-          <label class="option">
-            <input type="radio" name="genderChoice" value="M" checked />
-            <span>
-              <strong>Gender = M</strong><br />
-              Include only men with <code>Is_assigned_ministers = yes</code>
-            </span>
-          </label>
-
-          <label class="option">
-            <input type="radio" name="genderChoice" value="F" />
-            <span>
-              <strong>Gender = F</strong><br />
-              Include only women with <code>Is_assigned_ministers = yes</code>
-            </span>
-          </label>
-        </div>
-
-        <div class="checkbox-group">
-          <label class="option">
-            <input type="checkbox" checked disabled />
-            <span>
-              <strong>Hard rule:</strong> exclude anyone outside the ward boundary
-            </span>
-          </label>
-        </div>
-
-        <div class="row">
-          <button id="runFilterBtn">Run Filter</button>
-          <button id="zoomFilteredBtn" class="secondary" disabled>Zoom to Filtered</button>
-          <button id="resetBtn" class="secondary">Reset</button>
-        </div>
-
-        <div id="filterStatus" class="status">
-          Choose a gender and click <strong>Run Filter</strong>.
-        </div>
-
-        <div class="metrics">
-          <div class="metric">
-            <div class="label">Group 1 (X)</div>
-            <div class="value" id="metricGroup1">0</div>
-            <div class="sub">Assigned_to_minister = yes</div>
-          </div>
-          <div class="metric">
-            <div class="label">Group 2 (Y)</div>
-            <div class="value" id="metricGroup2">0</div>
-            <div class="sub">Assigned_to_minister = no</div>
-          </div>
-          <div class="metric">
-            <div class="label">Total (S)</div>
-            <div class="value" id="metricTotal">0</div>
-            <div class="sub">Is_assigned_ministers = yes</div>
-          </div>
-          <div class="metric">
-            <div class="label">Companionships (C)</div>
-            <div class="value" id="metricCompanionships">0</div>
-            <div class="sub">Based on Group 1</div>
-          </div>
-          <div class="metric">
-            <div class="label">Avg assignments (A)</div>
-            <div class="value" id="metricAssignments">0</div>
-            <div class="sub">S ÷ C</div>
-          </div>
-          <div class="metric">
-            <div class="label">Outside ward excluded</div>
-            <div class="value" id="metricOutside">0</div>
-            <div class="sub">Filtered out</div>
+      <div class="sidebar-scroll">
+        <div class="panel">
+          <h2>Data Sources</h2>
+          <div class="panel-body">
+            <div class="small">
+              This file expects GeoJSON files for ward boundaries and member locations.
+              Update the file paths in the JavaScript section if needed.
+            </div>
+            <div class="footer-note">
+              Default expected files:
+              <br />
+              <strong>ward_boundaries_JSO.geojson</strong>
+              <br />
+              <strong>member_locations_JSO.geojson</strong>
+            </div>
           </div>
         </div>
 
-        <div class="footer-note">
-          Group 1 = <code>Assigned_to_minister = yes</code> and
-          <code>Is_assigned_ministers = yes</code>.<br />
-          Group 2 = <code>Assigned_to_minister = no</code> and
-          <code>Is_assigned_ministers = yes</code>.
-        </div>
-      </div>
+        <div class="panel">
+          <h2>District Builder</h2>
+          <div class="panel-body">
+            <div class="row">
+              <div class="grow">
+                <label for="newDistrictName">New district name</label>
+                <input type="text" id="newDistrictName" placeholder="District 1" />
+              </div>
+            </div>
 
-      <div class="card">
-        <div class="step-badge">Step 2</div>
-        <h2>District target math</h2>
-        <p>
-          After filtering, choose the number of districts. This computes the live target distribution
-          for Group 1, Group 2, total people, companionship counts, and the expected assignment range.
-        </p>
+            <div class="row">
+              <button id="createDistrictBtn">Create District</button>
+              <button id="clearSelectionBtn" class="secondary">Clear Active</button>
+            </div>
 
-        <div class="row">
-          <select id="districtCountSelect" disabled>
-            <option value="1">1 district</option>
-            <option value="2">2 districts</option>
-            <option value="3">3 districts</option>
-            <option value="4" selected>4 districts</option>
-            <option value="5">5 districts</option>
-            <option value="6">6 districts</option>
-            <option value="7">7 districts</option>
-            <option value="8">8 districts</option>
-            <option value="9">9 districts</option>
-            <option value="10">10 districts</option>
-          </select>
+            <div class="hr"></div>
 
-          <button id="calcDistrictBtn" disabled>Calculate Targets</button>
-        </div>
+            <div id="activeDistrictBox" class="active-district-box hidden">
+              <div class="row" style="justify-content: space-between;">
+                <div>
+                  <div class="tiny">Active district</div>
+                  <div id="activeDistrictLabel" style="font-size: 16px; font-weight: 700;">None</div>
+                </div>
+                <span class="badge" id="activeDistrictCountBadge">0 homes</span>
+              </div>
 
-        <div id="districtStatus" class="status">
-          Run the filter first.
-        </div>
+              <div class="row">
+                <div class="grow">
+                  <label for="renameDistrictInput">Rename active district</label>
+                  <input type="text" id="renameDistrictInput" placeholder="Enter new name" />
+                </div>
+              </div>
 
-        <div class="district-summary" id="districtSummary"></div>
-      </div>
+              <div class="row">
+                <button id="renameDistrictBtn" class="secondary">Rename</button>
+                <button id="fitActiveDistrictBtn" class="secondary">Zoom To</button>
+                <button id="deleteActiveDistrictBtn" class="danger">Delete</button>
+              </div>
 
-      <div class="card">
-        <div class="step-badge">Step 3</div>
-        <h2>Seeded district generation</h2>
-        <p>
-          This version creates provisional districts from the filtered people points and balances them
-          by your target counts. It is the seed logic first, before legal road/parcel boundary carving.
-        </p>
+              <div class="footer-note">
+                With a district active, click member markers on the map to add or remove them.
+              </div>
+            </div>
 
-        <div class="row">
-          <button id="gerrymanderBtn" disabled>Gerrymander Districts</button>
-          <button id="regerrymanderBtn" class="secondary" disabled>Re-gerrymander</button>
+            <div id="noActiveDistrictMsg" class="small">
+              No district is currently active. Create one, then click it in the district list.
+            </div>
+          </div>
         </div>
 
-        <div id="gerryStatus" class="status">
-          Calculate targets first.
+        <div class="panel">
+          <h2>Map Options</h2>
+          <div class="panel-body">
+            <label class="checkbox-row">
+              <input type="checkbox" id="toggleMembers" checked />
+              Show member markers
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="toggleWardBoundary" checked />
+              Show ward boundary
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="toggleDistrictLabels" checked />
+              Show district labels
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="toggleBufferMode" checked />
+              Use buffered hull around assigned households
+            </label>
+
+            <div class="row">
+              <div class="grow">
+                <label for="bufferFeetInput">District shape buffer (feet)</label>
+                <input type="number" id="bufferFeetInput" min="25" step="25" value="250" />
+              </div>
+              <div class="grow">
+                <label for="targetHomesInput">Target homes per district</label>
+                <input type="number" id="targetHomesInput" min="1" step="1" value="12" />
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div class="district-summary" id="gerrySummary"></div>
+        <div class="panel">
+          <h2>Summary</h2>
+          <div class="panel-body">
+            <div class="stats-grid">
+              <div class="stat-card">
+                <div class="label">Total Members</div>
+                <div class="value" id="totalMembersStat">0</div>
+              </div>
+              <div class="stat-card">
+                <div class="label">Total Households</div>
+                <div class="value" id="totalHouseholdsStat">0</div>
+              </div>
+              <div class="stat-card">
+                <div class="label">Districts</div>
+                <div class="value" id="districtCountStat">0</div>
+              </div>
+              <div class="stat-card">
+                <div class="label">Unassigned Homes</div>
+                <div class="value" id="unassignedHomesStat">0</div>
+              </div>
+            </div>
+            <div class="footer-note" id="balanceSummary">
+              No districts yet.
+            </div>
+          </div>
+        </div>
 
-        <div class="small-note">
-          Current phase colors the filtered people by district and draws soft district hulls. The next
-          phase will use the network to build legal district edges.
+        <div class="panel">
+          <h2>Districts</h2>
+          <div class="panel-body">
+            <div id="districtList" class="district-list"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Import / Export</h2>
+          <div class="panel-body">
+            <div class="row">
+              <button id="exportDistrictsBtn" class="success">Export Districts GeoJSON</button>
+            </div>
+            <div class="row">
+              <label for="importDistrictsInput">Import districts GeoJSON</label>
+              <input
+                type="file"
+                id="importDistrictsInput"
+                class="file-input"
+                accept=".geojson,.json,application/geo+json,application/json"
+              />
+            </div>
+            <div class="small">
+              Export saves district polygons and assigned household IDs. Import restores them.
+            </div>
+          </div>
         </div>
       </div>
     </aside>
@@ -509,997 +673,1063 @@
     <div class="map-wrap">
       <div id="map"></div>
 
-      <div class="legend">
-        <h4>Map legend</h4>
-        <div class="legend-item">
-          <span class="swatch line" style="background: var(--network);"></span>
-          <span>District network lines</span>
+      <div class="map-floating">
+        <div class="floating-box">
+          <strong>How to use</strong>
+          <div class="small" style="margin-top: 6px;">
+            1. Create a district.<br />
+            2. Click the district in the sidebar to make it active.<br />
+            3. Click member markers to assign or unassign households.<br />
+            4. Watch the district shape and totals update live.
+          </div>
         </div>
-        <div class="legend-item">
-          <span class="swatch" style="background: rgba(15,118,110,0.18); border-color: #0f766e;"></span>
-          <span>Ward boundary polygon</span>
+
+        <div class="floating-box">
+          <strong>Legend</strong>
+          <div class="legend-item">
+            <span class="legend-line" style="border-top-color:#2b6cb0;"></span>
+            Ward boundary
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background:#666;"></span>
+            Unassigned household
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background:#1f6feb;"></span>
+            Assigned household
+          </div>
+          <div class="legend-item">
+            <span class="legend-line" style="border-top-color:#1f6feb;"></span>
+            District outline
+          </div>
         </div>
-        <div class="legend-item">
-          <span class="swatch" style="background: var(--rawpoints);"></span>
-          <span>All member points</span>
-        </div>
-        <div class="legend-item">
-          <span class="swatch" style="background: #e11d48;"></span>
-          <span>District-colored filtered points</span>
-        </div>
-        <div class="small-note">
-          Raw points show immediately. Filtered points become district-colored after running the seed
-          district engine.
+
+        <div class="floating-box member-count-box" id="hoverInfoBox">
+          <strong>Hover info</strong>
+          <div class="small" style="margin-top: 6px;">
+            Hover over a member marker or district polygon for details.
+          </div>
         </div>
       </div>
     </div>
   </div>
 
   <script>
-    const WARD_URL = "https://kdidso.github.io/snow-canyon-map/ward_boundaries_JSO.geojson";
-    const MEMBERS_URL = "https://kdidso.github.io/snow-canyon-map/member_locations_JSO.geojson";
-    const NETWORK_URL = "./district_netwo_FeaturesToJSO1.geojson";
+    /**********************************************************************
+     * CONFIG
+     **********************************************************************/
+    const MEMBER_FILE = "member_locations_JSO.geojson";
+    const WARD_FILE = "ward_boundaries_JSO.geojson";
 
     const DISTRICT_COLORS = [
-      "#e11d48",
-      "#2563eb",
-      "#16a34a",
-      "#d97706",
-      "#7c3aed",
-      "#0891b2",
-      "#dc2626",
-      "#65a30d",
-      "#c2410c",
-      "#0f766e"
+      "#1f6feb",
+      "#d73a49",
+      "#2da44e",
+      "#8250df",
+      "#bf8700",
+      "#0969da",
+      "#bc4c00",
+      "#1b7f83",
+      "#9a6700",
+      "#6f42c1",
+      "#cf222e",
+      "#0a7f38"
     ];
 
-    let map;
+    /**********************************************************************
+     * STATE
+     **********************************************************************/
+    const state = {
+      map: null,
+      wardBoundaryData: null,
+      memberData: null,
+      districts: [],
+      activeDistrictId: null,
+      memberMarkers: new Map(),
+      householdIndex: new Map(),
+      householdAssignment: new Map(),
+      districtLayers: new Map(),
+      districtLabelLayers: new Map(),
+      wardLayer: null,
+      membersLayerGroup: null,
+      nextDistrictId: 1
+    };
 
-    let wardData = null;
-    let membersData = null;
-    let networkData = null;
+    /**********************************************************************
+     * MAP INIT
+     **********************************************************************/
+    function initMap() {
+      state.map = L.map("map", {
+        zoomControl: true
+      }).setView([37.14, -113.63], 12);
 
-    let wardPolygonFeatures = [];
-    let allMembersLayer = null;
-    let wardLayer = null;
-    let networkLayer = null;
-    let filteredLayerGroup = null;
-    let districtHullLayerGroup = null;
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 22,
+        attribution: "&copy; OpenStreetMap contributors"
+      }).addTo(state.map);
 
-    let currentFiltered = [];
-    let currentStats = null;
-    let currentDistrictTargets = null;
-    let currentDistrictResult = null;
-    let gerrymanderRunCount = 0;
-
-    const chkWardLoaded = document.getElementById("chkWardLoaded");
-    const chkMembersLoaded = document.getElementById("chkMembersLoaded");
-    const chkNetworkLoaded = document.getElementById("chkNetworkLoaded");
-
-    const loadStatus = document.getElementById("loadStatus");
-    const filterStatus = document.getElementById("filterStatus");
-    const districtStatus = document.getElementById("districtStatus");
-    const gerryStatus = document.getElementById("gerryStatus");
-
-    const runFilterBtn = document.getElementById("runFilterBtn");
-    const zoomFilteredBtn = document.getElementById("zoomFilteredBtn");
-    const resetBtn = document.getElementById("resetBtn");
-    const calcDistrictBtn = document.getElementById("calcDistrictBtn");
-    const gerrymanderBtn = document.getElementById("gerrymanderBtn");
-    const regerrymanderBtn = document.getElementById("regerrymanderBtn");
-
-    const districtCountSelect = document.getElementById("districtCountSelect");
-    const districtSummary = document.getElementById("districtSummary");
-    const gerrySummary = document.getElementById("gerrySummary");
-
-    const metricGroup1 = document.getElementById("metricGroup1");
-    const metricGroup2 = document.getElementById("metricGroup2");
-    const metricTotal = document.getElementById("metricTotal");
-    const metricCompanionships = document.getElementById("metricCompanionships");
-    const metricAssignments = document.getElementById("metricAssignments");
-    const metricOutside = document.getElementById("metricOutside");
-
-    function setStatus(el, text, cls = "") {
-      el.textContent = text;
-      el.className = "status" + (cls ? " " + cls : "");
+      state.membersLayerGroup = L.layerGroup().addTo(state.map);
     }
 
-    function normalize(value) {
-      return String(value ?? "").trim().toLowerCase();
+    /**********************************************************************
+     * HELPERS
+     **********************************************************************/
+    function safeString(value) {
+      if (value === null || value === undefined) return "";
+      return String(value).trim();
     }
 
-    function normYes(value) {
-      return normalize(value) === "yes";
-    }
-
-    function normGender(value) {
-      return String(value ?? "").trim().toUpperCase();
-    }
-
-    function getProp(feature, key) {
-      return feature?.properties?.[key];
-    }
-
-    function formatNumber(value, decimals = 0) {
-      return Number(value).toLocaleString(undefined, {
-        minimumFractionDigits: decimals,
-        maximumFractionDigits: decimals
-      });
-    }
-
-    function round2(value) {
-      return Math.round(value * 100) / 100;
-    }
-
-    function distributeTotal(total, parts) {
-      const base = Math.floor(total / parts);
-      const remainder = total % parts;
-      const arr = [];
-      for (let i = 0; i < parts; i++) {
-        arr.push(base + (i < remainder ? 1 : 0));
-      }
-      return arr;
-    }
-
-    function assignmentsRange(avg) {
-      if (!isFinite(avg) || avg <= 0) return "0";
-      const lo = Math.floor(avg);
-      const hi = Math.ceil(avg);
-      return lo === hi ? String(lo) : `${lo}-${hi}`;
-    }
-
-    function isPolygonLike(feature) {
-      const type = feature?.geometry?.type;
-      return type === "Polygon" || type === "MultiPolygon";
-    }
-
-    function getSelectedGender() {
-      const checked = document.querySelector('input[name="genderChoice"]:checked');
-      return checked ? checked.value : "M";
-    }
-
-    function escapeHtml(str) {
-      return String(str)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#39;");
-    }
-
-    function pointInsideWard(pointFeature) {
-      return wardPolygonFeatures.some(poly => {
-        try {
-          return turf.booleanPointInPolygon(pointFeature, poly);
-        } catch (err) {
-          return false;
+    function getProp(feature, names, fallback = "") {
+      for (const name of names) {
+        if (feature.properties && feature.properties[name] !== undefined && feature.properties[name] !== null) {
+          return feature.properties[name];
         }
-      });
+      }
+      return fallback;
     }
 
-    function clearMetricCards() {
-      metricGroup1.textContent = "0";
-      metricGroup2.textContent = "0";
-      metricTotal.textContent = "0";
-      metricCompanionships.textContent = "0";
-      metricAssignments.textContent = "0";
-      metricOutside.textContent = "0";
+    function normalizeNamePart(value) {
+      return safeString(value)
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .replace(/[^a-z0-9\s'-]/g, "")
+        .trim();
     }
 
-    function updateMetricCards(stats) {
-      metricGroup1.textContent = formatNumber(stats.group1);
-      metricGroup2.textContent = formatNumber(stats.group2);
-      metricTotal.textContent = formatNumber(stats.total);
-      metricCompanionships.textContent = formatNumber(stats.companionships);
-      metricAssignments.textContent = stats.avgAssignmentsDisplay;
-      metricOutside.textContent = formatNumber(stats.outsideWardExcluded);
+    function normalizeAddress(value) {
+      return safeString(value)
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .replace(/\./g, "")
+        .replace(/,/g, "")
+        .trim();
     }
 
-    function computeStats(filteredItems, outsideWardExcluded) {
-      const group1 = filteredItems.filter(item => item.group === 1).length;
-      const group2 = filteredItems.filter(item => item.group === 2).length;
-      const total = group1 + group2;
-      const companionships = group1 > 0 ? Math.floor(group1 / 2) : 0;
-      const trioNeeded = group1 % 2 === 1 && group1 >= 3;
-      const avgAssignments = companionships > 0 ? total / companionships : 0;
-      const avgAssignmentsDisplay = companionships > 0 ? round2(avgAssignments) : 0;
-
-      return {
-        group1,
-        group2,
-        total,
-        companionships,
-        trioNeeded,
-        avgAssignments,
-        avgAssignmentsDisplay,
-        avgAssignmentsRange: assignmentsRange(avgAssignments),
-        outsideWardExcluded
-      };
-    }
-
-    function resetDistrictSummary() {
-      districtSummary.innerHTML = "";
-    }
-
-    function resetGerrySummary() {
-      gerrySummary.innerHTML = "";
-    }
-
-    function fitMapToWard() {
-      if (!wardLayer) return;
-      map.fitBounds(wardLayer.getBounds(), { padding: [20, 20] });
-    }
-
-    function fitToFiltered() {
-      if (!currentFiltered.length) {
-        fitMapToWard();
-        return;
+    function getHouseholdId(feature) {
+      const explicitId =
+        getProp(feature, ["household_id", "Household_ID", "HOUSEHOLD_ID", "hh_id", "HH_ID"], "");
+      if (safeString(explicitId)) {
+        return safeString(explicitId);
       }
 
-      const fc = {
-        type: "FeatureCollection",
-        features: currentFiltered.map(item => item.feature)
-      };
-
-      const bbox = turf.bbox(fc);
-      const bounds = L.latLngBounds(
-        [bbox[1], bbox[0]],
-        [bbox[3], bbox[2]]
+      const address = normalizeAddress(
+        getProp(feature, ["Address", "address", "FullAddress", "full_address", "FULLADDR"], "")
       );
-      map.fitBounds(bounds, { padding: [20, 20] });
+      const apt = normalizeAddress(getProp(feature, ["Apt_Number", "apt_number", "Apartment", "apt"], ""));
+      const lastName = normalizeNamePart(getProp(feature, ["Last_Name", "last_name", "LAST_NAME"], ""));
+      const firstName = normalizeNamePart(getProp(feature, ["First_Name", "first_name", "FIRST_NAME"], ""));
+
+      return [address, apt, lastName, firstName].join("|");
     }
 
-    function makeMemberPopup(feature, groupLabel = null, districtLabel = null) {
-      const p = feature.properties || {};
-      const first = p.First_Name || p.first_name || "";
-      const last = p.Last_Name || p.last_name || "";
-      const gender = p.Gender || "";
-      const assignedToMinister = p.Assigned_to_minister || "";
-      const isAssignedMinisters = p.Is_assigned_ministers || "";
+    function getDisplayName(feature) {
+      const first = safeString(getProp(feature, ["First_Name", "first_name", "FIRST_NAME"], ""));
+      const last = safeString(getProp(feature, ["Last_Name", "last_name", "LAST_NAME"], ""));
+      const full = [first, last].filter(Boolean).join(" ");
+      return full || "Unnamed Member";
+    }
 
-      return `
-        <div style="font-size:13px;line-height:1.45;">
-          <strong>${escapeHtml(`${first} ${last}`.trim() || "Member")}</strong><br>
-          Gender: ${escapeHtml(gender)}<br>
-          Assigned_to_minister: ${escapeHtml(assignedToMinister)}<br>
-          Is_assigned_ministers: ${escapeHtml(isAssignedMinisters)}${
-            groupLabel ? `<br>Filter group: ${escapeHtml(groupLabel)}` : ""
-          }${
-            districtLabel ? `<br>District: ${escapeHtml(districtLabel)}` : ""
-          }
+    function getDisplayAddress(feature) {
+      const address = safeString(getProp(feature, ["Address", "address", "FullAddress", "full_address"], ""));
+      const apt = safeString(getProp(feature, ["Apt_Number", "apt_number", "Apartment", "apt"], ""));
+      return [address, apt].filter(Boolean).join(" ");
+    }
+
+    function getMemberGender(feature) {
+      return safeString(getProp(feature, ["Gender", "gender"], ""));
+    }
+
+    function getColorForDistrictIndex(index) {
+      return DISTRICT_COLORS[index % DISTRICT_COLORS.length];
+    }
+
+    function getDistrictById(districtId) {
+      return state.districts.find(d => d.id === districtId) || null;
+    }
+
+    function getActiveDistrict() {
+      return getDistrictById(state.activeDistrictId);
+    }
+
+    function getHouseholdFeatureById(householdId) {
+      return state.householdIndex.get(householdId) || null;
+    }
+
+    function feetToKilometers(feet) {
+      return Number(feet) * 0.0003048;
+    }
+
+    function getAllHouseholdIds() {
+      return Array.from(state.householdIndex.keys());
+    }
+
+    function getAssignedDistrictIdForHousehold(householdId) {
+      return state.householdAssignment.get(householdId) || null;
+    }
+
+    function setHoverInfo(html) {
+      document.getElementById("hoverInfoBox").innerHTML = html;
+    }
+
+    function clearHoverInfo() {
+      document.getElementById("hoverInfoBox").innerHTML = `
+        <strong>Hover info</strong>
+        <div class="small" style="margin-top: 6px;">
+          Hover over a member marker or district polygon for details.
         </div>
       `;
     }
 
-    function createDistrictTargets(stats, districtCount) {
-      const xDist = distributeTotal(stats.group1, districtCount);
-      const yDist = distributeTotal(stats.group2, districtCount);
-      const sDist = distributeTotal(stats.total, districtCount);
-      const cDist = xDist.map(x => Math.floor(x / 2));
-      const rangeText = assignmentsRange(stats.avgAssignments);
-
-      return {
-        districtCount,
-        xDist,
-        yDist,
-        sDist,
-        cDist,
-        rangeText
-      };
+    function escapeHtml(str) {
+      return safeString(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
     }
 
-    function renderTargetSummary(targets, stats) {
-      resetDistrictSummary();
-
-      const intro = document.createElement("div");
-      intro.className = "district-row";
-      intro.innerHTML = `
-        <strong>Computed targets for ${targets.districtCount} district${targets.districtCount === 1 ? "" : "s"}:</strong><br>
-        Group 1 target(s): ${targets.xDist.join(", ")}<br>
-        Group 2 target(s): ${targets.yDist.join(", ")}<br>
-        Total target(s): ${targets.sDist.join(", ")}<br>
-        Estimated companionship count(s): ${targets.cDist.join(", ")}<br>
-        Assignments per companionship target: ${targets.rangeText}
-      `;
-      districtSummary.appendChild(intro);
-
-      for (let i = 0; i < targets.districtCount; i++) {
-        const row = document.createElement("div");
-        row.className = "district-row";
-        row.innerHTML = `
-          <strong>District ${i + 1}</strong><br>
-          Group 1 (X): ${targets.xDist[i]}<br>
-          Group 2 (Y): ${targets.yDist[i]}<br>
-          Total (S): ${targets.sDist[i]}<br>
-          Estimated companionships: ${targets.cDist[i]}<br>
-          Expected assignment load per companionship: ${targets.rangeText}
-        `;
-        districtSummary.appendChild(row);
-      }
-
-      if (stats.trioNeeded) {
-        const trioRow = document.createElement("div");
-        trioRow.className = "district-row";
-        trioRow.innerHTML = `
-          <strong>Trio note</strong><br>
-          Group 1 is odd, so one companionship of 3 will be needed later during the pairing step.
-        `;
-        districtSummary.appendChild(trioRow);
-      }
-    }
-
-    function distanceBetweenFeatures(a, b) {
-      return turf.distance(a.feature, b.feature, { units: "kilometers" });
-    }
-
-    function createEmptyDistrictStates(targets) {
-      return targets.xDist.map((xTarget, idx) => ({
-        id: idx,
-        xTarget,
-        yTarget: targets.yDist[idx],
-        sTarget: targets.sDist[idx],
-        cTarget: targets.cDist[idx],
-        members: [],
-        group1: 0,
-        group2: 0,
-        total: 0,
-        seed: null,
-        centroidLng: null,
-        centroidLat: null
-      }));
-    }
-
-    function updateDistrictCentroid(district) {
-      if (!district.members.length) return;
-      let sumLng = 0;
-      let sumLat = 0;
-
-      for (const item of district.members) {
-        const coords = item.feature.geometry.coordinates;
-        sumLng += coords[0];
-        sumLat += coords[1];
-      }
-
-      district.centroidLng = sumLng / district.members.length;
-      district.centroidLat = sumLat / district.members.length;
-    }
-
-    function seededShuffle(arr, seed) {
-      const result = arr.slice();
-      let s = seed >>> 0;
-
-      function rnd() {
-        s = (1664525 * s + 1013904223) >>> 0;
-        return s / 4294967296;
-      }
-
-      for (let i = result.length - 1; i > 0; i--) {
-        const j = Math.floor(rnd() * (i + 1));
-        [result[i], result[j]] = [result[j], result[i]];
-      }
-
-      return result;
-    }
-
-    function chooseSeeds(items, districtCount, runSeed) {
-      const shuffled = seededShuffle(items, runSeed + 101);
-      const seeds = [];
-      if (!shuffled.length) return seeds;
-
-      seeds.push(shuffled[0]);
-
-      while (seeds.length < districtCount && seeds.length < shuffled.length) {
-        let bestCandidate = null;
-        let bestScore = -Infinity;
-
-        for (const candidate of shuffled) {
-          if (seeds.includes(candidate)) continue;
-
-          let minDist = Infinity;
-          for (const seed of seeds) {
-            const d = distanceBetweenFeatures(candidate, seed);
-            if (d < minDist) minDist = d;
-          }
-
-          if (minDist > bestScore) {
-            bestScore = minDist;
-            bestCandidate = candidate;
-          }
-        }
-
-        if (!bestCandidate) break;
-        seeds.push(bestCandidate);
-      }
-
-      return seeds;
-    }
-
-    function computePointScore(item, district, targetWeight = 1) {
-      const coords = item.feature.geometry.coordinates;
-      const dLng = district.centroidLng == null ? 0 : coords[0] - district.centroidLng;
-      const dLat = district.centroidLat == null ? 0 : coords[1] - district.centroidLat;
-      const distPenalty = Math.sqrt(dLng * dLng + dLat * dLat);
-
-      const xAfter = district.group1 + (item.group === 1 ? 1 : 0);
-      const yAfter = district.group2 + (item.group === 2 ? 1 : 0);
-      const sAfter = district.total + 1;
-
-      const xPenalty = Math.max(0, xAfter - district.xTarget);
-      const yPenalty = Math.max(0, yAfter - district.yTarget);
-      const sPenalty = Math.max(0, sAfter - district.sTarget);
-
-      const underX = Math.max(0, district.xTarget - xAfter);
-      const underY = Math.max(0, district.yTarget - yAfter);
-      const underS = Math.max(0, district.sTarget - sAfter);
-
-      return (
-        distPenalty * 1.0 +
-        (xPenalty * 10 + yPenalty * 10 + sPenalty * 14) * targetWeight +
-        (underX * 0.1 + underY * 0.1 + underS * 0.1)
-      );
-    }
-
-    function assignBySeeds(items, targets, runSeed) {
-      const districts = createEmptyDistrictStates(targets);
-      const seeds = chooseSeeds(items, targets.districtCount, runSeed);
-
-      for (let i = 0; i < districts.length; i++) {
-        const district = districts[i];
-        const seedItem = seeds[i] || items[i] || null;
-        district.seed = seedItem;
-
-        if (seedItem) {
-          district.members.push(seedItem);
-          district.group1 += seedItem.group === 1 ? 1 : 0;
-          district.group2 += seedItem.group === 2 ? 1 : 0;
-          district.total += 1;
-          updateDistrictCentroid(district);
-          seedItem._assignedDistrict = district.id;
-        }
-      }
-
-      const remaining = items.filter(item => item._assignedDistrict == null);
-
-      const orderedRemaining = seededShuffle(remaining, runSeed + 909);
-
-      for (const item of orderedRemaining) {
-        let bestDistrict = null;
-        let bestScore = Infinity;
-
-        for (const district of districts) {
-          const score = computePointScore(item, district, 1.6);
-          if (score < bestScore) {
-            bestScore = score;
-            bestDistrict = district;
-          }
-        }
-
-        bestDistrict.members.push(item);
-        bestDistrict.group1 += item.group === 1 ? 1 : 0;
-        bestDistrict.group2 += item.group === 2 ? 1 : 0;
-        bestDistrict.total += 1;
-        item._assignedDistrict = bestDistrict.id;
-        updateDistrictCentroid(bestDistrict);
-      }
-
-      return districts;
-    }
-
-    function rebalanceDistricts(districts, targets) {
-      let improved = true;
-      let passCount = 0;
-
-      while (improved && passCount < 12) {
-        improved = false;
-        passCount++;
-
-        for (const district of districts) {
-          for (const other of districts) {
-            if (district.id === other.id) continue;
-
-            const districtOver =
-              (district.group1 > district.xTarget) ||
-              (district.group2 > district.yTarget) ||
-              (district.total > district.sTarget);
-
-            const otherUnder =
-              (other.group1 < other.xTarget) ||
-              (other.group2 < other.yTarget) ||
-              (other.total < other.sTarget);
-
-            if (!districtOver || !otherUnder) continue;
-
-            let bestMoveIndex = -1;
-            let bestMoveScore = Infinity;
-
-            for (let i = 0; i < district.members.length; i++) {
-              const item = district.members[i];
-
-              const couldHelp =
-                (item.group === 1 && other.group1 < other.xTarget) ||
-                (item.group === 2 && other.group2 < other.yTarget) ||
-                (other.total < other.sTarget);
-
-              if (!couldHelp) continue;
-
-              const coords = item.feature.geometry.coordinates;
-              const d1 =
-                district.centroidLng == null
-                  ? 0
-                  : Math.sqrt(
-                      Math.pow(coords[0] - district.centroidLng, 2) +
-                      Math.pow(coords[1] - district.centroidLat, 2)
-                    );
-
-              const d2 =
-                other.centroidLng == null
-                  ? 0
-                  : Math.sqrt(
-                      Math.pow(coords[0] - other.centroidLng, 2) +
-                      Math.pow(coords[1] - other.centroidLat, 2)
-                    );
-
-              const moveScore = d2 - d1;
-              if (moveScore < bestMoveScore) {
-                bestMoveScore = moveScore;
-                bestMoveIndex = i;
-              }
-            }
-
-            if (bestMoveIndex >= 0) {
-              const [item] = district.members.splice(bestMoveIndex, 1);
-
-              district.group1 -= item.group === 1 ? 1 : 0;
-              district.group2 -= item.group === 2 ? 1 : 0;
-              district.total -= 1;
-
-              other.members.push(item);
-              other.group1 += item.group === 1 ? 1 : 0;
-              other.group2 += item.group === 2 ? 1 : 0;
-              other.total += 1;
-
-              item._assignedDistrict = other.id;
-
-              updateDistrictCentroid(district);
-              updateDistrictCentroid(other);
-
-              improved = true;
-            }
-          }
-        }
-      }
-
-      return districts;
-    }
-
-    function generateDistricts(filteredItems, targets, runSeed) {
-      for (const item of filteredItems) {
-        item._assignedDistrict = null;
-      }
-
-      let districts = assignBySeeds(filteredItems, targets, runSeed);
-      districts = rebalanceDistricts(districts, targets);
-
-      return districts;
-    }
-
-    function removeDistrictLayers() {
-      if (filteredLayerGroup) {
-        map.removeLayer(filteredLayerGroup);
-        filteredLayerGroup = null;
-      }
-
-      if (districtHullLayerGroup) {
-        map.removeLayer(districtHullLayerGroup);
-        districtHullLayerGroup = null;
-      }
-    }
-
-    
-    function addDistrictLayers(districts) {
-  removeDistrictLayers();
-
-  const pointLayers = [];
-  const polygonLayers = [];
-
-  const seedFeatures = [];
-
-  for (const district of districts) {
-    if (district.centroidLng == null || district.centroidLat == null) continue;
-
-    seedFeatures.push(
-      turf.point([district.centroidLng, district.centroidLat], {
-        districtId: district.id
-      })
-    );
-  }
-
-  const wardBbox = turf.bbox(wardData);
-
-  const voronoi = turf.voronoi(
-    turf.featureCollection(seedFeatures),
-    {
-      bbox: wardBbox
-    }
-  );
-
-  if (voronoi && voronoi.features) {
-    for (const cell of voronoi.features) {
-      if (!cell) continue;
-
-      const districtId = cell.properties.districtId;
-      const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
-
-      for (const wardPoly of wardPolygonFeatures) {
-        try {
-          const clipped = turf.intersect(cell, wardPoly);
-
-          if (clipped) {
-            const polyLayer = L.geoJSON(clipped, {
-              style: {
-                color,
-                weight: 2,
-                fillColor: color,
-                fillOpacity: 0.12
-              }
-            });
-
-            polygonLayers.push(polyLayer);
-          }
-        } catch (err) {
-          console.warn("Voronoi clip failed", err);
-        }
-      }
-    }
-  }
-
-  for (const district of districts) {
-    const color = DISTRICT_COLORS[district.id % DISTRICT_COLORS.length];
-
-    const fc = {
-      type: "FeatureCollection",
-      features: district.members.map(m => m.feature)
-    };
-
-    const pointLayer = L.geoJSON(fc, {
-      pointToLayer: function(feature, latlng) {
-        return L.circleMarker(latlng, {
-          radius: feature.properties._group === 1 ? 6 : 5,
-          color: "#ffffff",
-          weight: 1.2,
-          fillColor: color,
-          fillOpacity: 1
-        });
-      },
-      onEachFeature: function(feature, layer) {
-        const groupLabel = feature.properties._group === 1 ? "Group 1" : "Group 2";
-        layer.bindPopup(makeMemberPopup(feature, groupLabel, `District ${district.id + 1}`));
-      }
-    });
-
-    pointLayers.push(pointLayer);
-  }
-
-  districtHullLayerGroup = L.layerGroup(polygonLayers).addTo(map);
-  filteredLayerGroup = L.layerGroup(pointLayers).addTo(map);
-}   
-    function renderGerrySummary(districts, targets) {
-      resetGerrySummary();
-
-      const intro = document.createElement("div");
-      intro.className = "district-row";
-      intro.innerHTML = `
-        <strong>Generated provisional seeded districts</strong><br>
-        These are balanced by point counts and can be regenerated with a different seed arrangement.
-      `;
-      gerrySummary.appendChild(intro);
-
-      for (const district of districts) {
-        const row = document.createElement("div");
-        row.className = "district-row";
-        row.innerHTML = `
-          <strong>District ${district.id + 1}</strong><br>
-          Group 1: ${district.group1} / target ${district.xTarget}<br>
-          Group 2: ${district.group2} / target ${district.yTarget}<br>
-          Total: ${district.total} / target ${district.sTarget}<br>
-          Estimated companionships: ${Math.floor(district.group1 / 2)}<br>
-          Average assignments if used now: ${
-            Math.floor(district.group1 / 2) > 0
-              ? round2(district.total / Math.floor(district.group1 / 2))
-              : 0
-          }
-        `;
-        gerrySummary.appendChild(row);
-      }
-    }
-
-    function runGerrymander() {
-      if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
-        setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
-        return;
-      }
-
-      gerrymanderRunCount++;
-      const runSeed = Date.now() + gerrymanderRunCount * 99991;
-
-      const districts = generateDistricts(
-        currentFiltered.map(item => ({
-          feature: JSON.parse(JSON.stringify(item.feature)),
-          group: item.group
-        })),
-        currentDistrictTargets,
-        runSeed
-      );
-
-      currentDistrictResult = districts;
-      addDistrictLayers(districts);
-      renderGerrySummary(districts, currentDistrictTargets);
-
-      if (allMembersLayer) {
-        allMembersLayer.setStyle({
-          radius: 3,
-          color: "#ffffff",
-          weight: 0.7,
-          fillColor: "#cc3344",
-          fillOpacity: 0.08,
-          opacity: 0.14
-        });
-      }
-
-      regerrymanderBtn.disabled = false;
-      setStatus(
-        gerryStatus,
-        `Generated ${districts.length} provisional seeded districts. Click Re-gerrymander to try a different layout.`,
-        "good"
-      );
-    }
-
-    function runFilter() {
-      if (!membersData || !wardPolygonFeatures.length) {
-        setStatus(filterStatus, "Data is not ready yet.", "error");
-        return;
-      }
-
-      removeDistrictLayers();
-      resetDistrictSummary();
-      resetGerrySummary();
-      currentDistrictTargets = null;
-      currentDistrictResult = null;
-      regerrymanderBtn.disabled = true;
-      gerrymanderBtn.disabled = true;
-      setStatus(gerryStatus, "Calculate targets first.");
-
-      const chosenGender = getSelectedGender();
-      const features = membersData.features || [];
-
-      let outsideWardExcluded = 0;
-      const filteredItems = [];
-
-      for (const feature of features) {
-        if (!feature?.geometry || feature.geometry.type !== "Point") continue;
-
-        const gender = normGender(getProp(feature, "Gender"));
-        const assignedToMinister = normYes(getProp(feature, "Assigned_to_minister"));
-        const isAssignedMinisters = normYes(getProp(feature, "Is_assigned_ministers"));
-
-        if (gender !== chosenGender) continue;
-        if (!isAssignedMinisters) continue;
-
-        if (!pointInsideWard(feature)) {
-          outsideWardExcluded++;
-          continue;
-        }
-
-        let group = 0;
-
-        if (assignedToMinister && isAssignedMinisters) {
-          group = 1;
-        } else if (!assignedToMinister && isAssignedMinisters) {
-          group = 2;
-        } else {
-          continue;
-        }
-
-        const cloned = JSON.parse(JSON.stringify(feature));
-        cloned.properties = cloned.properties || {};
-        cloned.properties._group = group;
-
-        filteredItems.push({
-          feature: cloned,
-          group
-        });
-      }
-
-      currentFiltered = filteredItems;
-      currentStats = computeStats(filteredItems, outsideWardExcluded);
-
-      updateMetricCards(currentStats);
-
-      if (allMembersLayer) {
-        allMembersLayer.setStyle({
-          radius: 4,
-          color: "#ffffff",
-          weight: 0.7,
-          fillColor: "#cc3344",
-          fillOpacity: 0.20,
-          opacity: 0.25
-        });
-      }
-
-      calcDistrictBtn.disabled = false;
-      districtCountSelect.disabled = false;
-      zoomFilteredBtn.disabled = filteredItems.length === 0;
-
-      const chosenLabel = chosenGender === "M" ? "male" : "female";
-      const message = [
-        `Filter complete for ${chosenLabel} members.`,
-        `Group 1 = ${currentStats.group1}, Group 2 = ${currentStats.group2}, Total = ${currentStats.total}.`,
-        `Companionships = ${currentStats.companionships}.`,
-        `Average assignments per companionship = ${currentStats.avgAssignmentsDisplay}.`,
-        `Outside ward excluded = ${currentStats.outsideWardExcluded}.`
-      ].join(" ");
-
-      setStatus(filterStatus, message, filteredItems.length ? "good" : "warn");
-      setStatus(districtStatus, "Choose district count and click Calculate Targets.", "good");
-
-      fitToFiltered();
-    }
-
-    function calculateDistrictTargets() {
-      if (!currentStats) {
-        setStatus(districtStatus, "Run the filter first.", "warn");
-        return;
-      }
-
-      const districtCount = Number(districtCountSelect.value);
-      if (!districtCount || districtCount < 1 || districtCount > 10) {
-        setStatus(districtStatus, "Choose a district count from 1 to 10.", "warn");
-        return;
-      }
-
-      currentDistrictTargets = createDistrictTargets(currentStats, districtCount);
-      renderTargetSummary(currentDistrictTargets, currentStats);
-
-      gerrymanderBtn.disabled = false;
-      regerrymanderBtn.disabled = true;
-
-      const note = currentStats.trioNeeded
-        ? "Targets computed. Group 1 is odd, so one trio will be needed later."
-        : "Targets computed successfully.";
-
-      setStatus(districtStatus, note, "good");
-      setStatus(gerryStatus, "Click Gerrymander Districts to generate seeded districts.", "good");
-    }
-
-    function resetPage() {
-      currentFiltered = [];
-      currentStats = null;
-      currentDistrictTargets = null;
-      currentDistrictResult = null;
-      gerrymanderRunCount = 0;
-
-      clearMetricCards();
-      resetDistrictSummary();
-      resetGerrySummary();
-      removeDistrictLayers();
-
-      if (allMembersLayer) {
-        allMembersLayer.setStyle({
-          radius: 4,
-          color: "#ffffff",
-          weight: 0.7,
-          fillColor: "#cc3344",
-          fillOpacity: 0.35,
-          opacity: 0.7
-        });
-      }
-
-      calcDistrictBtn.disabled = true;
-      districtCountSelect.disabled = true;
-      zoomFilteredBtn.disabled = true;
-      gerrymanderBtn.disabled = true;
-      regerrymanderBtn.disabled = true;
-
-      setStatus(filterStatus, "Choose a gender and click Run Filter.");
-      setStatus(districtStatus, "Run the filter first.");
-      setStatus(gerryStatus, "Calculate targets first.");
-
-      fitMapToWard();
-    }
-
-    function initMap() {
-      map = L.map("map", {
-        zoomControl: true
-      });
-
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap contributors"
-      }).addTo(map);
-
-      loadAllData();
-    }
-
-    async function loadAllData() {
-      setStatus(loadStatus, "Loading data...");
-
+    /**********************************************************************
+     * DATA LOAD
+     **********************************************************************/
+    async function loadData() {
       try {
-        const [wardResponse, membersResponse, networkResponse] = await Promise.all([
-          fetch(WARD_URL),
-          fetch(MEMBERS_URL),
-          fetch(NETWORK_URL)
+        const [wardResp, membersResp] = await Promise.all([
+          fetch(WARD_FILE),
+          fetch(MEMBER_FILE)
         ]);
 
-        if (!wardResponse.ok) throw new Error(`Ward boundary failed to load: ${wardResponse.status}`);
-        if (!membersResponse.ok) throw new Error(`Member locations failed to load: ${membersResponse.status}`);
-        if (!networkResponse.ok) throw new Error(`Network failed to load: ${networkResponse.status}`);
-
-        wardData = await wardResponse.json();
-        membersData = await membersResponse.json();
-        networkData = await networkResponse.json();
-
-        wardPolygonFeatures = (wardData.features || []).filter(isPolygonLike);
-        if (!wardPolygonFeatures.length) {
-          throw new Error("No polygon features were found in the ward boundary GeoJSON.");
+        if (!wardResp.ok) {
+          throw new Error(`Failed to load ward boundary file: ${WARD_FILE}`);
+        }
+        if (!membersResp.ok) {
+          throw new Error(`Failed to load member file: ${MEMBER_FILE}`);
         }
 
-        wardLayer = L.geoJSON(wardData, {
-          style: function() {
-            return {
-              color: "#0f766e",
-              weight: 3,
-              fillOpacity: 0,
-              opacity: 1
-            };
-          }
-        }).addTo(map);
+        state.wardBoundaryData = await wardResp.json();
+        state.memberData = await membersResp.json();
 
-        networkLayer = L.geoJSON(networkData, {
-          style: function() {
-            return {
-              color: "#6b7280",
-              weight: 1,
-              opacity: 0.45
-            };
-          }
-        }).addTo(map);
-
-        allMembersLayer = L.geoJSON(membersData, {
-          pointToLayer: function(feature, latlng) {
-            return L.circleMarker(latlng, {
-              radius: 4,
-              color: "#ffffff",
-              weight: 0.7,
-              fillColor: "#cc3344",
-              fillOpacity: 0.35,
-              opacity: 0.7
-            });
-          },
-          onEachFeature: function(feature, layer) {
-            layer.bindPopup(makeMemberPopup(feature));
-          }
-        }).addTo(map);
-
-        chkWardLoaded.checked = true;
-        chkMembersLoaded.checked = true;
-        chkNetworkLoaded.checked = true;
-
-        setStatus(loadStatus, "All layers loaded successfully.", "good");
-        fitMapToWard();
-
+        buildHouseholdIndex();
+        drawWardBoundary();
+        drawMembers();
+        fitInitialView();
+        updateSummary();
       } catch (error) {
         console.error(error);
-        setStatus(loadStatus, "A layer failed to load. Check the browser console.", "error");
+        alert(
+          "There was a problem loading your GeoJSON files.\n\n" +
+          error.message +
+          "\n\nMake sure the HTML file is in the correct folder and the file names match."
+        );
       }
     }
 
-    runFilterBtn.addEventListener("click", runFilter);
-    calcDistrictBtn.addEventListener("click", calculateDistrictTargets);
-    zoomFilteredBtn.addEventListener("click", fitToFiltered);
-    resetBtn.addEventListener("click", resetPage);
-    gerrymanderBtn.addEventListener("click", runGerrymander);
-    regerrymanderBtn.addEventListener("click", runGerrymander);
+    function buildHouseholdIndex() {
+      state.householdIndex.clear();
 
-    initMap();
+      if (!state.memberData || !Array.isArray(state.memberData.features)) return;
+
+      for (const feature of state.memberData.features) {
+        if (!feature.geometry || feature.geometry.type !== "Point") continue;
+        const householdId = getHouseholdId(feature);
+        if (!householdId) continue;
+
+        if (!state.householdIndex.has(householdId)) {
+          state.householdIndex.set(householdId, feature);
+        }
+      }
+    }
+
+    /**********************************************************************
+     * DRAW WARD BOUNDARY
+     **********************************************************************/
+    function drawWardBoundary() {
+      if (state.wardLayer) {
+        state.map.removeLayer(state.wardLayer);
+      }
+
+      state.wardLayer = L.geoJSON(state.wardBoundaryData, {
+        style: {
+          color: "#2b6cb0",
+          weight: 3,
+          fillColor: "#63b3ed",
+          fillOpacity: 0.08
+        }
+      });
+
+      if (document.getElementById("toggleWardBoundary").checked) {
+        state.wardLayer.addTo(state.map);
+      }
+    }
+
+    /**********************************************************************
+     * DRAW MEMBERS
+     **********************************************************************/
+    function drawMembers() {
+      state.membersLayerGroup.clearLayers();
+      state.memberMarkers.clear();
+
+      if (!state.memberData || !Array.isArray(state.memberData.features)) return;
+
+      const householdSeen = new Set();
+
+      for (const feature of state.memberData.features) {
+        if (!feature.geometry || feature.geometry.type !== "Point") continue;
+
+        const householdId = getHouseholdId(feature);
+        if (!householdId || householdSeen.has(householdId)) continue;
+        householdSeen.add(householdId);
+
+        const [lng, lat] = feature.geometry.coordinates;
+        const districtId = getAssignedDistrictIdForHousehold(householdId);
+        const district = districtId ? getDistrictById(districtId) : null;
+
+        const marker = L.circleMarker([lat, lng], {
+          radius: 7,
+          color: district ? district.color : "#555",
+          weight: 2,
+          fillColor: district ? district.color : "#888",
+          fillOpacity: 0.85
+        });
+
+        marker.on("click", () => {
+          handleHouseholdMarkerClick(householdId);
+        });
+
+        marker.on("mouseover", () => {
+          const assignedDistrictId = getAssignedDistrictIdForHousehold(householdId);
+          const assignedDistrict = assignedDistrictId ? getDistrictById(assignedDistrictId) : null;
+
+          setHoverInfo(`
+            <strong>${escapeHtml(getDisplayName(feature))}</strong>
+            <div class="small" style="margin-top:6px;">
+              <div><strong>Address:</strong> ${escapeHtml(getDisplayAddress(feature) || "Unknown")}</div>
+              <div><strong>Gender:</strong> ${escapeHtml(getMemberGender(feature) || "Unknown")}</div>
+              <div><strong>Household ID:</strong> ${escapeHtml(householdId)}</div>
+              <div><strong>District:</strong> ${escapeHtml(assignedDistrict ? assignedDistrict.name : "Unassigned")}</div>
+            </div>
+          `);
+        });
+
+        marker.on("mouseout", clearHoverInfo);
+
+        marker.bindPopup(`
+          <div style="min-width:220px;">
+            <strong>${escapeHtml(getDisplayName(feature))}</strong><br />
+            <div style="margin-top:6px; font-size:12px;">
+              ${escapeHtml(getDisplayAddress(feature) || "Unknown address")}<br />
+              Gender: ${escapeHtml(getMemberGender(feature) || "Unknown")}<br />
+              Assigned district: ${escapeHtml(district ? district.name : "Unassigned")}
+            </div>
+          </div>
+        `);
+
+        marker.addTo(state.membersLayerGroup);
+        state.memberMarkers.set(householdId, marker);
+      }
+
+      if (!document.getElementById("toggleMembers").checked) {
+        state.map.removeLayer(state.membersLayerGroup);
+      } else if (!state.map.hasLayer(state.membersLayerGroup)) {
+        state.membersLayerGroup.addTo(state.map);
+      }
+    }
+
+    function updateMemberMarkerStyles() {
+      for (const [householdId, marker] of state.memberMarkers.entries()) {
+        const districtId = getAssignedDistrictIdForHousehold(householdId);
+        const district = districtId ? getDistrictById(districtId) : null;
+        const isActive = state.activeDistrictId && districtId === state.activeDistrictId;
+
+        marker.setStyle({
+          color: district ? district.color : "#555",
+          fillColor: district ? district.color : "#888",
+          radius: isActive ? 9 : 7,
+          weight: isActive ? 3 : 2,
+          fillOpacity: 0.85
+        });
+      }
+    }
+
+    /**********************************************************************
+     * DISTRICT OPERATIONS
+     **********************************************************************/
+    function createDistrict(name) {
+      const districtName = safeString(name) || `District ${state.nextDistrictId}`;
+      const district = {
+        id: `district_${state.nextDistrictId++}`,
+        name: districtName,
+        color: getColorForDistrictIndex(state.districts.length),
+        householdIds: [],
+        polygonGeoJSON: null
+      };
+
+      state.districts.push(district);
+      setActiveDistrict(district.id);
+      redrawDistricts();
+      updateSummary();
+      renderDistrictList();
+      updateActiveDistrictUI();
+    }
+
+    function deleteDistrict(districtId) {
+      const district = getDistrictById(districtId);
+      if (!district) return;
+
+      for (const householdId of district.householdIds) {
+        state.householdAssignment.delete(householdId);
+      }
+
+      const idx = state.districts.findIndex(d => d.id === districtId);
+      if (idx >= 0) {
+        state.districts.splice(idx, 1);
+      }
+
+      if (state.activeDistrictId === districtId) {
+        state.activeDistrictId = null;
+      }
+
+      removeDistrictLayers(districtId);
+      redrawDistricts();
+      drawMembers();
+      updateSummary();
+      renderDistrictList();
+      updateActiveDistrictUI();
+    }
+
+    function setActiveDistrict(districtId) {
+      state.activeDistrictId = districtId;
+      updateActiveDistrictUI();
+      renderDistrictList();
+      updateMemberMarkerStyles();
+    }
+
+    function renameActiveDistrict(newName) {
+      const district = getActiveDistrict();
+      if (!district) return;
+
+      const cleanName = safeString(newName);
+      if (!cleanName) return;
+
+      district.name = cleanName;
+      redrawDistricts();
+      renderDistrictList();
+      updateActiveDistrictUI();
+      drawMembers();
+    }
+
+    function handleHouseholdMarkerClick(householdId) {
+      const activeDistrict = getActiveDistrict();
+      if (!activeDistrict) {
+        alert("Create or select a district first.");
+        return;
+      }
+
+      const currentlyAssignedDistrictId = getAssignedDistrictIdForHousehold(householdId);
+
+      if (currentlyAssignedDistrictId === activeDistrict.id) {
+        removeHouseholdFromDistrict(householdId, activeDistrict.id);
+      } else {
+        if (currentlyAssignedDistrictId) {
+          removeHouseholdFromDistrict(householdId, currentlyAssignedDistrictId);
+        }
+        addHouseholdToDistrict(householdId, activeDistrict.id);
+      }
+
+      redrawDistricts();
+      drawMembers();
+      updateSummary();
+      renderDistrictList();
+      updateActiveDistrictUI();
+    }
+
+    function addHouseholdToDistrict(householdId, districtId) {
+      const district = getDistrictById(districtId);
+      if (!district) return;
+      if (district.householdIds.includes(householdId)) return;
+
+      district.householdIds.push(householdId);
+      state.householdAssignment.set(householdId, districtId);
+      recomputeDistrictPolygon(district);
+    }
+
+    function removeHouseholdFromDistrict(householdId, districtId) {
+      const district = getDistrictById(districtId);
+      if (!district) return;
+
+      district.householdIds = district.householdIds.filter(id => id !== householdId);
+      if (state.householdAssignment.get(householdId) === districtId) {
+        state.householdAssignment.delete(householdId);
+      }
+      recomputeDistrictPolygon(district);
+    }
+
+    /**********************************************************************
+     * DISTRICT GEOMETRY
+     **********************************************************************/
+    function recomputeDistrictPolygon(district) {
+      const points = district.householdIds
+        .map(householdId => getHouseholdFeatureById(householdId))
+        .filter(Boolean)
+        .map(feature => turf.point(feature.geometry.coordinates, { householdId: getHouseholdId(feature) }));
+
+      if (points.length === 0) {
+        district.polygonGeoJSON = null;
+        return;
+      }
+
+      if (points.length === 1) {
+        const bufferFeet = Number(document.getElementById("bufferFeetInput").value) || 250;
+        const pointBuffer = turf.buffer(
+          points[0],
+          feetToKilometers(bufferFeet),
+          { units: "kilometers" }
+        );
+        district.polygonGeoJSON = clipToWard(pointBuffer);
+        return;
+      }
+
+      const useBufferMode = document.getElementById("toggleBufferMode").checked;
+      const bufferFeet = Number(document.getElementById("bufferFeetInput").value) || 250;
+
+      let geometry = null;
+
+      try {
+        const fc = turf.featureCollection(points);
+
+        if (useBufferMode) {
+          const hull = turf.concave(fc, { maxEdge: feetToKilometers(bufferFeet * 4), units: "kilometers" })
+            || turf.convex(fc);
+
+          if (hull) {
+            geometry = turf.buffer(hull, feetToKilometers(bufferFeet), { units: "kilometers" });
+          } else {
+            geometry = turf.buffer(fc, feetToKilometers(bufferFeet), { units: "kilometers" });
+          }
+        } else {
+          geometry = turf.convex(fc) || turf.concave(fc, { maxEdge: 1, units: "kilometers" });
+          if (geometry) {
+            geometry = turf.buffer(geometry, feetToKilometers(50), { units: "kilometers" });
+          }
+        }
+
+        if (!geometry) {
+          geometry = turf.buffer(fc, feetToKilometers(bufferFeet), { units: "kilometers" });
+        }
+
+        district.polygonGeoJSON = clipToWard(geometry);
+      } catch (error) {
+        console.error("Error recomputing district polygon:", error);
+        district.polygonGeoJSON = null;
+      }
+    }
+
+    function clipToWard(feature) {
+      if (!feature || !state.wardBoundaryData) return feature;
+
+      try {
+        const wardFeatures = state.wardBoundaryData.features || [];
+        if (!wardFeatures.length) return feature;
+
+        let clipped = feature;
+
+        for (const wardFeature of wardFeatures) {
+          if (!clipped) break;
+          const intersected = turf.intersect(
+            turf.featureCollection([clipped, wardFeature])
+          );
+          if (intersected) {
+            clipped = intersected;
+          }
+        }
+
+        return clipped || feature;
+      } catch (error) {
+        console.warn("Clip to ward failed, using unclipped geometry.", error);
+        return feature;
+      }
+    }
+
+    /**********************************************************************
+     * DRAW DISTRICTS
+     **********************************************************************/
+    function redrawDistricts() {
+      for (const district of state.districts) {
+        recomputeDistrictPolygon(district);
+      }
+
+      clearAllDistrictLayers();
+
+      for (const district of state.districts) {
+        if (!district.polygonGeoJSON) continue;
+
+        const polygonLayer = L.geoJSON(district.polygonGeoJSON, {
+          style: {
+            color: district.color,
+            weight: district.id === state.activeDistrictId ? 4 : 3,
+            fillColor: district.color,
+            fillOpacity: district.id === state.activeDistrictId ? 0.22 : 0.12
+          }
+        });
+
+        polygonLayer.on("mouseover", () => {
+          setHoverInfo(`
+            <strong>${escapeHtml(district.name)}</strong>
+            <div class="small" style="margin-top:6px;">
+              <div><strong>Homes:</strong> ${district.householdIds.length}</div>
+              <div><strong>Color:</strong> ${escapeHtml(district.color)}</div>
+            </div>
+          `);
+        });
+
+        polygonLayer.on("mouseout", clearHoverInfo);
+
+        polygonLayer.on("click", () => {
+          setActiveDistrict(district.id);
+          redrawDistricts();
+        });
+
+        polygonLayer.bindPopup(`
+          <div style="min-width:220px;">
+            <strong>${escapeHtml(district.name)}</strong><br />
+            <div style="margin-top:6px; font-size:12px;">
+              Households: ${district.householdIds.length}<br />
+              Click polygon to activate this district.
+            </div>
+          </div>
+        `);
+
+        polygonLayer.addTo(state.map);
+        state.districtLayers.set(district.id, polygonLayer);
+
+        if (document.getElementById("toggleDistrictLabels").checked) {
+          addDistrictLabel(district);
+        }
+      }
+
+      updateMemberMarkerStyles();
+    }
+
+    function addDistrictLabel(district) {
+      if (!district.polygonGeoJSON) return;
+
+      try {
+        const center = turf.centroid(district.polygonGeoJSON);
+        const [lng, lat] = center.geometry.coordinates;
+
+        const label = L.marker([lat, lng], {
+          interactive: false,
+          icon: L.divIcon({
+            className: "",
+            html: `
+              <div style="
+                background: rgba(255,255,255,0.92);
+                border: 1px solid ${district.color};
+                color: #1f2937;
+                border-radius: 999px;
+                padding: 4px 8px;
+                font-size: 12px;
+                font-weight: 700;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+                white-space: nowrap;
+              ">
+                ${escapeHtml(district.name)} (${district.householdIds.length})
+              </div>
+            `,
+            iconSize: [1, 1],
+            iconAnchor: [0, 0]
+          })
+        });
+
+        label.addTo(state.map);
+        state.districtLabelLayers.set(district.id, label);
+      } catch (error) {
+        console.warn("Failed to create district label:", error);
+      }
+    }
+
+    function removeDistrictLayers(districtId) {
+      const polygonLayer = state.districtLayers.get(districtId);
+      if (polygonLayer) {
+        state.map.removeLayer(polygonLayer);
+      }
+      state.districtLayers.delete(districtId);
+
+      const labelLayer = state.districtLabelLayers.get(districtId);
+      if (labelLayer) {
+        state.map.removeLayer(labelLayer);
+      }
+      state.districtLabelLayers.delete(districtId);
+    }
+
+    function clearAllDistrictLayers() {
+      for (const layer of state.districtLayers.values()) {
+        state.map.removeLayer(layer);
+      }
+      for (const layer of state.districtLabelLayers.values()) {
+        state.map.removeLayer(layer);
+      }
+      state.districtLayers.clear();
+      state.districtLabelLayers.clear();
+    }
+
+    /**********************************************************************
+     * UI RENDERING
+     **********************************************************************/
+    function updateActiveDistrictUI() {
+      const activeDistrict = getActiveDistrict();
+      const activeBox = document.getElementById("activeDistrictBox");
+      const noMsg = document.getElementById("noActiveDistrictMsg");
+      const label = document.getElementById("activeDistrictLabel");
+      const badge = document.getElementById("activeDistrictCountBadge");
+      const renameInput = document.getElementById("renameDistrictInput");
+
+      if (!activeDistrict) {
+        activeBox.classList.add("hidden");
+        noMsg.classList.remove("hidden");
+        return;
+      }
+
+      activeBox.classList.remove("hidden");
+      noMsg.classList.add("hidden");
+
+      label.textContent = activeDistrict.name;
+      badge.textContent = `${activeDistrict.householdIds.length} homes`;
+      renameInput.value = activeDistrict.name;
+    }
+
+    function renderDistrictList() {
+      const container = document.getElementById("districtList");
+      container.innerHTML = "";
+
+      if (!state.districts.length) {
+        container.innerHTML = `<div class="small">No districts created yet.</div>`;
+        return;
+      }
+
+      const targetHomes = Number(document.getElementById("targetHomesInput").value) || 12;
+
+      for (const district of state.districts) {
+        const card = document.createElement("div");
+        card.className = "district-card" + (district.id === state.activeDistrictId ? " active" : "");
+
+        const delta = district.householdIds.length - targetHomes;
+        let balanceText = "On target";
+        if (delta > 0) balanceText = `${delta} over target`;
+        if (delta < 0) balanceText = `${Math.abs(delta)} under target`;
+
+        const membersHtml = district.householdIds
+          .map(householdId => {
+            const feature = getHouseholdFeatureById(householdId);
+            return `<div class="member-mini-item">${escapeHtml(feature ? getDisplayName(feature) : householdId)}</div>`;
+          })
+          .join("");
+
+        card.innerHTML = `
+          <div class="district-card-header">
+            <div class="district-swatch" style="background:${district.color};"></div>
+            <div class="district-title-wrap">
+              <div class="district-title">${escapeHtml(district.name)}</div>
+              <div class="district-subtitle">${escapeHtml(district.id)}</div>
+            </div>
+          </div>
+          <div class="district-card-body">
+            <div class="pill-row">
+              <span class="pill">Homes: ${district.householdIds.length}</span>
+              <span class="pill">${escapeHtml(balanceText)}</span>
+            </div>
+            <div class="member-mini-list">
+              ${membersHtml || `<div class="small">No households assigned.</div>`}
+            </div>
+            <div class="district-actions">
+              <button class="secondary district-select-btn">Select</button>
+              <button class="secondary district-zoom-btn">Zoom</button>
+              <button class="danger district-delete-btn">Delete</button>
+            </div>
+          </div>
+        `;
+
+        card.querySelector(".district-select-btn").addEventListener("click", () => {
+          setActiveDistrict(district.id);
+          redrawDistricts();
+        });
+
+        card.querySelector(".district-zoom-btn").addEventListener("click", () => {
+          zoomToDistrict(district.id);
+        });
+
+        card.querySelector(".district-delete-btn").addEventListener("click", () => {
+          const ok = confirm(`Delete ${district.name}?`);
+          if (ok) {
+            deleteDistrict(district.id);
+          }
+        });
+
+        container.appendChild(card);
+      }
+    }
+
+    function updateSummary() {
+      const totalMembers = Array.isArray(state.memberData?.features) ? state.memberData.features.length : 0;
+      const totalHouseholds = state.householdIndex.size;
+      const districtCount = state.districts.length;
+      const unassignedHomes = getAllHouseholdIds().filter(id => !state.householdAssignment.has(id)).length;
+
+      document.getElementById("totalMembersStat").textContent = totalMembers;
+      document.getElementById("totalHouseholdsStat").textContent = totalHouseholds;
+      document.getElementById("districtCountStat").textContent = districtCount;
+      document.getElementById("unassignedHomesStat").textContent = unassignedHomes;
+
+      const targetHomes = Number(document.getElementById("targetHomesInput").value) || 12;
+      if (!districtCount) {
+        document.getElementById("balanceSummary").textContent = "No districts yet.";
+        return;
+      }
+
+      const counts = state.districts.map(d => d.householdIds.length);
+      const min = Math.min(...counts);
+      const max = Math.max(...counts);
+      const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
+
+      document.getElementById("balanceSummary").textContent =
+        `Target: ${targetHomes} homes each. Current range: ${min} to ${max}. Average: ${avg.toFixed(1)}.`;
+    }
+
+    /**********************************************************************
+     * ZOOM HELPERS
+     **********************************************************************/
+    function fitInitialView() {
+      const layers = [];
+
+      if (state.wardLayer) layers.push(state.wardLayer);
+      if (state.membersLayerGroup && state.membersLayerGroup.getLayers().length) {
+        layers.push(state.membersLayerGroup);
+      }
+
+      if (!layers.length) return;
+
+      let bounds = null;
+      for (const layer of layers) {
+        const b = layer.getBounds ? layer.getBounds() : null;
+        if (!b || !b.isValid()) continue;
+        bounds = bounds ? bounds.extend(b) : b;
+      }
+
+      if (bounds && bounds.isValid()) {
+        state.map.fitBounds(bounds.pad(0.08));
+      }
+    }
+
+    function zoomToDistrict(districtId) {
+      const layer = state.districtLayers.get(districtId);
+      if (layer && layer.getBounds && layer.getBounds().isValid()) {
+        state.map.fitBounds(layer.getBounds().pad(0.2));
+        setActiveDistrict(districtId);
+        redrawDistricts();
+      }
+    }
+
+    /**********************************************************************
+     * IMPORT / EXPORT
+     **********************************************************************/
+    function exportDistrictsGeoJSON() {
+      const features = state.districts.map(district => {
+        const geometryFeature = district.polygonGeoJSON
+          ? JSON.parse(JSON.stringify(district.polygonGeoJSON))
+          : turf.feature(null);
+
+        geometryFeature.properties = {
+          district_id: district.id,
+          district_name: district.name,
+          color: district.color,
+          household_ids: [...district.householdIds]
+        };
+
+        return geometryFeature;
+      });
+
+      const fc = {
+        type: "FeatureCollection",
+        features
+      };
+
+      const blob = new Blob([JSON.stringify(fc, null, 2)], { type: "application/geo+json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "ministering_districts.geojson";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function importDistrictsGeoJSON(file) {
+      const text = await file.text();
+      const data = JSON.parse(text);
+
+      if (!data || data.type !== "FeatureCollection" || !Array.isArray(data.features)) {
+        throw new Error("Invalid GeoJSON file.");
+      }
+
+      state.districts = [];
+      state.householdAssignment.clear();
+      state.activeDistrictId = null;
+      state.nextDistrictId = 1;
+
+      for (const feature of data.features) {
+        const props = feature.properties || {};
+        const districtId = safeString(props.district_id) || `district_${state.nextDistrictId}`;
+        const districtName = safeString(props.district_name) || `District ${state.nextDistrictId}`;
+        const color = safeString(props.color) || getColorForDistrictIndex(state.districts.length);
+        const householdIds = Array.isArray(props.household_ids) ? props.household_ids.map(String) : [];
+
+        const district = {
+          id: districtId,
+          name: districtName,
+          color,
+          householdIds: [],
+          polygonGeoJSON: feature.geometry ? {
+            type: "Feature",
+            geometry: feature.geometry,
+            properties: {}
+          } : null
+        };
+
+        state.districts.push(district);
+
+        const numericPart = districtId.match(/(\d+)/);
+        if (numericPart) {
+          state.nextDistrictId = Math.max(state.nextDistrictId, Number(numericPart[1]) + 1);
+        }
+
+        for (const householdId of householdIds) {
+          if (!state.householdIndex.has(householdId)) continue;
+          if (state.householdAssignment.has(householdId)) continue;
+          district.householdIds.push(householdId);
+          state.householdAssignment.set(householdId, district.id);
+        }
+
+        recomputeDistrictPolygon(district);
+      }
+
+      if (state.districts.length) {
+        state.activeDistrictId = state.districts[0].id;
+      }
+
+      redrawDistricts();
+      drawMembers();
+      updateSummary();
+      renderDistrictList();
+      updateActiveDistrictUI();
+    }
+
+    /**********************************************************************
+     * EVENTS
+     **********************************************************************/
+    function bindUIEvents() {
+      document.getElementById("createDistrictBtn").addEventListener("click", () => {
+        const name = document.getElementById("newDistrictName").value.trim();
+        createDistrict(name);
+        document.getElementById("newDistrictName").value = "";
+      });
+
+      document.getElementById("clearSelectionBtn").addEventListener("click", () => {
+        state.activeDistrictId = null;
+        updateActiveDistrictUI();
+        renderDistrictList();
+        updateMemberMarkerStyles();
+        redrawDistricts();
+      });
+
+      document.getElementById("renameDistrictBtn").addEventListener("click", () => {
+        const newName = document.getElementById("renameDistrictInput").value.trim();
+        if (!newName) return;
+        renameActiveDistrict(newName);
+      });
+
+      document.getElementById("fitActiveDistrictBtn").addEventListener("click", () => {
+        const activeDistrict = getActiveDistrict();
+        if (!activeDistrict) return;
+        zoomToDistrict(activeDistrict.id);
+      });
+
+      document.getElementById("deleteActiveDistrictBtn").addEventListener("click", () => {
+        const activeDistrict = getActiveDistrict();
+        if (!activeDistrict) return;
+
+        const ok = confirm(`Delete ${activeDistrict.name}?`);
+        if (ok) {
+          deleteDistrict(activeDistrict.id);
+        }
+      });
+
+      document.getElementById("toggleMembers").addEventListener("change", (e) => {
+        if (e.target.checked) {
+          state.membersLayerGroup.addTo(state.map);
+        } else {
+          state.map.removeLayer(state.membersLayerGroup);
+        }
+      });
+
+      document.getElementById("toggleWardBoundary").addEventListener("change", (e) => {
+        if (!state.wardLayer) return;
+        if (e.target.checked) {
+          state.wardLayer.addTo(state.map);
+        } else {
+          state.map.removeLayer(state.wardLayer);
+        }
+      });
+
+      document.getElementById("toggleDistrictLabels").addEventListener("change", () => {
+        redrawDistricts();
+      });
+
+      document.getElementById("toggleBufferMode").addEventListener("change", () => {
+        redrawDistricts();
+      });
+
+      document.getElementById("bufferFeetInput").addEventListener("change", () => {
+        redrawDistricts();
+      });
+
+      document.getElementById("targetHomesInput").addEventListener("change", () => {
+        updateSummary();
+        renderDistrictList();
+      });
+
+      document.getElementById("exportDistrictsBtn").addEventListener("click", () => {
+        exportDistrictsGeoJSON();
+      });
+
+      document.getElementById("importDistrictsInput").addEventListener("change", async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+
+        try {
+          await importDistrictsGeoJSON(file);
+        } catch (error) {
+          console.error(error);
+          alert("Could not import the district file.\n\n" + error.message);
+        } finally {
+          e.target.value = "";
+        }
+      });
+    }
+
+    /**********************************************************************
+     * START
+     **********************************************************************/
+    async function startApp() {
+      initMap();
+      bindUIEvents();
+      await loadData();
+      renderDistrictList();
+      updateActiveDistrictUI();
+      clearHoverInfo();
+    }
+
+    startApp();
   </script>
 </body>
 </html>
