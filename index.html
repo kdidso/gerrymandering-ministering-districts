@@ -2733,39 +2733,38 @@ function buildDistrictBoundarySegmentsFromResolvedResult(resolvedResult) {
     if (!entries.length) continue;
 
     if (entries.length === 1) {
-      const entry = entries[0];
-      boundaryFeatures.push({
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates: entry.coords
-        },
-        properties: {
-          _district: entry.districtId
-        }
-      });
-      continue;
+  const entry = entries[0];
+  boundaryFeatures.push({
+    type: "Feature",
+    geometry: {
+      type: "LineString",
+      coordinates: entry.coords
+    },
+    properties: {
+      _district: entry.districtId
     }
+  });
+  continue;
+}
 
-    const uniqueDistricts = [...new Set(entries.map(e => e.districtId))];
-    if (uniqueDistricts.length <= 1) continue;
+const uniqueDistricts = [...new Set(entries.map(e => e.districtId))];
+if (uniqueDistricts.length <= 1) continue;
 
-    for (const districtId of uniqueDistricts) {
-      const matching = entries.find(e => e.districtId === districtId);
-      if (!matching) continue;
+// Draw shared edge only ONCE.
+// Stable rule: lower district id owns the edge color.
+const chosenDistrictId = Math.min(...uniqueDistricts);
+const matching = entries.find(e => e.districtId === chosenDistrictId) || entries[0];
 
-      boundaryFeatures.push({
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates: matching.coords
-        },
-        properties: {
-          _district: districtId
-        }
-      });
-    }
+boundaryFeatures.push({
+  type: "Feature",
+  geometry: {
+    type: "LineString",
+    coordinates: matching.coords
+  },
+  properties: {
+    _district: chosenDistrictId
   }
+});
 
   return boundaryFeatures;
 }
