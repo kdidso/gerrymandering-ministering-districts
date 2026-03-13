@@ -2178,6 +2178,92 @@ function cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets, m
     if (!changed) break;
   }
 }
+  function enforceSingleComponentDistricts(owner, conflictCellIds, pointCellDistrictSets) {
+
+     const districtIds = [...new Set([...owner.values()].filter(v => v != null))];
+
+     for (const districtId of districtIds) {
+
+       const components = getConnectedComponentsForDistrict(districtId, owner);
+       if (components.length <= 1) continue;
+
+    // Determine the main component
+       let mainIndex = 0;
+       let foundProtected = false;
+
+       for (let i = 0; i < components.length; i++) {
+         const hasProtected = components[i].some(cellId => {
+           const set = pointCellDistrictSets.get(String(cellId));
+           return set && set.has(districtId);
+      });
+
+      if (hasProtected) {
+        mainIndex = i;
+        foundProtected = true;
+        break;
+      }
+    }
+
+    if (!foundProtected) {
+      components.sort((a,b)=>b.length-a.length);
+      mainIndex = 0;
+    }
+
+    const mainComponent = new Set(components[mainIndex]);
+
+    for (let i = 0; i < components.length; i++) {
+
+      if (i === mainIndex) continue;
+
+      const component = components[i];
+
+      const hasProtectedPoint = component.some(cellId => {
+        const set = pointCellDistrictSets.get(String(cellId));
+        return set && set.has(districtId);
+      });
+
+      // Case 1 — removable island
+      if (!hasProtectedPoint) {
+
+        const replacementDistrict =
+          chooseReplacementDistrictForIsland(component, districtId, owner);
+
+        if (replacementDistrict != null) {
+          for (const cellId of component) {
+            owner.set(String(cellId), replacementDistrict);
+          }
+        }
+
+        continue;
+      }
+
+      // Case 2 — protected island → build corridor
+      const corridor = findCorridorToMainComponent(
+        component,
+        mainComponent,
+        districtId,
+        owner,
+        conflictCellIds,
+        pointCellDistrictSets
+      );
+
+      if (!corridor) continue;
+
+      for (const cellId of corridor) {
+        owner.set(String(cellId), districtId);
+        mainComponent.add(String(cellId));
+      }
+
+      for (const cellId of component) {
+        owner.set(String(cellId), districtId);
+        mainComponent.add(String(cellId));
+      }
+
+    }
+
+  }
+
+}
   function wouldDisconnectDistrict(cellId, districtId, owner) {
   const remainingDistrictCells = cellsWorking
     .map(cell => String(cell.id))
@@ -2440,6 +2526,7 @@ function cleanupDistricts() {
         fillAllRemainingUnassigned(owner, conflictCellIds, pointCellDistrictSets);
 
         cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets, 3);
+        enforceSingleComponentDistricts(owner, conflictCellIds, pointCellDistrictSets);
 
         fillUnassignedCells(owner, conflictCellIds, pointCellDistrictSets, 2);
         fillAllRemainingUnassigned(owner, conflictCellIds, pointCellDistrictSets);
@@ -2778,7 +2865,7 @@ function resolveConflictCellsStep() {
 // Keep this step lighter: resolve conflicts, then fill obvious gaps.
 // Final one-component enforcement should happen in cleanupDistricts().
       fillAllRemainingUnassigned(owner, unresolvedConflictSet, pointCellDistrictSets);
-
+      enforceSingleComponentDistricts(owner, unresolvedConflictSet, pointCellDistrictSets);
       const resolvedFeatures = buildResolvedFeaturesFromOwner(owner);
       const countByDistrict = countFeaturesByDistrict(resolvedFeatures, currentPointDistricts);
 
