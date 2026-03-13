@@ -215,6 +215,7 @@
     <button id="claimCellsBtn" class="secondary" disabled>Claim Cells From Lines</button>
     <button id="expandCellsBtn" class="secondary" disabled>Expand District Cells</button>
     <button id="cleanupBtn" class="secondary" disabled>Clean Up Districts</button>
+    <button id="resolveConflictsBtn" class="secondary" disabled>Resolve Conflict Cells</button>
   </div>
   <div id="gerryStatus" class="status">Calculate targets first.</div>
   <div class="district-summary" id="gerrySummary"></div>
@@ -270,6 +271,7 @@
     let currentLineFeatures = null;
     let currentClaimResult = null;
     let currentExpandedResult = null;
+    let currentResolvedResult = null;
     let gerrymanderRunCount = 0;
 
     let cellsWorking = [];
@@ -296,6 +298,7 @@
     const claimCellsBtn = document.getElementById("claimCellsBtn");
     const expandCellsBtn = document.getElementById("expandCellsBtn");
     const cleanupBtn = document.getElementById("cleanupBtn");
+    const resolveConflictsBtn = document.getElementById("resolveConflictsBtn");
     const districtCountSelect = document.getElementById("districtCountSelect");
     const districtSummary = document.getElementById("districtSummary");
     const gerrySummary = document.getElementById("gerrySummary");
@@ -1124,6 +1127,7 @@
       connectLinesBtn.disabled = true;
       claimCellsBtn.disabled = true;
       expandCellsBtn.disabled = true;
+      resolveConflictsBtn.disabled = true;
       removeDistrictLineLayer();
       setStatus(gerryStatus, "Calculate targets first.");
 
@@ -1239,6 +1243,7 @@ filteredPreviewLayer = L.geoJSON(
       claimCellsBtn.disabled = true;
       expandCellsBtn.disabled = true;
       cleanupBtn.disabled = true;
+      resolveConflictsBtn.disabled = true;
       setStatus(districtStatus, currentStats.trioNeeded ? "Targets computed. Group 1 is odd, so one trio will be needed later." : "Targets computed successfully.", "good");
       setStatus(gerryStatus, "Click Gerrymander Districts to generate cell-based districts.", "good");
     }
@@ -1277,6 +1282,7 @@ districts = enforceSameCellSameDistrict(districts);
       currentLineFeatures = null;
       currentClaimResult = null;
       currentExpandedResult = null;
+      currentResolvedResult = null;
       claimCellsBtn.disabled = true;
       expandCellsBtn.disabled = true;
       cleanupBtn.disabled = true;
@@ -2288,6 +2294,8 @@ function cleanupDistricts() {
         conflictCellIds: [...conflictCellIds]
       };
       currentDistrictResult = currentExpandedResult;
+      currentResolvedResult = null;
+      resolveConflictsBtn.disabled = false;
 
       resetGerrySummary();
 
@@ -2337,6 +2345,281 @@ function cleanupDistricts() {
     }
   }, 40);
 }  
+    function getComponentsFromOwnerForDistrict(districtId, owner) {
+  const visited = new Set();
+  const components = [];
+
+  for (const cell of cellsWorking) {
+    const startId = String(cell.id);
+    if (owner.get(startId) !== districtId) continue;
+    if (visited.has(startId)) continue;
+
+    const component = [];
+    const queue = [startId];
+    visited.add(startId);
+    let qIndex = 0;
+
+    while (qIndex < queue.length) {
+      const currentId = queue[qIndex++];
+      component.push(currentId);
+
+      const currentCell = cellById.get(currentId);
+      if (!currentCell) continue;
+
+      for (const neighborIdRaw of currentCell.neighbors) {
+        const neighborId = String(neighborIdRaw);
+        if (visited.has(neighborId)) continue;
+        if (owner.get(neighborId) !== districtId) continue;
+
+        visited.add(neighborId);
+        queue.push(neighborId);
+      }
+    }
+
+    components.push(component);
+  }
+
+  return components;
+}
+
+function getNeighborDistrictSet(cellId, owner) {
+  const result = new Set();
+  const cell = cellById.get(String(cellId));
+  if (!cell) return result;
+
+  for (const neighborIdRaw of cell.neighbors) {
+    const districtId = owner.get(String(neighborIdRaw));
+    if (districtId != null) result.add(districtId);
+  }
+
+  return result;
+}
+
+function countTouchedComponents(cellId, districtId, owner) {
+  const cell = cellById.get(String(cellId));
+  if (!cell) return 0;
+
+  const components = getComponentsFromOwnerForDistrict(districtId, owner);
+  let touched = 0;
+
+  for (const component of components) {
+    const componentSet = new Set(component);
+    const touchesThisComponent = cell.neighbors.some(n => componentSet.has(String(n)));
+    if (touchesThisComponent) touched++;
+  }
+
+  return touched;
+}
+
+function getProtectedDistrictForConflictCell(cellId, pointCellDistrictSets) {
+  const pointSet = pointCellDistrictSets.get(String(cellId));
+  if (!pointSet || pointSet.size === 0) return null;
+  if (pointSet.size === 1) return [...pointSet][0];
+  return null;
+}
+
+function scoreConflictAssignment(cellId, districtId, owner, pointCellDistrictSets) {
+  let score = 0;
+
+  const protectedDistrict = getProtectedDistrictForConflictCell(cellId, pointCellDistrictSets);
+  if (protectedDistrict != null) {
+    if (protectedDistrict === districtId) score += 100000;
+    else score -= 100000;
+  }
+
+  const touchedComponents = countTouchedComponents(cellId, districtId, owner);
+  if (touchedComponents >= 2) score += 5000;
+  else if (touchedComponents === 1) score += 200;
+
+  const cell = cellById.get(String(cellId));
+  if (cell) {
+    for (const neighborIdRaw of cell.neighbors) {
+      const neighborDistrict = owner.get(String(neighborIdRaw));
+      if (neighborDistrict == null) continue;
+      if (neighborDistrict === districtId) score += 20;
+      else score -= 2;
+    }
+  }
+
+  return score;
+}
+
+function resolveConflictCells(owner, conflictCellIds, pointCellDistrictSets) {
+  const remainingConflicts = new Set();
+
+  for (const conflictCellId of conflictCellIds) {
+    const cellId = String(conflictCellId);
+    const neighborDistricts = [...getNeighborDistrictSet(cellId, owner)];
+
+    const protectedDistrict = getProtectedDistrictForConflictCell(cellId, pointCellDistrictSets);
+    let candidates = neighborDistricts.slice();
+
+    if (protectedDistrict != null && !candidates.includes(protectedDistrict)) {
+      candidates.push(protectedDistrict);
+    }
+
+    if (!candidates.length) {
+      remainingConflicts.add(cellId);
+      continue;
+    }
+
+    let bestDistrict = null;
+    let bestScore = -Infinity;
+
+    for (const districtId of candidates) {
+      const score = scoreConflictAssignment(cellId, districtId, owner, pointCellDistrictSets);
+      if (score > bestScore) {
+        bestScore = score;
+        bestDistrict = districtId;
+      }
+    }
+
+    if (bestDistrict == null) {
+      remainingConflicts.add(cellId);
+      continue;
+    }
+
+    owner.set(cellId, bestDistrict);
+  }
+
+  return remainingConflicts;
+}
+
+function buildResolvedFeaturesFromOwner(owner) {
+  const features = [];
+
+  for (const cell of cellsWorking) {
+    const cellId = String(cell.id);
+    const districtId = owner.get(cellId);
+    if (districtId == null) continue;
+
+    const clone = JSON.parse(JSON.stringify(cell.feature));
+    clone.properties = {
+      ...(clone.properties || {}),
+      _district: districtId,
+      _pieceType: "resolved-cell"
+    };
+    features.push(clone);
+  }
+
+  return features;
+}
+
+function resolveConflictCellsStep() {
+  if (!currentPointDistricts || !currentPointDistricts.length) {
+    setStatus(gerryStatus, "Gerrymander people first.", "warn");
+    return;
+  }
+
+  if (!currentExpandedResult || !currentExpandedResult.expandedFeatures) {
+    setStatus(gerryStatus, "Expand and clean districts first.", "warn");
+    return;
+  }
+
+  setStatus(gerryStatus, "Resolving conflict cells and reconnecting districts...", "warn");
+
+  setTimeout(() => {
+    try {
+      const pointCellDistrictSets = getPointCellDistrictSets(currentPointDistricts);
+      const { owner, conflictCellIds } = buildOwnerFromExpandedResult(currentExpandedResult);
+
+      const unresolvedConflictSet = resolveConflictCells(owner, conflictCellIds, pointCellDistrictSets);
+
+      cleanupDistrictIslands(owner, unresolvedConflictSet, pointCellDistrictSets);
+      fillAllRemainingUnassigned(owner, unresolvedConflictSet, pointCellDistrictSets);
+      cleanupDistrictIslands(owner, unresolvedConflictSet, pointCellDistrictSets);
+      fillAllRemainingUnassigned(owner, unresolvedConflictSet, pointCellDistrictSets);
+
+      const resolvedFeatures = buildResolvedFeaturesFromOwner(owner);
+      const countByDistrict = countFeaturesByDistrict(resolvedFeatures, currentPointDistricts);
+
+      if (districtFillLayer) {
+        map.removeLayer(districtFillLayer);
+        districtFillLayer = null;
+      }
+
+      districtFillLayer = L.geoJSON(
+        {
+          type: "FeatureCollection",
+          features: resolvedFeatures
+        },
+        {
+          style: function(feature) {
+            const districtId = feature.properties._district;
+            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+            return {
+              color: color,
+              weight: 0.5,
+              opacity: 0.35,
+              fillColor: color,
+              fillOpacity: 0.24
+            };
+          }
+        }
+      ).addTo(map);
+
+      let stillUnassigned = 0;
+      for (const cell of cellsWorking) {
+        const cellId = String(cell.id);
+        if (!owner.has(cellId)) stillUnassigned++;
+      }
+
+      currentResolvedResult = {
+        owner,
+        resolvedFeatures,
+        countByDistrict,
+        conflictCellIds: [...unresolvedConflictSet]
+      };
+      currentDistrictResult = currentResolvedResult;
+
+      resetGerrySummary();
+
+      const intro = document.createElement("div");
+      intro.className = "district-row";
+      intro.innerHTML = `<strong>Conflict resolution complete</strong><br>Conflict cells were force-assigned with preference for assignments that connect same-district components. Additional cleanup and fill passes then ran again.`;
+      gerrySummary.appendChild(intro);
+
+      for (const district of currentPointDistricts) {
+        const row = document.createElement("div");
+        row.className = "district-row";
+        row.innerHTML = `
+          <strong>District ${district.id + 1}</strong><br>
+          Resolved cell count: ${countByDistrict.get(district.id) || 0}
+        `;
+        gerrySummary.appendChild(row);
+      }
+
+      const unresolvedRow = document.createElement("div");
+      unresolvedRow.className = "district-row";
+      unresolvedRow.innerHTML = `
+        <strong>Still unresolved conflict cells</strong><br>
+        ${unresolvedConflictSet.size}
+      `;
+      gerrySummary.appendChild(unresolvedRow);
+
+      const unassignedRow = document.createElement("div");
+      unassignedRow.className = "district-row";
+      unassignedRow.innerHTML = `
+        <strong>Still unassigned cells</strong><br>
+        ${stillUnassigned}
+      `;
+      gerrySummary.appendChild(unassignedRow);
+
+      setStatus(
+        gerryStatus,
+        `Conflict resolution complete. ${unresolvedConflictSet.size} conflict cells remain. ${stillUnassigned} cells remain unassigned.`,
+        "good"
+      );
+    } catch (error) {
+      console.error(error);
+      setStatus(
+        gerryStatus,
+        `Resolving conflict cells failed: ${error?.message || error}`,
+        "error"
+      );
+    }
+  }, 40);
+}
     function resetPage() {
       currentFiltered = [];
       currentStats = null;
@@ -2346,6 +2629,7 @@ function cleanupDistricts() {
       currentLineFeatures = null;
       currentClaimResult = null;
       currentExpandedResult = null;
+      currentResolvedResult = null;
       gerrymanderRunCount = 0;
       clearMetricCards();
       resetDistrictSummary();
@@ -2365,6 +2649,7 @@ function cleanupDistricts() {
       claimCellsBtn.disabled = true;
       expandCellsBtn.disabled = true;
       cleanupBtn.disabled = true;
+      resolveConflictsBtn.disabled = true;
       setStatus(filterStatus, "Choose a gender and click Run Filter.");
       setStatus(districtStatus, "Run the filter first.");
       setStatus(gerryStatus, "Calculate targets first.");
@@ -2445,6 +2730,7 @@ function cleanupDistricts() {
     claimCellsBtn.addEventListener("click", claimCellsFromLines);
     expandCellsBtn.addEventListener("click", expandDistrictCells);
     cleanupBtn.addEventListener("click", cleanupDistricts);
+    resolveConflictsBtn.addEventListener("click", resolveConflictCellsStep);
     initMap();
   </script>
 </body>
