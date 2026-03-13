@@ -2426,7 +2426,46 @@ function findCorridorToMainComponent(component, mainComponent, districtId, owner
 
   return null;
 }
+function findAnyCorridorToMainComponent(component, mainComponent, districtId, owner, conflictCellIds, pointCellDistrictSets) {
+  const startCells = component.map(String);
+  const targetCells = new Set([...mainComponent].map(String));
 
+  const queue = [];
+  const visited = new Set();
+  const parent = new Map();
+  let qIndex = 0;
+
+  for (const startId of startCells) {
+    queue.push(startId);
+    visited.add(startId);
+  }
+
+  while (qIndex < queue.length) {
+    const currentId = queue[qIndex++];
+
+    if (targetCells.has(currentId)) {
+      return reconstructPath(parent, currentId);
+    }
+
+    const cell = cellById.get(String(currentId));
+    if (!cell) continue;
+
+    for (const neighborIdRaw of cell.neighbors) {
+      const neighborId = String(neighborIdRaw);
+      if (visited.has(neighborId)) continue;
+      if (conflictCellIds.has(neighborId)) continue;
+
+      const pointSet = pointCellDistrictSets.get(neighborId);
+      if (pointSet && [...pointSet].some(d => d !== districtId)) continue;
+
+      visited.add(neighborId);
+      parent.set(neighborId, currentId);
+      queue.push(neighborId);
+    }
+  }
+
+  return null;
+}
 function fillAllRemainingUnassigned(owner, conflictCellIds, pointCellDistrictSets) {
   for (const cell of cellsWorking) {
     const cellId = String(cell.id);
