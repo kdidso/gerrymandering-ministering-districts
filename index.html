@@ -216,7 +216,7 @@
     <button id="expandCellsBtn" class="secondary" disabled>Expand District Cells</button>
     <button id="cleanupBtn" class="secondary" disabled>Clean Up Districts</button>
     <button id="resolveConflictsBtn" class="secondary" disabled>Resolve Conflict Cells</button>
-    <button id="dissolveBtn" class="secondary" disabled>Dissolve Districts</button>
+    <button id="dissolveBtn" class="secondary" disabled>Draw District Boundaries</button>
   </div>
   <div id="gerryStatus" class="status">Calculate targets first.</div>
   <div class="district-summary" id="gerrySummary"></div>
@@ -2664,78 +2664,133 @@ dissolveBtn.disabled = false;
     }
   }, 40);
 }
-    function unionFeatures(features) {
-  if (!features.length) return null;
+    function normalizeCoord(coord) {
+  return `${Number(coord[0]).toFixed(10)},${Number(coord[1]).toFixed(10)}`;
+}
 
-  let merged = JSON.parse(JSON.stringify(features[0]));
+function edgeKey(a, b) {
+  const aKey = normalizeCoord(a);
+  const bKey = normalizeCoord(b);
+  return aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`;
+}
 
-  for (let i = 1; i < features.length; i++) {
-    try {
-      const unioned = turf.union(merged, features[i]);
-      if (unioned) {
-        merged = unioned;
+function getPolygonRings(feature) {
+  const geom = feature?.geometry;
+  if (!geom) return [];
+
+  if (geom.type === "Polygon") {
+    return geom.coordinates || [];
+  }
+
+  if (geom.type === "MultiPolygon") {
+    const rings = [];
+    for (const poly of geom.coordinates || []) {
+      for (const ring of poly || []) {
+        rings.push(ring);
       }
-    } catch (err) {
-      console.warn("Union failed for district dissolve.", err);
+    }
+    return rings;
+  }
+
+  return [];
+}
+
+function buildDistrictBoundarySegmentsFromResolvedResult(resolvedResult) {
+  const owner = resolvedResult.owner;
+  const edgeMap = new Map();
+
+  for (const cell of cellsWorking) {
+    const cellId = String(cell.id);
+    const districtId = owner.get(cellId);
+    if (districtId == null) continue;
+
+    const rings = getPolygonRings(cell.feature);
+
+    for (const ring of rings) {
+      if (!ring || ring.length < 2) continue;
+
+      for (let i = 0; i < ring.length - 1; i++) {
+        const a = ring[i];
+        const b = ring[i + 1];
+        const key = edgeKey(a, b);
+
+        if (!edgeMap.has(key)) {
+          edgeMap.set(key, []);
+        }
+
+        edgeMap.get(key).push({
+          districtId,
+          coords: [a, b],
+          cellId
+        });
+      }
     }
   }
 
-  return merged;
-}
+  const boundaryFeatures = [];
 
-function buildDissolvedDistrictFeaturesFromResolvedResult(resolvedResult, pointDistricts) {
-  const districtFeatures = [];
+  for (const [key, entries] of edgeMap.entries()) {
+    if (!entries.length) continue;
 
-  for (const district of pointDistricts) {
-    const features = (resolvedResult.resolvedFeatures || [])
-      .filter(f => f.properties && f.properties._district === district.id)
-      .map(f => JSON.parse(JSON.stringify(f)));
+    if (entries.length === 1) {
+      const entry = entries[0];
+      boundaryFeatures.push({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: entry.coords
+        },
+        properties: {
+          _district: entry.districtId
+        }
+      });
+      continue;
+    }
 
-    if (!features.length) continue;
+    const uniqueDistricts = [...new Set(entries.map(e => e.districtId))];
+    if (uniqueDistricts.length <= 1) continue;
 
-    const merged = unionFeatures(features);
-    if (!merged) continue;
+    for (const districtId of uniqueDistricts) {
+      const matching = entries.find(e => e.districtId === districtId);
+      if (!matching) continue;
 
-    merged.properties = {
-      ...(merged.properties || {}),
-      _district: district.id
-    };
-
-    districtFeatures.push(merged);
+      boundaryFeatures.push({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: matching.coords
+        },
+        properties: {
+          _district: districtId
+        }
+      });
+    }
   }
 
-  return districtFeatures;
+  return boundaryFeatures;
 }
 
-function dissolveDistricts() {
-  if (!currentPointDistricts || !currentPointDistricts.length) {
-    setStatus(gerryStatus, "Gerrymander people first.", "warn");
-    return;
-  }
-
-  if (!currentResolvedResult || !currentResolvedResult.resolvedFeatures) {
+function drawDistrictBoundaries() {
+  if (!currentResolvedResult || !currentResolvedResult.owner) {
     setStatus(gerryStatus, "Resolve conflict cells first.", "warn");
     return;
   }
 
-  setStatus(gerryStatus, "Dissolving district cells into district boundaries...", "warn");
+  setStatus(gerryStatus, "Drawing district boundaries...", "warn");
 
   setTimeout(() => {
     try {
-      const dissolvedFeatures = buildDissolvedDistrictFeaturesFromResolvedResult(
-        currentResolvedResult,
-        currentPointDistricts
-      );
-
       if (dissolvedDistrictLayer) {
         map.removeLayer(dissolvedDistrictLayer);
         dissolvedDistrictLayer = null;
       }
 
+      const boundaryFeatures = buildDistrictBoundarySegmentsFromResolvedResult(currentResolvedResult);
+
       dissolvedDistrictLayer = L.geoJSON(
         {
           type: "FeatureCollection",
-          features: dissolvedFeatures
+          features: boundaryFeatures
         },
         {
           style: function(feature) {
@@ -2743,10 +2798,8 @@ function dissolveDistricts() {
             const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
             return {
               color: color,
-              weight: 5,
-              opacity: 1,
-              fillColor: color,
-              fillOpacity: 0.08
+              weight: 4,
+              opacity: 1
             };
           },
           onEachFeature: function(feature, layer) {
@@ -2757,7 +2810,7 @@ function dissolveDistricts() {
       ).addTo(map);
 
       currentDissolvedResult = {
-        dissolvedFeatures
+        boundaryFeatures
       };
       currentDistrictResult = currentDissolvedResult;
 
@@ -2765,37 +2818,36 @@ function dissolveDistricts() {
 
       const intro = document.createElement("div");
       intro.className = "district-row";
-      intro.innerHTML = `<strong>District dissolve complete</strong><br>Each district was dissolved into one district feature. Thick bold outer boundaries are now drawn for easier visualization.`;
+      intro.innerHTML = `<strong>District boundary drawing complete</strong><br>Fast district boundary lines were drawn from the resolved district ownership. These show the borders between districts without running a full polygon dissolve.`;
       gerrySummary.appendChild(intro);
 
       for (const district of currentPointDistricts) {
-        const feature = dissolvedFeatures.find(f => f.properties && f.properties._district === district.id);
-        const geomType = feature?.geometry?.type || "None";
-
         const row = document.createElement("div");
         row.className = "district-row";
+        const count = boundaryFeatures.filter(f => f.properties && f.properties._district === district.id).length;
         row.innerHTML = `
           <strong>District ${district.id + 1}</strong><br>
-          Dissolved feature type: ${geomType}
+          Boundary segments drawn: ${count}
         `;
         gerrySummary.appendChild(row);
       }
 
       setStatus(
         gerryStatus,
-        `Dissolved ${dissolvedFeatures.length} district features and drew bold district boundaries.`,
+        `Drew ${boundaryFeatures.length} bold district boundary segments.`,
         "good"
       );
     } catch (error) {
       console.error(error);
       setStatus(
         gerryStatus,
-        `Dissolve failed: ${error?.message || error}`,
+        `Drawing district boundaries failed: ${error?.message || error}`,
         "error"
       );
     }
   }, 40);
 }
+
     function resetPage() {
       currentFiltered = [];
       currentStats = null;
@@ -2909,7 +2961,7 @@ function dissolveDistricts() {
     expandCellsBtn.addEventListener("click", expandDistrictCells);
     cleanupBtn.addEventListener("click", cleanupDistricts);
     resolveConflictsBtn.addEventListener("click", resolveConflictCellsStep);
-    dissolveBtn.addEventListener("click", dissolveDistricts);
+    dissolveBtn.addEventListener("click", drawDistrictBoundaries);
     initMap();
   </script>
 </body>
