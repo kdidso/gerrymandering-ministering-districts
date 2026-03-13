@@ -2144,36 +2144,100 @@ function findCorridorToMainComponent(component, mainComponent, districtId, owner
   const startCells = component.map(String);
   const targetCells = new Set([...mainComponent].map(String));
 
-  const queue = [];
-  const visited = new Set();
-  const parent = new Map();
-  let qIndex = 0;
+  function minStepsToMain(cellId) {
+    const queue = [String(cellId)];
+    const visited = new Set(queue);
+    let qIndex = 0;
+    let steps = 0;
+    let frontierCount = 1;
+    let nextFrontierCount = 0;
 
-  for (const startId of startCells) {
-    queue.push(startId);
-    visited.add(startId);
+    while (qIndex < queue.length) {
+      const currentId = queue[qIndex++];
+
+      if (targetCells.has(currentId)) return steps;
+
+      const cell = cellById.get(String(currentId));
+      if (!cell) continue;
+
+      for (const neighborIdRaw of cell.neighbors) {
+        const neighborId = String(neighborIdRaw);
+        if (visited.has(neighborId)) continue;
+        if (conflictCellIds.has(neighborId)) continue;
+
+        const foreignProtected = cellHasForeignProtectedPoint(neighborId, districtId, pointCellDistrictSets);
+        if (foreignProtected) continue;
+
+        visited.add(neighborId);
+        queue.push(neighborId);
+        nextFrontierCount++;
+      }
+
+      frontierCount--;
+      if (frontierCount === 0) {
+        frontierCount = nextFrontierCount;
+        nextFrontierCount = 0;
+        steps++;
+      }
+    }
+
+    return Infinity;
   }
 
-  while (qIndex < queue.length) {
-    const currentId = queue[qIndex++];
+  const open = [];
+  const bestCost = new Map();
+  const parent = new Map();
+
+  for (const startId of startCells) {
+    open.push({
+      cellId: startId,
+      cost: 0
+    });
+    bestCost.set(startId, 0);
+  }
+
+  while (open.length) {
+    open.sort((a, b) => a.cost - b.cost);
+    const current = open.shift();
+    const currentId = String(current.cellId);
+
     if (targetCells.has(currentId)) {
       return reconstructPath(parent, currentId);
     }
 
-    const cell = cellById.get(String(currentId));
+    const cell = cellById.get(currentId);
     if (!cell) continue;
 
     for (const neighborIdRaw of cell.neighbors) {
       const neighborId = String(neighborIdRaw);
-      if (visited.has(neighborId)) continue;
+
       if (conflictCellIds.has(neighborId)) continue;
 
       const foreignProtected = cellHasForeignProtectedPoint(neighborId, districtId, pointCellDistrictSets);
       if (foreignProtected) continue;
 
-      visited.add(neighborId);
-      parent.set(neighborId, currentId);
-      queue.push(neighborId);
+      let stepCost = 10;
+
+      const neighborCounts = getNeighborDistrictCounts(neighborId, owner);
+      const sameDistrictTouches = neighborCounts.get(districtId) || 0;
+
+      stepCost -= sameDistrictTouches * 2;
+
+      const distToMain = minStepsToMain(neighborId);
+      if (isFinite(distToMain)) {
+        stepCost += distToMain;
+      }
+
+      const totalCost = current.cost + Math.max(1, stepCost);
+
+      if (!bestCost.has(neighborId) || totalCost < bestCost.get(neighborId)) {
+        bestCost.set(neighborId, totalCost);
+        parent.set(neighborId, currentId);
+        open.push({
+          cellId: neighborId,
+          cost: totalCost
+        });
+      }
     }
   }
 
