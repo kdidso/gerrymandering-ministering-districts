@@ -2459,9 +2459,14 @@ function resolveConflictCells(owner, conflictCellIds, pointCellDistrictSets) {
     }
 
     if (!candidates.length) {
-      remainingConflicts.add(cellId);
-      continue;
-    }
+  const fallbackDistrict = findNearestAssignedDistrict(cellId, owner, new Set(), pointCellDistrictSets);
+  if (fallbackDistrict != null) {
+    owner.set(cellId, fallbackDistrict);
+  } else {
+    remainingConflicts.add(cellId);
+  }
+  continue;
+}
 
     let bestDistrict = null;
     let bestScore = -Infinity;
@@ -2475,11 +2480,34 @@ function resolveConflictCells(owner, conflictCellIds, pointCellDistrictSets) {
     }
 
     if (bestDistrict == null) {
-      remainingConflicts.add(cellId);
-      continue;
-    }
+  const fallbackDistrict = findNearestAssignedDistrict(cellId, owner, new Set(), pointCellDistrictSets);
+  if (fallbackDistrict != null) {
+    owner.set(cellId, fallbackDistrict);
+  } else {
+    remainingConflicts.add(cellId);
+  }
+  continue;
+}
 
     owner.set(cellId, bestDistrict);
+  }
+  for (const cellId of [...remainingConflicts]) {
+    const counts = getNeighborDistrictCounts(cellId, owner);
+
+    let bestDistrict = null;
+    let bestCount = -1;
+
+    for (const [districtId, count] of counts.entries()) {
+      if (count > bestCount) {
+        bestCount = count;
+        bestDistrict = districtId;
+      }
+    }
+
+    if (bestDistrict != null) {
+      owner.set(cellId, bestDistrict);
+      remainingConflicts.delete(cellId);
+    }
   }
 
   return remainingConflicts;
