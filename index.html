@@ -216,6 +216,7 @@
     <button id="expandCellsBtn" class="secondary" disabled>Expand District Cells</button>
     <button id="cleanupBtn" class="secondary" disabled>Clean Up Districts</button>
     <button id="resolveConflictsBtn" class="secondary" disabled>Resolve Conflict Cells</button>
+    <button id="dissolveBtn" class="secondary" disabled>Dissolve Districts</button>
   </div>
   <div id="gerryStatus" class="status">Calculate targets first.</div>
   <div class="district-summary" id="gerrySummary"></div>
@@ -262,7 +263,7 @@
     let districtPointLayer = null;
     let districtBoundaryLayer = null;
     let districtLineLayer = null;
-
+    let dissolvedDistrictLayer = null;
     let currentFiltered = [];
     let currentStats = null;
     let currentDistrictTargets = null;
@@ -272,6 +273,7 @@
     let currentClaimResult = null;
     let currentExpandedResult = null;
     let currentResolvedResult = null;
+    let currentDissolvedResult = null;
     let gerrymanderRunCount = 0;
 
     let cellsWorking = [];
@@ -299,6 +301,7 @@
     const expandCellsBtn = document.getElementById("expandCellsBtn");
     const cleanupBtn = document.getElementById("cleanupBtn");
     const resolveConflictsBtn = document.getElementById("resolveConflictsBtn");
+    const dissolveBtn = document.getElementById("dissolveBtn");
     const districtCountSelect = document.getElementById("districtCountSelect");
     const districtSummary = document.getElementById("districtSummary");
     const gerrySummary = document.getElementById("gerrySummary");
@@ -827,6 +830,10 @@
     map.removeLayer(districtLineLayer);
     districtLineLayer = null;
   }
+  if (dissolvedDistrictLayer) {
+    map.removeLayer(dissolvedDistrictLayer);
+    dissolvedDistrictLayer = null;
+  }
 }
 
     function splitMixedCell(cell, pointItems) {
@@ -1122,6 +1129,9 @@
       currentPointDistricts = null;
       currentLineFeatures = null;
       currentClaimResult = null;
+      currentExpandedResult = null;
+      currentResolvedResult = null;
+      currentDissolvedResult = null;
       regerrymanderBtn.disabled = true;
       gerrymanderBtn.disabled = true;
       connectLinesBtn.disabled = true;
@@ -1244,6 +1254,7 @@ filteredPreviewLayer = L.geoJSON(
       expandCellsBtn.disabled = true;
       cleanupBtn.disabled = true;
       resolveConflictsBtn.disabled = true;
+      dissolveBtn.disabled = true;
       setStatus(districtStatus, currentStats.trioNeeded ? "Targets computed. Group 1 is odd, so one trio will be needed later." : "Targets computed successfully.", "good");
       setStatus(gerryStatus, "Click Gerrymander Districts to generate cell-based districts.", "good");
     }
@@ -1283,9 +1294,12 @@ districts = enforceSameCellSameDistrict(districts);
       currentClaimResult = null;
       currentExpandedResult = null;
       currentResolvedResult = null;
+      currentDissolvedResult = null;
       claimCellsBtn.disabled = true;
       expandCellsBtn.disabled = true;
       cleanupBtn.disabled = true;
+      resolveConflictsBtn.disabled = true;
+      dissolveBtn.disabled = true;
       removeFilteredPreviewLayer();
 
       districtPointLayer = L.geoJSON(
@@ -2593,12 +2607,14 @@ function resolveConflictCellsStep() {
       }
 
       currentResolvedResult = {
-        owner,
-        resolvedFeatures,
-        countByDistrict,
-        conflictCellIds: [...unresolvedConflictSet]
-      };
-      currentDistrictResult = currentResolvedResult;
+  owner,
+  resolvedFeatures,
+  countByDistrict,
+  conflictCellIds: [...unresolvedConflictSet]
+};
+currentDistrictResult = currentResolvedResult;
+currentDissolvedResult = null;
+dissolveBtn.disabled = false;
 
       resetGerrySummary();
 
@@ -2648,6 +2664,138 @@ function resolveConflictCellsStep() {
     }
   }, 40);
 }
+    function unionFeatures(features) {
+  if (!features.length) return null;
+
+  let merged = JSON.parse(JSON.stringify(features[0]));
+
+  for (let i = 1; i < features.length; i++) {
+    try {
+      const unioned = turf.union(merged, features[i]);
+      if (unioned) {
+        merged = unioned;
+      }
+    } catch (err) {
+      console.warn("Union failed for district dissolve.", err);
+    }
+  }
+
+  return merged;
+}
+
+function buildDissolvedDistrictFeaturesFromResolvedResult(resolvedResult, pointDistricts) {
+  const districtFeatures = [];
+
+  for (const district of pointDistricts) {
+    const features = (resolvedResult.resolvedFeatures || [])
+      .filter(f => f.properties && f.properties._district === district.id)
+      .map(f => JSON.parse(JSON.stringify(f)));
+
+    if (!features.length) continue;
+
+    const merged = unionFeatures(features);
+    if (!merged) continue;
+
+    merged.properties = {
+      ...(merged.properties || {}),
+      _district: district.id
+    };
+
+    districtFeatures.push(merged);
+  }
+
+  return districtFeatures;
+}
+
+function dissolveDistricts() {
+  if (!currentPointDistricts || !currentPointDistricts.length) {
+    setStatus(gerryStatus, "Gerrymander people first.", "warn");
+    return;
+  }
+
+  if (!currentResolvedResult || !currentResolvedResult.resolvedFeatures) {
+    setStatus(gerryStatus, "Resolve conflict cells first.", "warn");
+    return;
+  }
+
+  setStatus(gerryStatus, "Dissolving district cells into district boundaries...", "warn");
+
+  setTimeout(() => {
+    try {
+      const dissolvedFeatures = buildDissolvedDistrictFeaturesFromResolvedResult(
+        currentResolvedResult,
+        currentPointDistricts
+      );
+
+      if (dissolvedDistrictLayer) {
+        map.removeLayer(dissolvedDistrictLayer);
+        dissolvedDistrictLayer = null;
+      }
+
+      dissolvedDistrictLayer = L.geoJSON(
+        {
+          type: "FeatureCollection",
+          features: dissolvedFeatures
+        },
+        {
+          style: function(feature) {
+            const districtId = feature.properties._district;
+            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+            return {
+              color: color,
+              weight: 5,
+              opacity: 1,
+              fillColor: color,
+              fillOpacity: 0.08
+            };
+          },
+          onEachFeature: function(feature, layer) {
+            const districtId = feature.properties._district;
+            layer.bindPopup(`<strong>District ${districtId + 1}</strong>`);
+          }
+        }
+      ).addTo(map);
+
+      currentDissolvedResult = {
+        dissolvedFeatures
+      };
+      currentDistrictResult = currentDissolvedResult;
+
+      resetGerrySummary();
+
+      const intro = document.createElement("div");
+      intro.className = "district-row";
+      intro.innerHTML = `<strong>District dissolve complete</strong><br>Each district was dissolved into one district feature. Thick bold outer boundaries are now drawn for easier visualization.`;
+      gerrySummary.appendChild(intro);
+
+      for (const district of currentPointDistricts) {
+        const feature = dissolvedFeatures.find(f => f.properties && f.properties._district === district.id);
+        const geomType = feature?.geometry?.type || "None";
+
+        const row = document.createElement("div");
+        row.className = "district-row";
+        row.innerHTML = `
+          <strong>District ${district.id + 1}</strong><br>
+          Dissolved feature type: ${geomType}
+        `;
+        gerrySummary.appendChild(row);
+      }
+
+      setStatus(
+        gerryStatus,
+        `Dissolved ${dissolvedFeatures.length} district features and drew bold district boundaries.`,
+        "good"
+      );
+    } catch (error) {
+      console.error(error);
+      setStatus(
+        gerryStatus,
+        `Dissolve failed: ${error?.message || error}`,
+        "error"
+      );
+    }
+  }, 40);
+}
     function resetPage() {
       currentFiltered = [];
       currentStats = null;
@@ -2658,6 +2806,7 @@ function resolveConflictCellsStep() {
       currentClaimResult = null;
       currentExpandedResult = null;
       currentResolvedResult = null;
+      currentDissolvedResult = null;
       gerrymanderRunCount = 0;
       clearMetricCards();
       resetDistrictSummary();
@@ -2678,6 +2827,7 @@ function resolveConflictCellsStep() {
       expandCellsBtn.disabled = true;
       cleanupBtn.disabled = true;
       resolveConflictsBtn.disabled = true;
+      dissolveBtn.disabled = true;
       setStatus(filterStatus, "Choose a gender and click Run Filter.");
       setStatus(districtStatus, "Run the filter first.");
       setStatus(gerryStatus, "Calculate targets first.");
@@ -2759,6 +2909,7 @@ function resolveConflictCellsStep() {
     expandCellsBtn.addEventListener("click", expandDistrictCells);
     cleanupBtn.addEventListener("click", cleanupDistricts);
     resolveConflictsBtn.addEventListener("click", resolveConflictCellsStep);
+    dissolveBtn.addEventListener("click", dissolveDistricts);
     initMap();
   </script>
 </body>
