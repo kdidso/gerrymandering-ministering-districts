@@ -2173,32 +2173,34 @@ function cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets, m
     }
 
     // After connectivity enforcement, smooth shapes a bit
-    smoothDistrictShapes(owner);
+    //smoothDistrictShapes(owner);
 
     if (!changed) break;
   }
 }
-  function enforceSingleComponentDistricts(owner, conflictCellIds, pointCellDistrictSets, maxPasses = 12) {
-  for (let pass = 0; pass < maxPasses; pass++) {
-    let changed = false;
+  function enforceSingleComponentDistricts(owner, conflictCellIds, pointCellDistrictSets, maxPasses = 20) {
+     for (let pass = 0; pass < maxPasses; pass++) {
+       let changed = false;
 
-    const districtIds = [...new Set([...owner.values()].filter(v => v != null))];
+       const districtIds = [...new Set([...owner.values()].filter(v => v != null))];
 
-    for (const districtId of districtIds) {
-      let components = getConnectedComponentsForDistrict(districtId, owner);
-      if (components.length <= 1) continue;
+       for (const districtId of districtIds) {
+         let safety = 0;
 
-      while (components.length > 1) {
-        // Choose main component:
-        // prefer largest protected component, otherwise largest component.
-        let mainIndex = -1;
-        let mainSize = -1;
+         while (safety < 50) {
+           safety++;
 
-        for (let i = 0; i < components.length; i++) {
-          const component = components[i];
-          const hasProtected = component.some(cellId => {
-            const set = pointCellDistrictSets.get(String(cellId));
-            return set && set.has(districtId);
+           const components = getConnectedComponentsForDistrict(districtId, owner);
+           if (components.length <= 1) break;
+
+           let mainIndex = -1;
+           let mainSize = -1;
+
+           for (let i = 0; i < components.length; i++) {
+             const component = components[i];
+             const hasProtected = component.some(cellId => {
+               const set = pointCellDistrictSets.get(String(cellId));
+               return set && set.has(districtId);
           });
 
           if (hasProtected && component.length > mainSize) {
@@ -2229,21 +2231,20 @@ function cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets, m
             return set && set.has(districtId);
           });
 
-          // Case 1: removable island
           if (!hasProtectedPoint) {
-            const replacementDistrict =
-              chooseReplacementDistrictForIsland(component, districtId, owner);
+            const replacementDistrict = chooseReplacementDistrictForIsland(component, districtId, owner);
 
             if (replacementDistrict != null) {
               for (const cellId of component) {
-                owner.set(String(cellId), replacementDistrict);
+                const cid = String(cellId);
+                if (conflictCellIds.has(cid)) continue;
+                owner.set(cid, replacementDistrict);
               }
               changed = true;
               fixedOne = true;
               break;
             }
           } else {
-            // Case 2: protected island -> force corridor
             let corridor = findCorridorToMainComponent(
               component,
               mainComponent,
@@ -2253,8 +2254,7 @@ function cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets, m
               pointCellDistrictSets
             );
 
-            // fallback: allow broader search if strict search fails
-            if (!corridor || !corridor.length) {
+            if ((!corridor || !corridor.length) && typeof findAnyCorridorToMainComponent === "function") {
               corridor = findAnyCorridorToMainComponent(
                 component,
                 mainComponent,
@@ -2277,7 +2277,9 @@ function cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets, m
               }
 
               for (const cellId of component) {
-                owner.set(String(cellId), districtId);
+                const cid = String(cellId);
+                if (conflictCellIds.has(cid)) continue;
+                owner.set(cid, districtId);
               }
 
               changed = true;
@@ -2290,8 +2292,6 @@ function cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets, m
         if (!fixedOne) {
           break;
         }
-
-        components = getConnectedComponentsForDistrict(districtId, owner);
       }
     }
 
@@ -2410,6 +2410,8 @@ function findCorridorToMainComponent(component, mainComponent, districtId, owner
     const cell = cellById.get(String(currentId));
     if (!cell) continue;
 
+    const candidateNeighbors = [];
+
     for (const neighborIdRaw of cell.neighbors) {
       const neighborId = String(neighborIdRaw);
       if (visited.has(neighborId)) continue;
@@ -2418,6 +2420,15 @@ function findCorridorToMainComponent(component, mainComponent, districtId, owner
       const pointSet = pointCellDistrictSets.get(neighborId);
       if (pointSet && [...pointSet].some(d => d !== districtId)) continue;
 
+      const counts = getNeighborDistrictCounts(neighborId, owner);
+      const sameCount = counts.get(districtId) || 0;
+
+      candidateNeighbors.push({ neighborId, sameCount });
+    }
+
+    candidateNeighbors.sort((a, b) => b.sameCount - a.sameCount);
+
+    for (const { neighborId } of candidateNeighbors) {
       visited.add(neighborId);
       parent.set(neighborId, currentId);
       queue.push(neighborId);
