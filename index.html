@@ -648,6 +648,70 @@
       for (const item of filteredItems) item._assignedDistrict = null;
       return rebalanceDistricts(assignBySeeds(filteredItems, targets, runSeed));
     }
+    function enforceSameCellSameDistrict(districts) {
+  const itemsByCell = new Map();
+
+  for (const district of districts) {
+    for (const item of district.members) {
+      const cellId = item.cellId ? String(item.cellId) : null;
+      if (!cellId) continue;
+      if (!itemsByCell.has(cellId)) itemsByCell.set(cellId, []);
+      itemsByCell.get(cellId).push(item);
+    }
+  }
+
+  for (const [cellId, items] of itemsByCell.entries()) {
+    if (items.length <= 1) continue;
+
+    const counts = new Map();
+    for (const item of items) {
+      counts.set(item._assignedDistrict, (counts.get(item._assignedDistrict) || 0) + 1);
+    }
+
+    let winningDistrict = null;
+    let bestCount = -1;
+
+    for (const [districtId, count] of counts.entries()) {
+      if (count > bestCount) {
+        bestCount = count;
+        winningDistrict = districtId;
+      }
+    }
+
+    for (const item of items) {
+      item._assignedDistrict = winningDistrict;
+    }
+  }
+
+  const rebuilt = districts.map(district => ({
+    id: district.id,
+    xTarget: district.xTarget,
+    yTarget: district.yTarget,
+    sTarget: district.sTarget,
+    members: [],
+    group1: 0,
+    group2: 0,
+    total: 0,
+    centroidLng: null,
+    centroidLat: null
+  }));
+
+  for (const district of districts) {
+    for (const item of district.members) {
+      const newDistrict = rebuilt[item._assignedDistrict];
+      newDistrict.members.push(item);
+      newDistrict.group1 += item.group === 1 ? 1 : 0;
+      newDistrict.group2 += item.group === 2 ? 1 : 0;
+      newDistrict.total += 1;
+    }
+  }
+
+  for (const district of rebuilt) {
+    updateDistrictCentroid(district);
+  }
+
+  return rebuilt;
+}
 
     function prepareCellsWorkingSet() {
       cellsWorking = [];
@@ -1195,16 +1259,18 @@ filteredPreviewLayer = L.geoJSON(
       gerrymanderRunCount++;
       const runSeed = Date.now() + gerrymanderRunCount * 99991;
 
-      const districts = generatePointDistricts(
-        currentFiltered.map(item => ({
-          feature: JSON.parse(JSON.stringify(item.feature)),
-          group: item.group,
-          cellId: item.cellId,
-          _assignedDistrict: null
-        })),
-        currentDistrictTargets,
-        runSeed
-      );
+      let districts = generatePointDistricts(
+  currentFiltered.map(item => ({
+    feature: JSON.parse(JSON.stringify(item.feature)),
+    group: item.group,
+    cellId: item.cellId,
+    _assignedDistrict: null
+  })),
+  currentDistrictTargets,
+  runSeed
+);
+
+districts = enforceSameCellSameDistrict(districts);
 
       currentPointDistricts = districts;
       currentDistrictResult = null;
