@@ -278,6 +278,7 @@
 
     let cellsWorking = [];
     let cellById = new Map();
+    let cellFeatureById = new Map();
 
     const chkWardLoaded = document.getElementById("chkWardLoaded");
     const chkMembersLoaded = document.getElementById("chkMembersLoaded");
@@ -720,30 +721,65 @@
 }
 
     function prepareCellsWorkingSet() {
-      cellsWorking = [];
-      cellById = new Map();
-      (cellsData.features || []).forEach((feature, index) => {
-        if (!isPolygonLike(feature)) return;
-        const id = getCellId(feature, index);
-        const meta = metadataData?.[id] || metadataData?.[String(id)] || {};
-        const bboxObj = meta.bbox || null;
-        let centroidLng = null;
-        let centroidLat = null;
-        if (Array.isArray(meta.centroid) && meta.centroid.length >= 2) {
-          centroidLng = Number(meta.centroid[0]);
-          centroidLat = Number(meta.centroid[1]);
-        } else {
-          const c = turf.centroid(feature).geometry.coordinates;
-          centroidLng = c[0];
-          centroidLat = c[1];
-        }
-        const bbox = bboxObj ? [bboxObj.minx, bboxObj.miny, bboxObj.maxx, bboxObj.maxy] : turf.bbox(feature);
-        const neighbors = Array.isArray(adjacencyData?.[id]) ? adjacencyData[id].map(String) : [];
-        const cell = { id: String(id), feature, bbox, centroidLng, centroidLat, neighbors, pointMembers: [], occupiedByDistricts: [] };
-        cellsWorking.push(cell);
-        cellById.set(String(id), cell);
-      });
+  cellsWorking = [];
+  cellById = new Map();
+  cellFeatureById = new Map();
+
+  // First pass: build feature lookup
+  (cellsData.features || []).forEach((feature, index) => {
+    if (!isPolygonLike(feature)) return;
+    const id = getCellId(feature, index);
+    cellFeatureById.set(String(id), feature);
+  });
+
+  // Second pass: build working cells with edge-only neighbors
+  (cellsData.features || []).forEach((feature, index) => {
+    if (!isPolygonLike(feature)) return;
+
+    const id = getCellId(feature, index);
+    const meta = metadataData?.[id] || metadataData?.[String(id)] || {};
+    const bboxObj = meta.bbox || null;
+
+    let centroidLng = null;
+    let centroidLat = null;
+
+    if (Array.isArray(meta.centroid) && meta.centroid.length >= 2) {
+      centroidLng = Number(meta.centroid[0]);
+      centroidLat = Number(meta.centroid[1]);
+    } else {
+      const c = turf.centroid(feature).geometry.coordinates;
+      centroidLng = c[0];
+      centroidLat = c[1];
     }
+
+    const bbox = bboxObj
+      ? [bboxObj.minx, bboxObj.miny, bboxObj.maxx, bboxObj.maxy]
+      : turf.bbox(feature);
+
+    const rawNeighbors = Array.isArray(adjacencyData?.[id])
+      ? adjacencyData[id].map(String)
+      : [];
+
+    const neighbors = rawNeighbors.filter(neighborId => {
+      const neighborFeature = cellFeatureById.get(String(neighborId));
+      return neighborFeature ? cellsShareEdge(feature, neighborFeature) : false;
+    });
+
+    const cell = {
+      id: String(id),
+      feature,
+      bbox,
+      centroidLng,
+      centroidLat,
+      neighbors,
+      pointMembers: [],
+      occupiedByDistricts: []
+    };
+
+    cellsWorking.push(cell);
+    cellById.set(String(id), cell);
+  });
+}
 
     function pointInBBox(coords, bbox) {
       return coords[0] >= bbox[0] && coords[0] <= bbox[2] && coords[1] >= bbox[1] && coords[1] <= bbox[3];
@@ -2693,6 +2729,35 @@ function getPolygonRings(feature) {
   }
 
   return [];
+}
+    function cellsShareEdge(featureA, featureB) {
+  try {
+    const ringsA = getPolygonRings(featureA);
+    const ringsB = getPolygonRings(featureB);
+
+    const edgeSetA = new Set();
+
+    for (const ring of ringsA) {
+      if (!ring || ring.length < 2) continue;
+
+      for (let i = 0; i < ring.length - 1; i++) {
+        edgeSetA.add(edgeKey(ring[i], ring[i + 1]));
+      }
+    }
+
+    for (const ring of ringsB) {
+      if (!ring || ring.length < 2) continue;
+
+      for (let i = 0; i < ring.length - 1; i++) {
+        const key = edgeKey(ring[i], ring[i + 1]);
+        if (edgeSetA.has(key)) return true;
+      }
+    }
+
+    return false;
+  } catch (err) {
+    return false;
+  }
 }
 
 function buildDistrictBoundarySegmentsFromResolvedResult(resolvedResult) {
