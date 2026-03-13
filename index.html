@@ -2386,7 +2386,7 @@ function reconstructPath(parent, endId) {
   return path;
 }
 
-function findAnyCorridorToMainComponent(component, mainComponent, districtId, owner, conflictCellIds, pointCellDistrictSets) {
+function findCorridorToMainComponent(component, mainComponent, districtId, owner, conflictCellIds, pointCellDistrictSets) {
   const startCells = component.map(String);
   const targetCells = new Set([...mainComponent].map(String));
 
