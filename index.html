@@ -2144,100 +2144,46 @@ function findCorridorToMainComponent(component, mainComponent, districtId, owner
   const startCells = component.map(String);
   const targetCells = new Set([...mainComponent].map(String));
 
-  function minStepsToMain(cellId) {
-    const queue = [String(cellId)];
-    const visited = new Set(queue);
-    let qIndex = 0;
-    let steps = 0;
-    let frontierCount = 1;
-    let nextFrontierCount = 0;
-
-    while (qIndex < queue.length) {
-      const currentId = queue[qIndex++];
-
-      if (targetCells.has(currentId)) return steps;
-
-      const cell = cellById.get(String(currentId));
-      if (!cell) continue;
-
-      for (const neighborIdRaw of cell.neighbors) {
-        const neighborId = String(neighborIdRaw);
-        if (visited.has(neighborId)) continue;
-        if (conflictCellIds.has(neighborId)) continue;
-
-        const foreignProtected = cellHasForeignProtectedPoint(neighborId, districtId, pointCellDistrictSets);
-        if (foreignProtected) continue;
-
-        visited.add(neighborId);
-        queue.push(neighborId);
-        nextFrontierCount++;
-      }
-
-      frontierCount--;
-      if (frontierCount === 0) {
-        frontierCount = nextFrontierCount;
-        nextFrontierCount = 0;
-        steps++;
-      }
-    }
-
-    return Infinity;
-  }
-
-  const open = [];
-  const bestCost = new Map();
+  const queue = [];
+  const visited = new Set();
   const parent = new Map();
+  let qIndex = 0;
 
   for (const startId of startCells) {
-    open.push({
-      cellId: startId,
-      cost: 0
-    });
-    bestCost.set(startId, 0);
+    queue.push(startId);
+    visited.add(startId);
   }
 
-  while (open.length) {
-    open.sort((a, b) => a.cost - b.cost);
-    const current = open.shift();
-    const currentId = String(current.cellId);
+  while (qIndex < queue.length) {
+    const currentId = queue[qIndex++];
 
     if (targetCells.has(currentId)) {
       return reconstructPath(parent, currentId);
     }
 
-    const cell = cellById.get(currentId);
+    const cell = cellById.get(String(currentId));
     if (!cell) continue;
 
-    for (const neighborIdRaw of cell.neighbors) {
-      const neighborId = String(neighborIdRaw);
+    const neighbors = cell.neighbors
+      .map(String)
+      .filter(neighborId => !visited.has(neighborId))
+      .filter(neighborId => !conflictCellIds.has(neighborId))
+      .filter(neighborId => !cellHasForeignProtectedPoint(neighborId, districtId, pointCellDistrictSets));
 
-      if (conflictCellIds.has(neighborId)) continue;
+    neighbors.sort((a, b) => {
+      const aCounts = getNeighborDistrictCounts(a, owner);
+      const bCounts = getNeighborDistrictCounts(b, owner);
 
-      const foreignProtected = cellHasForeignProtectedPoint(neighborId, districtId, pointCellDistrictSets);
-      if (foreignProtected) continue;
+      const aSame = aCounts.get(districtId) || 0;
+      const bSame = bCounts.get(districtId) || 0;
 
-      let stepCost = 10;
+      return bSame - aSame;
+    });
 
-      const neighborCounts = getNeighborDistrictCounts(neighborId, owner);
-      const sameDistrictTouches = neighborCounts.get(districtId) || 0;
-
-      stepCost -= sameDistrictTouches * 2;
-
-      const distToMain = minStepsToMain(neighborId);
-      if (isFinite(distToMain)) {
-        stepCost += distToMain;
-      }
-
-      const totalCost = current.cost + Math.max(1, stepCost);
-
-      if (!bestCost.has(neighborId) || totalCost < bestCost.get(neighborId)) {
-        bestCost.set(neighborId, totalCost);
-        parent.set(neighborId, currentId);
-        open.push({
-          cellId: neighborId,
-          cost: totalCost
-        });
-      }
+    for (const neighborId of neighbors) {
+      visited.add(neighborId);
+      parent.set(neighborId, currentId);
+      queue.push(neighborId);
     }
   }
 
