@@ -2178,91 +2178,125 @@ function cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets, m
     if (!changed) break;
   }
 }
-  function enforceSingleComponentDistricts(owner, conflictCellIds, pointCellDistrictSets) {
+  function enforceSingleComponentDistricts(owner, conflictCellIds, pointCellDistrictSets, maxPasses = 12) {
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let changed = false;
 
-     const districtIds = [...new Set([...owner.values()].filter(v => v != null))];
+    const districtIds = [...new Set([...owner.values()].filter(v => v != null))];
 
-     for (const districtId of districtIds) {
+    for (const districtId of districtIds) {
+      let components = getConnectedComponentsForDistrict(districtId, owner);
+      if (components.length <= 1) continue;
 
-       const components = getConnectedComponentsForDistrict(districtId, owner);
-       if (components.length <= 1) continue;
+      while (components.length > 1) {
+        // Choose main component:
+        // prefer largest protected component, otherwise largest component.
+        let mainIndex = -1;
+        let mainSize = -1;
 
-    // Determine the main component
-       let mainIndex = 0;
-       let foundProtected = false;
+        for (let i = 0; i < components.length; i++) {
+          const component = components[i];
+          const hasProtected = component.some(cellId => {
+            const set = pointCellDistrictSets.get(String(cellId));
+            return set && set.has(districtId);
+          });
 
-       for (let i = 0; i < components.length; i++) {
-         const hasProtected = components[i].some(cellId => {
-           const set = pointCellDistrictSets.get(String(cellId));
-           return set && set.has(districtId);
-      });
-
-      if (hasProtected) {
-        mainIndex = i;
-        foundProtected = true;
-        break;
-      }
-    }
-
-    if (!foundProtected) {
-      components.sort((a,b)=>b.length-a.length);
-      mainIndex = 0;
-    }
-
-    const mainComponent = new Set(components[mainIndex]);
-
-    for (let i = 0; i < components.length; i++) {
-
-      if (i === mainIndex) continue;
-
-      const component = components[i];
-
-      const hasProtectedPoint = component.some(cellId => {
-        const set = pointCellDistrictSets.get(String(cellId));
-        return set && set.has(districtId);
-      });
-
-      // Case 1 — removable island
-      if (!hasProtectedPoint) {
-
-        const replacementDistrict =
-          chooseReplacementDistrictForIsland(component, districtId, owner);
-
-        if (replacementDistrict != null) {
-          for (const cellId of component) {
-            owner.set(String(cellId), replacementDistrict);
+          if (hasProtected && component.length > mainSize) {
+            mainIndex = i;
+            mainSize = component.length;
           }
         }
 
-        continue;
+        if (mainIndex === -1) {
+          for (let i = 0; i < components.length; i++) {
+            if (components[i].length > mainSize) {
+              mainIndex = i;
+              mainSize = components[i].length;
+            }
+          }
+        }
+
+        const mainComponent = new Set(components[mainIndex]);
+        let fixedOne = false;
+
+        for (let i = 0; i < components.length; i++) {
+          if (i === mainIndex) continue;
+
+          const component = components[i];
+
+          const hasProtectedPoint = component.some(cellId => {
+            const set = pointCellDistrictSets.get(String(cellId));
+            return set && set.has(districtId);
+          });
+
+          // Case 1: removable island
+          if (!hasProtectedPoint) {
+            const replacementDistrict =
+              chooseReplacementDistrictForIsland(component, districtId, owner);
+
+            if (replacementDistrict != null) {
+              for (const cellId of component) {
+                owner.set(String(cellId), replacementDistrict);
+              }
+              changed = true;
+              fixedOne = true;
+              break;
+            }
+          } else {
+            // Case 2: protected island -> force corridor
+            let corridor = findCorridorToMainComponent(
+              component,
+              mainComponent,
+              districtId,
+              owner,
+              conflictCellIds,
+              pointCellDistrictSets
+            );
+
+            // fallback: allow broader search if strict search fails
+            if (!corridor || !corridor.length) {
+              corridor = findAnyCorridorToMainComponent(
+                component,
+                mainComponent,
+                districtId,
+                owner,
+                conflictCellIds,
+                pointCellDistrictSets
+              );
+            }
+
+            if (corridor && corridor.length) {
+              for (const cellId of corridor) {
+                const cid = String(cellId);
+                if (conflictCellIds.has(cid)) continue;
+
+                const pointSet = pointCellDistrictSets.get(cid);
+                if (pointSet && [...pointSet].some(d => d !== districtId)) continue;
+
+                owner.set(cid, districtId);
+              }
+
+              for (const cellId of component) {
+                owner.set(String(cellId), districtId);
+              }
+
+              changed = true;
+              fixedOne = true;
+              break;
+            }
+          }
+        }
+
+        if (!fixedOne) {
+          break;
+        }
+
+        components = getConnectedComponentsForDistrict(districtId, owner);
       }
-
-      // Case 2 — protected island → build corridor
-      const corridor = findCorridorToMainComponent(
-        component,
-        mainComponent,
-        districtId,
-        owner,
-        conflictCellIds,
-        pointCellDistrictSets
-      );
-
-      if (!corridor) continue;
-
-      for (const cellId of corridor) {
-        owner.set(String(cellId), districtId);
-        mainComponent.add(String(cellId));
-      }
-
-      for (const cellId of component) {
-        owner.set(String(cellId), districtId);
-        mainComponent.add(String(cellId));
-      }
-
     }
 
+    if (!changed) break;
   }
-
 }
   function wouldDisconnectDistrict(cellId, districtId, owner) {
   const remainingDistrictCells = cellsWorking
@@ -2352,7 +2386,7 @@ function reconstructPath(parent, endId) {
   return path;
 }
 
-function findCorridorToMainComponent(component, mainComponent, districtId, owner, conflictCellIds, pointCellDistrictSets) {
+function findAnyCorridorToMainComponent(component, mainComponent, districtId, owner, conflictCellIds, pointCellDistrictSets) {
   const startCells = component.map(String);
   const targetCells = new Set([...mainComponent].map(String));
 
@@ -2376,23 +2410,14 @@ function findCorridorToMainComponent(component, mainComponent, districtId, owner
     const cell = cellById.get(String(currentId));
     if (!cell) continue;
 
-    const neighbors = cell.neighbors
-      .map(String)
-      .filter(neighborId => !visited.has(neighborId))
-      .filter(neighborId => !conflictCellIds.has(neighborId))
-      .filter(neighborId => !cellHasForeignProtectedPoint(neighborId, districtId, pointCellDistrictSets));
+    for (const neighborIdRaw of cell.neighbors) {
+      const neighborId = String(neighborIdRaw);
+      if (visited.has(neighborId)) continue;
+      if (conflictCellIds.has(neighborId)) continue;
 
-    neighbors.sort((a, b) => {
-      const aCounts = getNeighborDistrictCounts(a, owner);
-      const bCounts = getNeighborDistrictCounts(b, owner);
+      const pointSet = pointCellDistrictSets.get(neighborId);
+      if (pointSet && [...pointSet].some(d => d !== districtId)) continue;
 
-      const aSame = aCounts.get(districtId) || 0;
-      const bSame = bCounts.get(districtId) || 0;
-
-      return bSame - aSame;
-    });
-
-    for (const neighborId of neighbors) {
       visited.add(neighborId);
       parent.set(neighborId, currentId);
       queue.push(neighborId);
