@@ -2411,19 +2411,48 @@ function cleanupDistricts() {
     return;
   }
 
-  setStatus(gerryStatus, "Cleaning up unassigned cells and disconnected islands...", "warn");
+  setStatus(gerryStatus, "Cleaning up unassigned cells and forcing districts into single connected shapes...", "warn");
 
   setTimeout(() => {
     try {
       const pointCellDistrictSets = getPointCellDistrictSets(currentPointDistricts);
       const { owner, conflictCellIds } = buildOwnerFromExpandedResult(currentExpandedResult);
 
-      fillUnassignedCells(owner, conflictCellIds, pointCellDistrictSets, 8);
-      cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets);
-      fillUnassignedCells(owner, conflictCellIds, pointCellDistrictSets, 4);
+      // Light fill first
+      fillUnassignedCells(owner, conflictCellIds, pointCellDistrictSets, 6);
       fillAllRemainingUnassigned(owner, conflictCellIds, pointCellDistrictSets);
-      cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets);
-      fillAllRemainingUnassigned(owner, conflictCellIds, pointCellDistrictSets); 
+
+      // Main topology loop:
+      // keep trying to force each district into one connected component
+      let changed = true;
+      let pass = 0;
+      const maxPasses = 6;
+
+      while (changed && pass < maxPasses) {
+        changed = false;
+        pass++;
+
+        const beforeSignature = JSON.stringify(
+          cellsWorking.map(cell => owner.get(String(cell.id)) ?? null)
+        );
+
+        fillUnassignedCells(owner, conflictCellIds, pointCellDistrictSets, 2);
+        fillAllRemainingUnassigned(owner, conflictCellIds, pointCellDistrictSets);
+
+        cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets, 3);
+
+        fillUnassignedCells(owner, conflictCellIds, pointCellDistrictSets, 2);
+        fillAllRemainingUnassigned(owner, conflictCellIds, pointCellDistrictSets);
+
+        const afterSignature = JSON.stringify(
+          cellsWorking.map(cell => owner.get(String(cell.id)) ?? null)
+        );
+
+        if (afterSignature !== beforeSignature) {
+          changed = true;
+        }
+      }
+
       const cleanedFeatures = buildExpandedFeaturesFromOwner(owner, conflictCellIds);
       const countByDistrict = countFeaturesByDistrict(cleanedFeatures, currentPointDistricts);
 
@@ -2460,6 +2489,15 @@ function cleanupDistricts() {
         if (!assignedCellIds.has(cellId)) unassignedCount++;
       }
 
+      // Count remaining disconnected districts after cleanup
+      let disconnectedDistrictCount = 0;
+      for (const district of currentPointDistricts) {
+        const components = getConnectedComponentsForDistrict(district.id, owner);
+        if (components.length > 1) {
+          disconnectedDistrictCount++;
+        }
+      }
+
       currentExpandedResult = {
         owner,
         expandedFeatures: cleanedFeatures,
@@ -2474,15 +2512,18 @@ function cleanupDistricts() {
 
       const intro = document.createElement("div");
       intro.className = "district-row";
-      intro.innerHTML = `<strong>Cleanup complete</strong><br>Filled many leftover cells by neighbor majority and reassigned disconnected islands that did not contain protected district points.`;
+      intro.innerHTML = `<strong>Cleanup complete</strong><br>Filled open cells, then repeatedly forced districts toward one connected shape per district while respecting protected point cells.`;
       gerrySummary.appendChild(intro);
 
       for (const district of currentPointDistricts) {
+        const components = getConnectedComponentsForDistrict(district.id, owner);
+
         const row = document.createElement("div");
         row.className = "district-row";
         row.innerHTML = `
           <strong>District ${district.id + 1}</strong><br>
-          Cleaned cell count: ${countByDistrict.get(district.id) || 0}
+          Cleaned cell count: ${countByDistrict.get(district.id) || 0}<br>
+          Connected components remaining: ${components.length}
         `;
         gerrySummary.appendChild(row);
       }
@@ -2503,9 +2544,17 @@ function cleanupDistricts() {
       `;
       gerrySummary.appendChild(conflictRow);
 
+      const disconnectedRow = document.createElement("div");
+      disconnectedRow.className = "district-row";
+      disconnectedRow.innerHTML = `
+        <strong>Districts still split into multiple components</strong><br>
+        ${disconnectedDistrictCount}
+      `;
+      gerrySummary.appendChild(disconnectedRow);
+
       setStatus(
         gerryStatus,
-        `Cleanup complete. ${unassignedCount} non-conflict cells remain unassigned. ${conflictCellIds.size} conflict cells remain reserved.`,
+        `Cleanup complete. ${unassignedCount} non-conflict cells remain unassigned. ${conflictCellIds.size} conflict cells remain reserved. ${disconnectedDistrictCount} districts still have multiple components.`,
         "good"
       );
     } catch (error) {
@@ -2517,7 +2566,7 @@ function cleanupDistricts() {
       );
     }
   }, 40);
-}  
+}
     function getComponentsFromOwnerForDistrict(districtId, owner) {
   const visited = new Set();
   const components = [];
@@ -2726,9 +2775,8 @@ function resolveConflictCellsStep() {
 
       const unresolvedConflictSet = resolveConflictCells(owner, conflictCellIds, pointCellDistrictSets);
 
-      cleanupDistrictIslands(owner, unresolvedConflictSet, pointCellDistrictSets);
-      fillAllRemainingUnassigned(owner, unresolvedConflictSet, pointCellDistrictSets);
-      cleanupDistrictIslands(owner, unresolvedConflictSet, pointCellDistrictSets);
+// Keep this step lighter: resolve conflicts, then fill obvious gaps.
+// Final one-component enforcement should happen in cleanupDistricts().
       fillAllRemainingUnassigned(owner, unresolvedConflictSet, pointCellDistrictSets);
 
       const resolvedFeatures = buildResolvedFeaturesFromOwner(owner);
@@ -2779,7 +2827,7 @@ dissolveBtn.disabled = false;
 
       const intro = document.createElement("div");
       intro.className = "district-row";
-      intro.innerHTML = `<strong>Conflict resolution complete</strong><br>Conflict cells were force-assigned with preference for assignments that connect same-district components. Additional cleanup and fill passes then ran again.`;
+      intro.innerHTML = `<strong>Conflict resolution complete</strong><br>Conflict cells were force-assigned, then obvious remaining gaps were filled. Final district connectivity cleanup happens in the cleanup step.`;
       gerrySummary.appendChild(intro);
 
       for (const district of currentPointDistricts) {
@@ -2810,7 +2858,11 @@ dissolveBtn.disabled = false;
 
       setStatus(
         gerryStatus,
-        `Conflict resolution complete. ${unresolvedConflictSet.size} conflict cells remain. ${stillUnassigned} cells remain unassigned.`,
+        setStatus(
+        gerryStatus,
+        `Conflict resolution complete. ${unresolvedConflictSet.size} conflict cells remain. ${stillUnassigned} cells remain unassigned before final cleanup.`,
+        "good"
+);
         "good"
       );
     } catch (error) {
