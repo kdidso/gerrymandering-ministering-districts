@@ -217,6 +217,7 @@
     <button id="cleanupBtn" class="secondary" disabled>Clean Up Districts</button>
     <button id="resolveConflictsBtn" class="secondary" disabled>Resolve Conflict Cells</button>
     <button id="dissolveBtn" class="secondary" disabled>Draw District Boundaries</button>
+    <button id="saveDownloadBtn" class="secondary" disabled>Save and Download</button>
   </div>
   <div id="gerryStatus" class="status">Calculate targets first.</div>
   <div class="district-summary" id="gerrySummary"></div>
@@ -303,6 +304,7 @@
     const cleanupBtn = document.getElementById("cleanupBtn");
     const resolveConflictsBtn = document.getElementById("resolveConflictsBtn");
     const dissolveBtn = document.getElementById("dissolveBtn");
+    const saveDownloadBtn = document.getElementById("saveDownloadBtn");
     const districtCountSelect = document.getElementById("districtCountSelect");
     const districtSummary = document.getElementById("districtSummary");
     const gerrySummary = document.getElementById("gerrySummary");
@@ -1185,6 +1187,7 @@ function enforceMustLinkClusters(districts, maxMeters = 50) {
       resolveConflictsBtn.disabled = true;
       cleanupBtn.disabled = true;
       dissolveBtn.disabled = true;
+      saveDownloadBtn.disabled = true;
       removeDistrictLineLayer();
       setStatus(gerryStatus, "Calculate targets first.");
 
@@ -1901,6 +1904,7 @@ function expandDistrictCells() {
       currentExpandedResult = result;
       currentDistrictResult = result;
       cleanupBtn.disabled = false;
+      saveDownloadBtn.disabled = false;
       resetGerrySummary();
 
       const intro = document.createElement("div");
@@ -2669,7 +2673,7 @@ function cleanupDistricts() {
       currentDistrictResult = currentExpandedResult;
       currentResolvedResult = null;
       resolveConflictsBtn.disabled = false;
-
+      saveDownloadBtn.disabled = false;
       resetGerrySummary();
 
       const intro = document.createElement("div");
@@ -2984,6 +2988,7 @@ function resolveConflictCellsStep() {
 currentDistrictResult = currentResolvedResult;
 currentDissolvedResult = null;
 dissolveBtn.disabled = false;
+saveDownloadBtn.disabled = false;
 
       resetGerrySummary();
 
@@ -3211,7 +3216,7 @@ function drawDistrictBoundaries() {
         boundaryFeatures
       };
       currentDistrictResult = currentDissolvedResult;
-
+      saveDownloadBtn.disabled = false;
       resetGerrySummary();
 
       const intro = document.createElement("div");
@@ -3246,6 +3251,184 @@ function drawDistrictBoundaries() {
   }, 40);
 }
 
+    function downloadGeoJSON(filename, featureCollection) {
+  const blob = new Blob(
+    [JSON.stringify(featureCollection, null, 2)],
+    { type: "application/geo+json;charset=utf-8" }
+  );
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function getTimestampForFilename() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
+  return `${y}${m}${d}_${hh}${mm}${ss}`;
+}
+
+function cloneFeature(feature) {
+  return JSON.parse(JSON.stringify(feature));
+}
+
+function getBestDistrictStateForExport() {
+  if (currentResolvedResult && currentResolvedResult.owner) {
+    return {
+      owner: currentResolvedResult.owner,
+      features:
+        currentResolvedResult.resolvedFeatures ||
+        buildResolvedFeaturesFromOwner(currentResolvedResult.owner),
+      kind: "resolved"
+    };
+  }
+
+  if (currentExpandedResult && currentExpandedResult.owner) {
+    return {
+      owner: currentExpandedResult.owner,
+      features: currentExpandedResult.expandedFeatures || [],
+      kind: "expanded"
+    };
+  }
+
+  return null;
+}
+
+function buildDistrictCellsExportFeatureCollection() {
+  const exportState = getBestDistrictStateForExport();
+  if (!exportState || !exportState.features || !exportState.features.length) {
+    return null;
+  }
+
+  const features = exportState.features.map((feature, index) => {
+    const clone = cloneFeature(feature);
+    const districtId = clone.properties?._district ?? null;
+
+    clone.properties = {
+      ...(clone.properties || {}),
+      district_id: districtId,
+      district_name: districtId != null ? `District ${districtId + 1}` : null,
+      district_color: districtId != null ? DISTRICT_COLORS[districtId % DISTRICT_COLORS.length] : null,
+      export_type: "district_cell",
+      export_stage: exportState.kind,
+      source_cell_id: getCellId(clone, index)
+    };
+
+    return clone;
+  });
+
+  return {
+    type: "FeatureCollection",
+    features
+  };
+}
+
+function buildDistrictBoundariesExportFeatureCollection() {
+  let boundaryFeatures = [];
+
+  if (currentDissolvedResult && currentDissolvedResult.boundaryFeatures && currentDissolvedResult.boundaryFeatures.length) {
+    boundaryFeatures = currentDissolvedResult.boundaryFeatures.map(cloneFeature);
+  } else if (currentResolvedResult && currentResolvedResult.owner) {
+    boundaryFeatures = buildDistrictBoundarySegmentsFromResolvedResult(currentResolvedResult).map(cloneFeature);
+  } else {
+    return null;
+  }
+
+  const features = boundaryFeatures.map((feature, index) => {
+    const clone = cloneFeature(feature);
+    const districtId = clone.properties?._district ?? null;
+
+    clone.properties = {
+      ...(clone.properties || {}),
+      district_id: districtId,
+      district_name: districtId != null ? `District ${districtId + 1}` : null,
+      district_color: districtId != null ? DISTRICT_COLORS[districtId % DISTRICT_COLORS.length] : null,
+      export_type: "district_boundary",
+      boundary_segment_id: index + 1
+    };
+
+    return clone;
+  });
+
+  return {
+    type: "FeatureCollection",
+    features
+  };
+}
+
+function buildDistrictPointsExportFeatureCollection() {
+  if (!currentPointDistricts || !currentPointDistricts.length) {
+    return null;
+  }
+
+  const features = [];
+
+  for (const district of currentPointDistricts) {
+    for (const item of district.members) {
+      const clone = cloneFeature(item.feature);
+
+      clone.properties = {
+        ...(clone.properties || {}),
+        district_id: district.id,
+        district_name: `District ${district.id + 1}`,
+        district_color: DISTRICT_COLORS[district.id % DISTRICT_COLORS.length],
+        filter_group: item.group,
+        filter_group_name: item.group === 1 ? "Group 1" : "Group 2",
+        assigned_cell_id: item.cellId != null ? String(item.cellId) : null,
+        export_type: "district_point"
+      };
+
+      features.push(clone);
+    }
+  }
+
+  return {
+    type: "FeatureCollection",
+    features
+  };
+}
+
+function saveAndDownloadDistricts() {
+  const cellsFC = buildDistrictCellsExportFeatureCollection();
+  const boundariesFC = buildDistrictBoundariesExportFeatureCollection();
+  const pointsFC = buildDistrictPointsExportFeatureCollection();
+
+  if (!cellsFC && !boundariesFC && !pointsFC) {
+    setStatus(gerryStatus, "Nothing is ready to download yet. Run the district workflow first.", "warn");
+    return;
+  }
+
+  const stamp = getTimestampForFilename();
+
+  if (cellsFC) {
+    downloadGeoJSON(`district_cells_${stamp}.geojson`, cellsFC);
+  }
+
+  if (boundariesFC) {
+    setTimeout(() => {
+      downloadGeoJSON(`district_boundaries_${stamp}.geojson`, boundariesFC);
+    }, 250);
+  }
+
+  if (pointsFC) {
+    setTimeout(() => {
+      downloadGeoJSON(`district_points_${stamp}.geojson`, pointsFC);
+    }, 500);
+  }
+
+  setStatus(gerryStatus, "Downloaded district cells, boundaries, and filtered district points as GeoJSON.", "good");
+}
     function resetPage() {
       currentFiltered = [];
       currentStats = null;
@@ -3278,6 +3461,7 @@ function drawDistrictBoundaries() {
       cleanupBtn.disabled = true;
       resolveConflictsBtn.disabled = true;
       dissolveBtn.disabled = true;
+      saveDownloadBtn.disabled = true;
       setStatus(filterStatus, "Choose a gender and click Run Filter.");
       setStatus(districtStatus, "Run the filter first.");
       setStatus(gerryStatus, "Calculate targets first.");
@@ -3360,6 +3544,7 @@ function drawDistrictBoundaries() {
     cleanupBtn.addEventListener("click", cleanupDistricts);
     resolveConflictsBtn.addEventListener("click", resolveConflictCellsStep);
     dissolveBtn.addEventListener("click", drawDistrictBoundaries);
+    saveDownloadBtn.addEventListener("click", saveAndDownloadDistricts);
     initMap();
   </script>
 </body>
