@@ -1679,10 +1679,10 @@ function buildExpandedCellOwnership(claimResult, pointDistricts) {
         }
       }
 
-      if (bestDistrict != null && bestDistrict !== owner.get(cellId)) {
-        owner.set(cellId, bestDistrict);
-        changed = true;
-      }
+      if (bestDistrict != null && bestDistrict !== owner.get(cellId) && bestCount >= 2) {
+  owner.set(cellId, bestDistrict);
+  changed = true;
+}
     }
   }
 
@@ -1951,9 +1951,24 @@ function cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets) {
     if (components.length <= 1) continue;
 
     components.sort((a, b) => b.length - a.length);
-    const mainComponent = new Set(components[0]);
 
-    for (let i = 1; i < components.length; i++) {
+    let mainComponentIndex = 0;
+    for (let i = 0; i < components.length; i++) {
+      const hasProtectedPoint = components[i].some(cellId => {
+        const pointSet = pointCellDistrictSets.get(String(cellId));
+        return pointSet && pointSet.has(districtId);
+      });
+      if (hasProtectedPoint) {
+        mainComponentIndex = i;
+        break;
+      }
+    }
+
+    const mainComponent = new Set(components[mainComponentIndex]);
+
+    for (let i = 0; i < components.length; i++) {
+      if (i === mainComponentIndex) continue;
+
       const component = components[i];
 
       const hasProtectedPoint = component.some(cellId => {
@@ -1961,18 +1976,147 @@ function cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets) {
         return pointSet && pointSet.has(districtId);
       });
 
-      if (hasProtectedPoint) continue;
+      if (!hasProtectedPoint) {
+        const replacementDistrict = chooseReplacementDistrictForIsland(component, districtId, owner);
+        if (replacementDistrict == null) continue;
 
-      const replacementDistrict = chooseReplacementDistrictForIsland(component, districtId, owner);
-      if (replacementDistrict == null) continue;
+        for (const cellId of component) {
+          if (conflictCellIds.has(String(cellId))) continue;
+          owner.set(String(cellId), replacementDistrict);
+        }
+        continue;
+      }
+
+      const corridor = findCorridorToMainComponent(
+        component,
+        mainComponent,
+        districtId,
+        owner,
+        conflictCellIds,
+        pointCellDistrictSets
+      );
+
+      if (!corridor || !corridor.length) continue;
+
+      for (const cellId of corridor) {
+        if (conflictCellIds.has(String(cellId))) continue;
+        owner.set(String(cellId), districtId);
+        mainComponent.add(String(cellId));
+      }
 
       for (const cellId of component) {
         if (conflictCellIds.has(String(cellId))) continue;
-        owner.set(String(cellId), replacementDistrict);
+        owner.set(String(cellId), districtId);
+        mainComponent.add(String(cellId));
       }
     }
   }
+} 
+ function cellHasForeignProtectedPoint(cellId, districtId, pointCellDistrictSets) {
+  const pointSet = pointCellDistrictSets.get(String(cellId));
+  if (!pointSet || !pointSet.size) return false;
+  return [...pointSet].some(d => d !== districtId);
 }
+
+function reconstructPath(parent, endId) {
+  const path = [String(endId)];
+  let current = String(endId);
+
+  while (parent.has(current)) {
+    current = parent.get(current);
+    path.push(current);
+  }
+
+  path.reverse();
+  return path;
+}
+
+function findCorridorToMainComponent(component, mainComponent, districtId, owner, conflictCellIds, pointCellDistrictSets) {
+  const startCells = component.map(String);
+  const targetCells = new Set([...mainComponent].map(String));
+
+  const queue = [];
+  const visited = new Set();
+  const parent = new Map();
+  let qIndex = 0;
+
+  for (const startId of startCells) {
+    queue.push(startId);
+    visited.add(startId);
+  }
+
+  while (qIndex < queue.length) {
+    const currentId = queue[qIndex++];
+    if (targetCells.has(currentId)) {
+      return reconstructPath(parent, currentId);
+    }
+
+    const cell = cellById.get(String(currentId));
+    if (!cell) continue;
+
+    for (const neighborIdRaw of cell.neighbors) {
+      const neighborId = String(neighborIdRaw);
+      if (visited.has(neighborId)) continue;
+      if (conflictCellIds.has(neighborId)) continue;
+
+      const foreignProtected = cellHasForeignProtectedPoint(neighborId, districtId, pointCellDistrictSets);
+      if (foreignProtected) continue;
+
+      visited.add(neighborId);
+      parent.set(neighborId, currentId);
+      queue.push(neighborId);
+    }
+  }
+
+  return null;
+}
+
+function fillAllRemainingUnassigned(owner, conflictCellIds, pointCellDistrictSets) {
+  for (const cell of cellsWorking) {
+    const cellId = String(cell.id);
+    if (owner.has(cellId)) continue;
+    if (conflictCellIds.has(cellId)) continue;
+
+    const pointSet = pointCellDistrictSets.get(cellId);
+    if (pointSet && pointSet.size === 1) {
+      owner.set(cellId, [...pointSet][0]);
+      continue;
+    }
+
+    const foundDistrict = findNearestAssignedDistrict(cellId, owner, conflictCellIds, pointCellDistrictSets);
+    if (foundDistrict != null) {
+      owner.set(cellId, foundDistrict);
+    }
+  }
+}
+
+function findNearestAssignedDistrict(startCellId, owner, conflictCellIds, pointCellDistrictSets) {
+  const queue = [String(startCellId)];
+  const visited = new Set(queue);
+  let qIndex = 0;
+
+  while (qIndex < queue.length) {
+    const currentId = queue[qIndex++];
+
+    if (owner.has(currentId)) {
+      return owner.get(currentId);
+    }
+
+    const cell = cellById.get(String(currentId));
+    if (!cell) continue;
+
+    for (const neighborIdRaw of cell.neighbors) {
+      const neighborId = String(neighborIdRaw);
+      if (visited.has(neighborId)) continue;
+      if (conflictCellIds.has(neighborId)) continue;
+
+      visited.add(neighborId);
+      queue.push(neighborId);
+    }
+  }
+
+  return null;
+}   
 
 function buildExpandedFeaturesFromOwner(owner, conflictCellIds) {
   const expandedFeatures = [];
@@ -2032,7 +2176,9 @@ function cleanupDistricts() {
       fillUnassignedCells(owner, conflictCellIds, pointCellDistrictSets, 8);
       cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets);
       fillUnassignedCells(owner, conflictCellIds, pointCellDistrictSets, 4);
-
+      fillAllRemainingUnassigned(owner, conflictCellIds, pointCellDistrictSets);
+      cleanupDistrictIslands(owner, conflictCellIds, pointCellDistrictSets);
+      fillAllRemainingUnassigned(owner, conflictCellIds, pointCellDistrictSets); 
       const cleanedFeatures = buildExpandedFeaturesFromOwner(owner, conflictCellIds);
       const countByDistrict = countFeaturesByDistrict(cleanedFeatures, currentPointDistricts);
 
