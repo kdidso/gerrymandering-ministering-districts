@@ -1540,12 +1540,19 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
   };
 }
 
+
 function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
-  const owner = new Map();
+  const candidateDistrictsByCell = new Map();
+  const pointOwnerByCell = new Map();
   const countByDistrict = new Map();
 
   for (const district of pointDistricts) {
     countByDistrict.set(district.id, 0);
+
+    const ownPointCellIds = getDistrictOwnPointCellIds(district);
+    for (const cellId of ownPointCellIds) {
+      pointOwnerByCell.set(String(cellId), district.id);
+    }
   }
 
   for (const district of pointDistricts) {
@@ -1553,46 +1560,47 @@ function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
     const row = finalResult.rows.find(r => r.districtId === districtId);
     const ownPointCellIds = getDistrictOwnPointCellIds(district);
 
-    // Step 5A: claim cells containing this district's points
     for (const cellId of ownPointCellIds) {
-      if (!owner.has(String(cellId))) {
-        owner.set(String(cellId), districtId);
+      if (!candidateDistrictsByCell.has(String(cellId))) {
+        candidateDistrictsByCell.set(String(cellId), new Set());
       }
+      candidateDistrictsByCell.get(String(cellId)).add(districtId);
     }
 
-    // Step 5B: add cells within / intersecting this district polygon
     if (!row || !row.finalPolygon) continue;
 
     for (const cell of cellsWorking) {
       const cellId = String(cell.id);
-      if (owner.has(cellId)) continue;
 
       let intersects = false;
-
       try {
-        // Prefer polygon intersection test
         const clipped = turf.intersect(cell.feature, row.finalPolygon);
         intersects = !!clipped;
       } catch (err) {
         intersects = false;
       }
 
-      // fallback: centroid inside if intersect had issues
-      if (!intersects) {
-        try {
-          intersects = turf.booleanPointInPolygon(
-            turf.point([cell.centroidLng, cell.centroidLat]),
-            row.finalPolygon
-          );
-        } catch (err) {
-          intersects = false;
-        }
-      }
+      if (!intersects) continue;
 
-      if (intersects) {
-        owner.set(cellId, districtId);
+      if (!candidateDistrictsByCell.has(cellId)) {
+        candidateDistrictsByCell.set(cellId, new Set());
       }
+      candidateDistrictsByCell.get(cellId).add(districtId);
     }
+  }
+
+  const owner = new Map();
+
+  for (const [cellId, districtSet] of candidateDistrictsByCell.entries()) {
+    const candidates = [...districtSet];
+
+    if (pointOwnerByCell.has(cellId)) {
+      owner.set(cellId, pointOwnerByCell.get(cellId));
+      continue;
+    }
+
+    candidates.sort((a, b) => a - b);
+    owner.set(cellId, candidates[0]);
   }
 
   const claimedFeatures = [];
@@ -1617,7 +1625,6 @@ function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
     countByDistrict
   };
 }
-
     function drawDistrictPoints(pointDistricts) {
       if (districtPointLayer) {
         map.removeLayer(districtPointLayer);
@@ -1712,37 +1719,42 @@ function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
       ).addTo(map);
     }
 
-    function drawStep4Polygons(finalResult) {
-      if (finalPolygonLayer) {
-        map.removeLayer(finalPolygonLayer);
-        finalPolygonLayer = null;
+function drawStep4Polygons(finalResult) {
+  if (adjustedPolygonLayer) {
+    map.removeLayer(adjustedPolygonLayer);
+    adjustedPolygonLayer = null;
+  }
+
+  if (finalPolygonLayer) {
+    map.removeLayer(finalPolygonLayer);
+    finalPolygonLayer = null;
+  }
+
+  const finalFeatures = finalResult.rows
+    .filter(r => r.finalPolygon)
+    .map(r => cloneFeature(r.finalPolygon));
+
+  finalPolygonLayer = L.geoJSON(
+    { type: "FeatureCollection", features: finalFeatures },
+    {
+      style: function(feature) {
+        const districtId = feature.properties._district;
+        const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+        return {
+          color,
+          weight: 4,
+          opacity: 1,
+          fillColor: color,
+          fillOpacity: 0.18
+        };
+      },
+      onEachFeature: function(feature, layer) {
+        const districtId = feature.properties._district;
+        layer.bindPopup(`<strong>District ${districtId + 1}</strong><br>Final Step 4 polygon`);
       }
-
-      const finalFeatures = finalResult.rows
-        .filter(r => r.finalPolygon)
-        .map(r => cloneFeature(r.finalPolygon));
-
-      finalPolygonLayer = L.geoJSON(
-        { type: "FeatureCollection", features: finalFeatures },
-        {
-          style: function(feature) {
-            const districtId = feature.properties._district;
-            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
-            return {
-              color,
-              weight: 4,
-              opacity: 1,
-              fillColor: color,
-              fillOpacity: 0.18
-            };
-          },
-          onEachFeature: function(feature, layer) {
-            const districtId = feature.properties._district;
-            layer.bindPopup(`<strong>District ${districtId + 1}</strong><br>Final Step 4 polygon`);
-          }
-        }
-      ).addTo(map);
     }
+  ).addTo(map);
+}
 
     function drawClaimedCells(claimResult) {
       if (claimedCellLayer) {
@@ -2048,6 +2060,8 @@ function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
       setTimeout(() => {
         try {
           const finalResult = finalizeDistrictPolygons(currentDistrictPolygons, currentPointDistricts);
+          const finalCount = finalResult.rows.filter(r => r.finalPolygon).length;
+          console.log("Step 4 final polygon count:", finalCount, finalResult);
           currentFinalDistrictPolygons = finalResult;
           currentClaimResult = null;
 
@@ -2058,9 +2072,9 @@ function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
 
           setStatus(
             gerryStatus,
-            "Step 4 complete. Final district polygons were reduced to non-overlapping single polygon features.",
+            `Step 4 complete. ${finalCount} final district polygons were created after overlap removal.`,
             "good"
-          );
+);
         } catch (error) {
           console.error(error);
           setStatus(
