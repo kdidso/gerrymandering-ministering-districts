@@ -1742,10 +1742,11 @@ function drawStep4Polygons(finalResult) {
         const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
         return {
           color,
-          weight: 4,
+          weight: 6,
           opacity: 1,
+          dashArray: null,
           fillColor: color,
-          fillOpacity: 0.18
+          fillOpacity: 0.04
         };
       },
       onEachFeature: function(feature, layer) {
@@ -1754,6 +1755,13 @@ function drawStep4Polygons(finalResult) {
       }
     }
   ).addTo(map);
+
+  if (finalPolygonLayer.bringToFront) {
+    finalPolygonLayer.bringToFront();
+  }
+  if (districtPointLayer && districtPointLayer.bringToFront) {
+    districtPointLayer.bringToFront();
+  }
 }
 
     function drawClaimedCells(claimResult) {
