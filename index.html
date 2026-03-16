@@ -212,7 +212,7 @@
     <button id="gerrymanderBtn" disabled>Gerrymander People</button>
     <button id="regerrymanderBtn" class="secondary" disabled>Re-gerrymander</button>
     <button id="connectLinesBtn" class="secondary" disabled>Connect District Lines</button>
-    <button id="claimCellsBtn" class="secondary" disabled>Claim Cells From Lines</button>
+    <button id="claimCellsBtn" class="secondary" disabled>Claim Cells From Polygons</button>
     <button id="expandCellsBtn" class="secondary" disabled>Expand District Cells</button>
     <button id="cleanupBtn" class="secondary" disabled>Clean Up Districts</button>
     <button id="resolveConflictsBtn" class="secondary" disabled>Resolve Conflict Cells</button>
@@ -263,14 +263,14 @@
     let districtFillLayer = null;
     let districtPointLayer = null;
     let districtBoundaryLayer = null;
-    let districtLineLayer = null;
     let dissolvedDistrictLayer = null;
+    let currentSeedPolygons = null;
+    let districtSeedPolygonLayer = null;
     let currentFiltered = [];
     let currentStats = null;
     let currentDistrictTargets = null;
     let currentDistrictResult = null;
     let currentPointDistricts = null;
-    let currentLineFeatures = null;
     let currentClaimResult = null;
     let currentExpandedResult = null;
     let currentResolvedResult = null;
@@ -1156,12 +1156,6 @@ function enforceMustLinkClusters(districts, maxMeters = 50) {
         gerrySummary.appendChild(row);
       }
     }
-    function removeDistrictLineLayer() {
-  if (districtLineLayer) {
-    map.removeLayer(districtLineLayer);
-    districtLineLayer = null;
-  }
-}
 
     function runFilter() {
       if (!membersData || !wardPolygonFeatures.length || !cellsWorking.length) {
@@ -1173,7 +1167,7 @@ function enforceMustLinkClusters(districts, maxMeters = 50) {
       resetGerrySummary();
       currentDistrictTargets = null;
       currentDistrictResult = null;
-      currentPointDistricts = null;
+      currentSeedPolygons = null;
       currentLineFeatures = null;
       currentClaimResult = null;
       currentExpandedResult = null;
@@ -1188,7 +1182,7 @@ function enforceMustLinkClusters(districts, maxMeters = 50) {
       cleanupBtn.disabled = true;
       dissolveBtn.disabled = true;
       saveDownloadBtn.disabled = true;
-      removeDistrictLineLayer();
+      removeDistrictSeedPolygonLayer();
       setStatus(gerryStatus, "Calculate targets first.");
 
       const chosenGender = getSelectedGender();
@@ -1308,8 +1302,245 @@ filteredPreviewLayer = L.geoJSON(
       setStatus(districtStatus, currentStats.trioNeeded ? "Targets computed. Group 1 is odd, so one trio will be needed later." : "Targets computed successfully.", "good");
       setStatus(gerryStatus, "Click Gerrymander Districts to generate cell-based districts.", "good");
     }
+    function scorePointDistricts(districts, targets, tolerance = 2) {
+      let score = 0;
 
-    function runGerrymander() {
+      for (const district of districts) {
+    const xDiff = Math.abs(district.group1 - district.xTarget);
+    const yDiff = Math.abs(district.group2 - district.yTarget);
+    const sDiff = Math.abs(district.total - district.sTarget);
+
+    score += xDiff * 20 + yDiff * 10 + sDiff * 12;
+
+    if (xDiff > tolerance) score += 200;
+    if (sDiff > tolerance) score += 200;
+  }
+
+  // penalize mixed-district cells
+  const pointCellDistrictSets = getPointCellDistrictSets(districts);
+  for (const [cellId, districtSet] of pointCellDistrictSets.entries()) {
+    if (districtSet.size > 1) {
+      score += 100;
+    }
+  }
+
+  return score;
+}
+
+function generateBestPointDistricts(filteredItems, targets, tries = 30, tolerance = 2) {
+  let best = null;
+  let bestScore = Infinity;
+
+  for (let i = 0; i < tries; i++) {
+    const runSeed = Date.now() + i * 99991 + Math.floor(Math.random() * 100000);
+
+    let districts = generatePointDistricts(
+      filteredItems.map(item => ({
+        feature: JSON.parse(JSON.stringify(item.feature)),
+        group: item.group,
+        cellId: item.cellId,
+        _assignedDistrict: null
+      })),
+      targets,
+      runSeed
+    );
+
+    districts = enforceSameCellSameDistrict(districts);
+    districts = enforceMustLinkClusters(districts, 50);
+    districts = enforceSameCellSameDistrict(districts);
+
+    const score = scorePointDistricts(districts, targets, tolerance);
+
+    if (score < bestScore) {
+      bestScore = score;
+      best = districts;
+    }
+  }
+
+  return best;
+}
+
+function buildDistrictPointFeatureCollection(pointDistricts, districtId) {
+  const features = [];
+
+  for (const district of pointDistricts) {
+    if (district.id !== districtId) continue;
+
+    for (const item of district.members) {
+      const clone = JSON.parse(JSON.stringify(item.feature));
+      clone.properties = clone.properties || {};
+      clone.properties._district = district.id;
+      features.push(clone);
+    }
+  }
+
+  return {
+    type: "FeatureCollection",
+    features
+  };
+}
+
+function buildSeedPolygonForDistrict(pointDistricts, districtId) {
+  const fc = buildDistrictPointFeatureCollection(pointDistricts, districtId);
+  if (!fc.features.length) return null;
+
+  if (fc.features.length === 1) {
+    try {
+      return turf.buffer(fc.features[0], 0.15, { units: "kilometers" });
+    } catch (err) {
+      return null;
+    }
+  }
+
+  let hull = null;
+
+  try {
+    hull = turf.concave(fc, { maxEdge: 1.5, units: "kilometers" });
+  } catch (err) {
+    hull = null;
+  }
+
+  if (!hull) {
+    try {
+      hull = turf.convex(fc);
+    } catch (err) {
+      hull = null;
+    }
+  }
+
+  if (!hull) {
+    try {
+      const buffered = fc.features.map(f =>
+        turf.buffer(f, 0.12, { units: "kilometers" })
+      );
+
+      if (!buffered.length) return null;
+      hull = buffered[0];
+
+      for (let i = 1; i < buffered.length; i++) {
+        try {
+          hull = turf.union(turf.featureCollection([hull, buffered[i]]));
+        } catch (err) {}
+      }
+    } catch (err) {
+      hull = null;
+    }
+  }
+
+  if (!hull) return null;
+
+  try {
+    hull = turf.buffer(hull, 0.08, { units: "kilometers" });
+  } catch (err) {}
+
+  try {
+    let clipped = null;
+
+    for (const wardPoly of wardPolygonFeatures) {
+      try {
+        const piece = turf.intersect(turf.featureCollection([hull, wardPoly]));
+        if (piece) {
+          clipped = piece;
+          break;
+        }
+      } catch (err) {}
+    }
+
+    if (clipped) hull = clipped;
+  } catch (err) {}
+
+  hull.properties = hull.properties || {};
+  hull.properties._district = districtId;
+
+  return hull;
+}
+
+function buildNonOverlappingSeedPolygons(pointDistricts) {
+  const polygons = [];
+
+  for (const district of pointDistricts) {
+    const poly = buildSeedPolygonForDistrict(pointDistricts, district.id);
+    if (poly) {
+      poly.properties = poly.properties || {};
+      poly.properties._district = district.id;
+      polygons.push(poly);
+    }
+  }
+
+  // Resolve overlaps by subtracting earlier polygons from later polygons.
+  // Priority: better target fit first, then larger districts.
+  polygons.sort((a, b) => {
+    const da = pointDistricts.find(d => d.id === a.properties._district);
+    const db = pointDistricts.find(d => d.id === b.properties._district);
+
+    const sa =
+      Math.abs(da.group1 - da.xTarget) +
+      Math.abs(da.total - da.sTarget);
+
+    const sb =
+      Math.abs(db.group1 - db.xTarget) +
+      Math.abs(db.total - db.sTarget);
+
+    if (sa !== sb) return sa - sb;
+    return db.total - da.total;
+  });
+
+  const accepted = [];
+
+  for (const poly of polygons) {
+    let candidate = JSON.parse(JSON.stringify(poly));
+
+    for (const prior of accepted) {
+      if (!candidate) break;
+      try {
+        const diff = turf.difference(
+          turf.featureCollection([candidate, prior])
+        );
+        candidate = diff || null;
+      } catch (err) {}
+    }
+
+    if (candidate) {
+      candidate.properties = candidate.properties || {};
+      candidate.properties._district = poly.properties._district;
+      accepted.push(candidate);
+    }
+  }
+
+  return accepted;
+}
+
+function removeDistrictSeedPolygonLayer() {
+  if (districtSeedPolygonLayer) {
+    map.removeLayer(districtSeedPolygonLayer);
+    districtSeedPolygonLayer = null;
+  }
+}
+
+function addDistrictSeedPolygonLayer(seedPolygons) {
+  removeDistrictSeedPolygonLayer();
+
+  districtSeedPolygonLayer = L.geoJSON(
+    {
+      type: "FeatureCollection",
+      features: seedPolygons
+    },
+    {
+      style: function(feature) {
+        const districtId = feature.properties._district;
+        const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+        return {
+          color,
+          weight: 3,
+          opacity: 0.95,
+          fillColor: color,
+          fillOpacity: 0.12
+        };
+      }
+    }
+  ).addTo(map);
+}
+function runGerrymander() {
   if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
     setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
     return;
@@ -1317,28 +1548,21 @@ filteredPreviewLayer = L.geoJSON(
 
   removeDistrictLayers();
   removeDistrictLineLayer();
+  removeDistrictSeedPolygonLayer();
 
-  setStatus(gerryStatus, "Assigning people to districts...", "warn");
+  setStatus(gerryStatus, "Assigning people to districts and drawing seed polygons...", "warn");
 
   setTimeout(() => {
     try {
       gerrymanderRunCount++;
-      const runSeed = Date.now() + gerrymanderRunCount * 99991;
 
-      let districts = generatePointDistricts(
-  currentFiltered.map(item => ({
-    feature: JSON.parse(JSON.stringify(item.feature)),
-    group: item.group,
-    cellId: item.cellId,
-    _assignedDistrict: null
-  })),
-  currentDistrictTargets,
-  runSeed
-);
+      const districts = generateBestPointDistricts(
+        currentFiltered,
+        currentDistrictTargets,
+        24,
+        2
+      );
 
-districts = enforceSameCellSameDistrict(districts);
-districts = enforceMustLinkClusters(districts, 50);
-districts = enforceSameCellSameDistrict(districts);
       currentPointDistricts = districts;
       currentDistrictResult = null;
       currentLineFeatures = null;
@@ -1346,7 +1570,10 @@ districts = enforceSameCellSameDistrict(districts);
       currentExpandedResult = null;
       currentResolvedResult = null;
       currentDissolvedResult = null;
-      claimCellsBtn.disabled = true;
+      currentSeedPolygons = buildNonOverlappingSeedPolygons(districts);
+
+      claimCellsBtn.disabled = false;
+      connectLinesBtn.disabled = true;
       expandCellsBtn.disabled = true;
       cleanupBtn.disabled = true;
       resolveConflictsBtn.disabled = true;
@@ -1386,6 +1613,10 @@ districts = enforceSameCellSameDistrict(districts);
         }
       ).addTo(map);
 
+      if (currentSeedPolygons && currentSeedPolygons.length) {
+        addDistrictSeedPolygonLayer(currentSeedPolygons);
+      }
+
       if (allMembersLayer) {
         allMembersLayer.setStyle({
           radius: 4,
@@ -1401,29 +1632,26 @@ districts = enforceSameCellSameDistrict(districts);
 
       const intro = document.createElement("div");
       intro.className = "district-row";
-      intro.innerHTML = `<strong>People assigned to districts</strong><br>The filtered people have been assigned to districts. You can now draw connecting lines between people in the same district.`;
+      intro.innerHTML = `<strong>People assigned and seed polygons drawn</strong><br>The gerrymander now assigns people first, then draws non-overlapping seed polygons around those district point groups.`;
       gerrySummary.appendChild(intro);
 
       for (const district of districts) {
         const row = document.createElement("div");
         row.className = "district-row";
-        const companionships = Math.floor(district.group1 / 2);
         row.innerHTML = `
           <strong>District ${district.id + 1}</strong><br>
           Group 1: ${district.group1} / target ${district.xTarget}<br>
           Group 2: ${district.group2} / target ${district.yTarget}<br>
-          Total: ${district.total} / target ${district.sTarget}<br>
-          Estimated companionships: ${companionships}
+          Total: ${district.total} / target ${district.sTarget}
         `;
         gerrySummary.appendChild(row);
       }
 
       regerrymanderBtn.disabled = false;
-      connectLinesBtn.disabled = false;
 
       setStatus(
         gerryStatus,
-        `Assigned people to ${districts.length} districts. Click Connect District Lines for the next step.`,
+        `Assigned people and drew seed polygons. Click Claim Cells From Polygons for the next step.`,
         "good"
       );
     } catch (error) {
@@ -1436,114 +1664,7 @@ districts = enforceSameCellSameDistrict(districts);
     }
   }, 40);
 }
-    function buildDistrictLineFeatures(pointDistricts) {
-  const lineFeatures = [];
-
-  for (const district of pointDistricts) {
-    const pointItems = district.members.slice();
-
-    if (pointItems.length < 2) continue;
-
-    const ordered = pointItems.slice();
-    const used = new Set();
-    const chain = [];
-
-    chain.push(ordered[0]);
-    used.add(0);
-
-    while (chain.length < ordered.length) {
-      const last = chain[chain.length - 1];
-      const lastCoords = last.feature.geometry.coordinates;
-
-      let bestIdx = -1;
-      let bestDist = Infinity;
-
-      for (let i = 0; i < ordered.length; i++) {
-        if (used.has(i)) continue;
-        const coords = ordered[i].feature.geometry.coordinates;
-        const d = Math.hypot(coords[0] - lastCoords[0], coords[1] - lastCoords[1]);
-        if (d < bestDist) {
-          bestDist = d;
-          bestIdx = i;
-        }
-      }
-
-      if (bestIdx === -1) break;
-      chain.push(ordered[bestIdx]);
-      used.add(bestIdx);
-    }
-
-    for (let i = 0; i < chain.length - 1; i++) {
-      const a = chain[i].feature.geometry.coordinates;
-      const b = chain[i + 1].feature.geometry.coordinates;
-
-      lineFeatures.push({
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates: [a, b]
-        },
-        properties: {
-          _district: district.id
-        }
-      });
-    }
-  }
-
-  return lineFeatures;
-}
-
-function connectDistrictLines() {
-  if (!currentPointDistricts || !currentPointDistricts.length) {
-    setStatus(gerryStatus, "Gerrymander people first.", "warn");
-    return;
-  }
-
-  removeDistrictLineLayer();
-
-  setStatus(gerryStatus, "Drawing district connection lines...", "warn");
-
-  setTimeout(() => {
-    try {
-      const lineFeatures = buildDistrictLineFeatures(currentPointDistricts);
-      currentLineFeatures = lineFeatures;
-
-      districtLineLayer = L.geoJSON(
-        {
-          type: "FeatureCollection",
-          features: lineFeatures
-        },
-        {
-          style: function(feature) {
-            const districtId = feature.properties._district;
-            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
-            return {
-              color: color,
-              weight: 3,
-              opacity: 0.95
-            };
-          }
-        }
-      ).addTo(map);
-
-      claimCellsBtn.disabled = false;
-
-      setStatus(
-        gerryStatus,
-        `Created ${lineFeatures.length} district connection line segments. Click Claim Cells From Lines for the next step.`,
-        "good"
-);
-    } catch (error) {
-      console.error(error);
-      setStatus(
-        gerryStatus,
-        `Connecting lines failed: ${error?.message || error}`,
-        "error"
-      );
-    }
-  }, 40);
-}
-    function getPointCellDistrictSets(pointDistricts) {
+function getPointCellDistrictSets(pointDistricts) {
   const result = new Map();
 
   for (const district of pointDistricts) {
@@ -1557,38 +1678,8 @@ function connectDistrictLines() {
 
   return result;
 }
-
-function lineTouchesCell(lineFeature, cellFeature) {
-  try {
-    return turf.booleanIntersects(lineFeature, cellFeature);
-  } catch (err) {
-    return false;
-  }
-}
-
-function buildLineTouchedCellClaims(lineFeatures, pointDistricts) {
+    function buildPolygonClaimResult(seedPolygons, pointDistricts) {
   const pointCellDistrictSets = getPointCellDistrictSets(pointDistricts);
-  const touchedByDistricts = new Map();
-
-  for (const cell of cellsWorking) {
-    touchedByDistricts.set(cell.id, new Set());
-  }
-
-  for (const lineFeature of lineFeatures) {
-    const districtId = lineFeature.properties._district;
-
-    for (const cell of cellsWorking) {
-      const pointSet = pointCellDistrictSets.get(cell.id);
-      if (pointSet && [...pointSet].some(d => d !== districtId)) {
-        continue;
-      }
-
-      if (lineTouchesCell(lineFeature, cell.feature)) {
-        touchedByDistricts.get(cell.id).add(districtId);
-      }
-    }
-  }
-
   const claimedFeatures = [];
   const conflictCellIds = [];
   const claimedCountByDistrict = new Map();
@@ -1598,7 +1689,18 @@ function buildLineTouchedCellClaims(lineFeatures, pointDistricts) {
   }
 
   for (const cell of cellsWorking) {
-    const touched = touchedByDistricts.get(cell.id) || new Set();
+    const centroidPoint = turf.point([cell.centroidLng, cell.centroidLat]);
+
+    const matchingDistricts = [];
+
+    for (const poly of seedPolygons) {
+      try {
+        if (turf.booleanPointInPolygon(centroidPoint, poly)) {
+          matchingDistricts.push(poly.properties._district);
+        }
+      } catch (err) {}
+    }
+
     const pointSet = pointCellDistrictSets.get(cell.id);
 
     if (pointSet && pointSet.size > 1) {
@@ -1606,20 +1708,26 @@ function buildLineTouchedCellClaims(lineFeatures, pointDistricts) {
       continue;
     }
 
-    if (touched.size === 1) {
-      const districtId = [...touched][0];
+    if (matchingDistricts.length === 1) {
+      const districtId = matchingDistricts[0];
+
+      if (pointSet && [...pointSet].some(d => d !== districtId)) {
+        conflictCellIds.push(cell.id);
+        continue;
+      }
+
       const clone = JSON.parse(JSON.stringify(cell.feature));
       clone.properties = {
         ...(clone.properties || {}),
         _district: districtId,
-        _pieceType: "line-claimed"
+        _pieceType: "polygon-claimed"
       };
       claimedFeatures.push(clone);
       claimedCountByDistrict.set(
         districtId,
         (claimedCountByDistrict.get(districtId) || 0) + 1
       );
-    } else if (touched.size > 1) {
+    } else if (matchingDistricts.length > 1) {
       conflictCellIds.push(cell.id);
     }
   }
@@ -1631,24 +1739,22 @@ function buildLineTouchedCellClaims(lineFeatures, pointDistricts) {
   };
 }
 
-function claimCellsFromLines() {
+function claimCellsFromPolygons() {
   if (!currentPointDistricts || !currentPointDistricts.length) {
     setStatus(gerryStatus, "Gerrymander people first.", "warn");
     return;
   }
 
-  if (!currentLineFeatures || !currentLineFeatures.length) {
-    setStatus(gerryStatus, "Connect district lines first.", "warn");
+  if (!currentSeedPolygons || !currentSeedPolygons.length) {
+    setStatus(gerryStatus, "Seed polygons have not been drawn yet.", "warn");
     return;
   }
 
-  setStatus(gerryStatus, "Claiming cells touched by lines...", "warn");
+  setStatus(gerryStatus, "Claiming cells from seed polygons...", "warn");
 
   setTimeout(() => {
     try {
-      const result = buildLineTouchedCellClaims(currentLineFeatures, currentPointDistricts);
-
-      removeDistrictLineLayer();
+      const result = buildPolygonClaimResult(currentSeedPolygons, currentPointDistricts);
 
       if (districtFillLayer) {
         map.removeLayer(districtFillLayer);
@@ -1665,7 +1771,7 @@ function claimCellsFromLines() {
             const districtId = feature.properties._district;
             const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
             return {
-              color: color,
+              color,
               weight: 0.8,
               opacity: 0.5,
               fillColor: color,
@@ -1674,14 +1780,16 @@ function claimCellsFromLines() {
           }
         }
       ).addTo(map);
+
       currentClaimResult = result;
       currentDistrictResult = result;
-      expandCellsBtn.disabled = false; 
+      expandCellsBtn.disabled = false;
+
       resetGerrySummary();
 
       const intro = document.createElement("div");
       intro.className = "district-row";
-      intro.innerHTML = `<strong>Cells claimed from lines</strong><br>Cells touched by only one district's lines were claimed. Conflict cells touched by more than one district were left unassigned.`;
+      intro.innerHTML = `<strong>Cells claimed from polygons</strong><br>Cells whose centroids fall inside the district seed polygons were claimed. Conflict cells were left unassigned.`;
       gerrySummary.appendChild(intro);
 
       for (const district of currentPointDistricts) {
@@ -1689,7 +1797,7 @@ function claimCellsFromLines() {
         row.className = "district-row";
         row.innerHTML = `
           <strong>District ${district.id + 1}</strong><br>
-          Claimed cells from lines: ${result.claimedCountByDistrict.get(district.id) || 0}
+          Claimed cells from polygons: ${result.claimedCountByDistrict.get(district.id) || 0}
         `;
         gerrySummary.appendChild(row);
       }
@@ -1704,14 +1812,14 @@ function claimCellsFromLines() {
 
       setStatus(
         gerryStatus,
-        `Claimed ${result.claimedFeatures.length} cells from lines. ${result.conflictCellIds.length} conflict cells were left unassigned.`,
+        `Claimed ${result.claimedFeatures.length} cells from polygons. ${result.conflictCellIds.length} conflict cells were left unassigned.`,
         "good"
       );
     } catch (error) {
       console.error(error);
       setStatus(
         gerryStatus,
-        `Claiming cells failed: ${error?.message || error}`,
+        `Claiming cells from polygons failed: ${error?.message || error}`,
         "error"
       );
     }
@@ -3435,7 +3543,7 @@ function saveAndDownloadDistricts() {
       currentDistrictTargets = null;
       currentDistrictResult = null;
       currentPointDistricts = null;
-      currentLineFeatures = null;
+      currentSeedPolygons = null;
       currentClaimResult = null;
       currentExpandedResult = null;
       currentResolvedResult = null;
@@ -3445,7 +3553,7 @@ function saveAndDownloadDistricts() {
       resetDistrictSummary();
       resetGerrySummary();
       removeDistrictLayers();
-      removeDistrictLineLayer();
+      removeDistrictSeedPolygonLayer();
       removeFilteredPreviewLayer();
       if (allMembersLayer) {
         allMembersLayer.setStyle({ radius: 5, color: "#ffffff", weight: 1.2, fillColor: "#cc3344", fillOpacity: 0.55, opacity: 0.95 });
@@ -3539,7 +3647,7 @@ function saveAndDownloadDistricts() {
     gerrymanderBtn.addEventListener("click", runGerrymander);
     regerrymanderBtn.addEventListener("click", runGerrymander);
     connectLinesBtn.addEventListener("click", connectDistrictLines);
-    claimCellsBtn.addEventListener("click", claimCellsFromLines);
+    claimCellsBtn.addEventListener("click", claimCellsFromPolygons);
     expandCellsBtn.addEventListener("click", expandDistrictCells);
     cleanupBtn.addEventListener("click", cleanupDistricts);
     resolveConflictsBtn.addEventListener("click", resolveConflictCellsStep);
