@@ -275,6 +275,8 @@
     let currentExpandedResult = null;
     let currentResolvedResult = null;
     let currentDissolvedResult = null;
+    let currentLineFeatures = null;
+    let districtLineLayer = null;
     let gerrymanderRunCount = 0;
 
     let cellsWorking = [];
@@ -943,7 +945,13 @@ function enforceMustLinkClusters(districts, maxMeters = 50) {
         filteredPreviewLayer = null;
       }
     }
-
+    
+function removeDistrictLineLayer() {
+  if (districtLineLayer) {
+    map.removeLayer(districtLineLayer);
+    districtLineLayer = null;
+  }
+}
     function addFilteredPreviewLayer(filteredItems) {
       removeFilteredPreviewLayer();
       const features = filteredItems.map(item => {
@@ -1974,7 +1982,7 @@ function expandDistrictCells() {
   }
 
   if (!currentClaimResult || !currentClaimResult.claimedFeatures) {
-    setStatus(gerryStatus, "Claim cells from lines first.", "warn");
+    setStatus(gerryStatus, "Claim cells from polygons first.", "warn");
     return;
   }
 
@@ -3646,7 +3654,6 @@ function saveAndDownloadDistricts() {
     calcDistrictBtn.addEventListener("click", calculateDistrictTargets);
     gerrymanderBtn.addEventListener("click", runGerrymander);
     regerrymanderBtn.addEventListener("click", runGerrymander);
-    connectLinesBtn.addEventListener("click", connectDistrictLines);
     claimCellsBtn.addEventListener("click", claimCellsFromPolygons);
     expandCellsBtn.addEventListener("click", expandDistrictCells);
     cleanupBtn.addEventListener("click", cleanupDistricts);
