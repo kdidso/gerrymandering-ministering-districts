@@ -1450,148 +1450,173 @@
       };
     }
 
-    function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
-      const finalized = [];
-      const finalizedUnionList = [];
+function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
+  const finalized = [];
+  let olderUnion = null;
 
-      for (const district of pointDistricts) {
-        const row = adjustedResult.districtPolygons.find(r => r.districtId === district.id);
-        if (!row || !row.adjustedPolygon) {
-          finalized.push({
-            districtId: district.id,
-            finalPolygon: null,
-            overlapRemoved: false,
-            areaBefore: 0,
-            areaAfter: 0
-          });
-          continue;
-        }
+  for (const district of pointDistricts) {
+    const row = adjustedResult.districtPolygons.find(r => r.districtId === district.id);
 
-        let working = cloneFeature(row.adjustedPolygon);
-        let areaBefore = 0;
-        let areaAfter = 0;
-        let overlapRemoved = false;
-
-        try { areaBefore = turf.area(working); } catch (err) { areaBefore = 0; }
-
-        for (const older of finalizedUnionList) {
-          const diff = differenceSafe(working, older);
-          if (diff === null) {
-            working = null;
-            overlapRemoved = true;
-            break;
-          }
-
-          if (JSON.stringify(diff.geometry) !== JSON.stringify(working.geometry)) {
-            overlapRemoved = true;
-          }
-
-          working = diff;
-        }
-
-        if (working) {
-          working.properties = {
-            ...(working.properties || {}),
-            _district: district.id,
-            _polyType: "final-no-overlap"
-          };
-
-          working = chooseBestSinglePolygonPart(working, district);
-
-          if (working) {
-            try { areaAfter = turf.area(working); } catch (err) { areaAfter = 0; }
-            finalizedUnionList.push(working);
-          }
-        }
-
-        finalized.push({
-          districtId: district.id,
-          finalPolygon: working,
-          overlapRemoved,
-          areaBefore,
-          areaAfter
-        });
-      }
-
-      return {
-        rows: finalized
-      };
+    if (!row || !row.adjustedPolygon) {
+      finalized.push({
+        districtId: district.id,
+        finalPolygon: null,
+        overlapRemoved: false,
+        areaBefore: 0,
+        areaAfter: 0
+      });
+      continue;
     }
 
-    function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
-      const owner = new Map();
-      const countByDistrict = new Map();
+    let working = cloneFeature(row.adjustedPolygon);
+    let areaBefore = 0;
+    let areaAfter = 0;
+    let overlapRemoved = false;
 
-      for (const district of pointDistricts) {
-        countByDistrict.set(district.id, 0);
-      }
-
-      for (const row of finalResult.rows) {
-        if (!row.finalPolygon) continue;
-
-        const districtId = row.districtId;
-        const district = pointDistricts.find(d => d.id === districtId);
-        const ownPointCellIds = district ? getDistrictOwnPointCellIds(district) : new Set();
-
-        for (const cell of cellsWorking) {
-          const cellId = String(cell.id);
-          if (owner.has(cellId)) continue;
-
-          let claim = false;
-
-          if (ownPointCellIds.has(cellId)) {
-            claim = true;
-          } else {
-            try {
-              claim = turf.booleanPointInPolygon(
-                turf.point([cell.centroidLng, cell.centroidLat]),
-                row.finalPolygon
-              );
-            } catch (err) {
-              claim = false;
-            }
-          }
-
-          if (claim) {
-            owner.set(cellId, districtId);
-          }
-        }
-      }
-
-      // Second pass: make sure own point cells are always claimed by their own district
-      // unless another district already claimed that same cell first.
-      // Since same-cell points are kept together in step 3, this should stay stable.
-      for (const district of pointDistricts) {
-        const ownPointCellIds = getDistrictOwnPointCellIds(district);
-        for (const cellId of ownPointCellIds) {
-          if (!owner.has(String(cellId))) {
-            owner.set(String(cellId), district.id);
-          }
-        }
-      }
-
-      const claimedFeatures = [];
-
-      for (const cell of cellsWorking) {
-        const districtId = owner.get(String(cell.id));
-        if (districtId == null) continue;
-
-        const clone = cloneFeature(cell.feature);
-        clone.properties = {
-          ...(clone.properties || {}),
-          _district: districtId,
-          _pieceType: "claimed-cell"
-        };
-        claimedFeatures.push(clone);
-        countByDistrict.set(districtId, (countByDistrict.get(districtId) || 0) + 1);
-      }
-
-      return {
-        owner,
-        claimedFeatures,
-        countByDistrict
-      };
+    try {
+      areaBefore = turf.area(working);
+    } catch (err) {
+      areaBefore = 0;
     }
+
+    // Erase by all older polygons at once
+    if (olderUnion) {
+      try {
+        const erased = turf.difference(working, olderUnion);
+        if (erased) {
+          if (JSON.stringify(erased.geometry) !== JSON.stringify(working.geometry)) {
+            overlapRemoved = true;
+          }
+          working = erased;
+        } else {
+          working = null;
+          overlapRemoved = true;
+        }
+      } catch (err) {
+        // leave working as-is if difference fails
+      }
+    }
+
+    if (working) {
+      working.properties = {
+        ...(working.properties || {}),
+        _district: district.id,
+        _polyType: "final-no-overlap"
+      };
+
+      // If multipart remains, keep the best single piece
+      working = chooseBestSinglePolygonPart(working, district);
+
+      if (working) {
+        try {
+          areaAfter = turf.area(working);
+        } catch (err) {
+          areaAfter = 0;
+        }
+
+        // add this finished polygon to the running older union
+        if (!olderUnion) {
+          olderUnion = cloneFeature(working);
+        } else {
+          try {
+            const unioned = turf.union(turf.featureCollection([olderUnion, working]));
+            if (unioned) olderUnion = unioned;
+          } catch (err) {}
+        }
+      }
+    }
+
+    finalized.push({
+      districtId: district.id,
+      finalPolygon: working,
+      overlapRemoved,
+      areaBefore,
+      areaAfter
+    });
+  }
+
+  return {
+    rows: finalized
+  };
+}
+
+function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
+  const owner = new Map();
+  const countByDistrict = new Map();
+
+  for (const district of pointDistricts) {
+    countByDistrict.set(district.id, 0);
+  }
+
+  for (const district of pointDistricts) {
+    const districtId = district.id;
+    const row = finalResult.rows.find(r => r.districtId === districtId);
+    const ownPointCellIds = getDistrictOwnPointCellIds(district);
+
+    // Step 5A: claim cells containing this district's points
+    for (const cellId of ownPointCellIds) {
+      if (!owner.has(String(cellId))) {
+        owner.set(String(cellId), districtId);
+      }
+    }
+
+    // Step 5B: add cells within / intersecting this district polygon
+    if (!row || !row.finalPolygon) continue;
+
+    for (const cell of cellsWorking) {
+      const cellId = String(cell.id);
+      if (owner.has(cellId)) continue;
+
+      let intersects = false;
+
+      try {
+        // Prefer polygon intersection test
+        const clipped = turf.intersect(cell.feature, row.finalPolygon);
+        intersects = !!clipped;
+      } catch (err) {
+        intersects = false;
+      }
+
+      // fallback: centroid inside if intersect had issues
+      if (!intersects) {
+        try {
+          intersects = turf.booleanPointInPolygon(
+            turf.point([cell.centroidLng, cell.centroidLat]),
+            row.finalPolygon
+          );
+        } catch (err) {
+          intersects = false;
+        }
+      }
+
+      if (intersects) {
+        owner.set(cellId, districtId);
+      }
+    }
+  }
+
+  const claimedFeatures = [];
+
+  for (const cell of cellsWorking) {
+    const districtId = owner.get(String(cell.id));
+    if (districtId == null) continue;
+
+    const clone = cloneFeature(cell.feature);
+    clone.properties = {
+      ...(clone.properties || {}),
+      _district: districtId,
+      _pieceType: "claimed-cell"
+    };
+    claimedFeatures.push(clone);
+    countByDistrict.set(districtId, (countByDistrict.get(districtId) || 0) + 1);
+  }
+
+  return {
+    owner,
+    claimedFeatures,
+    countByDistrict
+  };
+}
 
     function drawDistrictPoints(pointDistricts) {
       if (districtPointLayer) {
