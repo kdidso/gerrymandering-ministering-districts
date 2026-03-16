@@ -137,7 +137,7 @@
       padding: 10px 12px;
       box-shadow: 0 4px 18px rgba(0,0,0,0.08);
       font-size: 13px;
-      min-width: 230px;
+      min-width: 240px;
     }
     .legend h4 { margin: 0 0 8px 0; font-size: 13px; }
     .legend-item {
@@ -203,8 +203,8 @@
       <h1 class="title">Gerrymandering Ministering Districts</h1>
       <p class="subtitle">
         This version uses the new districting approach: filter the ministering pool, compute district
-        targets, assign points by ordered group/cell batches, then draw district polygons and carve
-        escape routes where possible.
+        targets, assign points by ordered group/cell batches, draw district polygons, finalize overlaps,
+        and then claim cells from those polygons.
       </p>
 
       <div class="card">
@@ -285,16 +285,19 @@
       </div>
 
       <div class="card">
-        <div class="step-badge">Step 3</div>
-        <h2>Assign districts and draw polygons</h2>
+        <div class="step-badge">Steps 3–5</div>
+        <h2>District assignment, polygons, and claiming cells</h2>
         <p>
-          Districts are assigned by ordered latitude/longitude batches within each group, while keeping
-          same-cell points together. Convex-style district polygons are then drawn, and foreign points trapped
-          inside another district polygon get a cell-based escape route when a valid route can be found.
+          Step 3 assigns districts by ordered latitude/longitude batches within each group, while keeping
+          same-cell points together, then draws district polygons and escape routes. Step 4 finalizes polygon
+          overlaps so older polygons win. Step 5 claims cells from finalized polygons and also claims cells
+          containing that district’s own points.
         </p>
 
         <div class="row">
           <button id="gerrymanderBtn" disabled>Run Step 3</button>
+          <button id="finalizePolygonsBtn" class="secondary" disabled>Run Step 4</button>
+          <button id="claimCellsBtn" class="secondary" disabled>Run Step 5</button>
           <button id="regerrymanderBtn" class="secondary" disabled>Re-run Step 3</button>
         </div>
 
@@ -302,8 +305,7 @@
         <div class="district-summary" id="gerrySummary"></div>
 
         <div class="small-note">
-          This version stops after the new steps 1–3. Later cell-claim, expansion, cleanup, and export steps
-          can be added on top of this version next.
+          This version stops after Step 5. Expansion and cleanup can be added next on top of this version.
         </div>
       </div>
     </aside>
@@ -317,7 +319,9 @@
         <div class="legend-item"><span class="swatch" style="background: var(--rawpoints);"></span><span>All member points</span></div>
         <div class="legend-item"><span class="swatch" style="background: #d97706;"></span><span>Filtered Group 1 preview</span></div>
         <div class="legend-item"><span class="swatch" style="background: #2563eb;"></span><span>Filtered Group 2 preview</span></div>
-        <div class="legend-item"><span class="swatch line" style="background: #e11d48;"></span><span>District polygon outlines</span></div>
+        <div class="legend-item"><span class="swatch line" style="background: #111827;"></span><span>Raw district hulls</span></div>
+        <div class="legend-item"><span class="swatch line" style="background: #e11d48;"></span><span>Adjusted/final district polygons</span></div>
+        <div class="legend-item"><span class="swatch line" style="background: #059669;"></span><span>Claimed district cells</span></div>
       </div>
     </div>
   </div>
@@ -344,14 +348,18 @@
     let wardLayer = null;
     let cellsOutlineLayer = null;
     let districtPointLayer = null;
-    let districtPolygonLayer = null;
     let rawHullLayer = null;
+    let adjustedPolygonLayer = null;
+    let finalPolygonLayer = null;
+    let claimedCellLayer = null;
 
     let currentFiltered = [];
     let currentStats = null;
     let currentDistrictTargets = null;
     let currentPointDistricts = null;
     let currentDistrictPolygons = null;
+    let currentFinalDistrictPolygons = null;
+    let currentClaimResult = null;
 
     let cellsWorking = [];
     let cellById = new Map();
@@ -373,6 +381,8 @@
     const resetBtn = document.getElementById("resetBtn");
     const calcDistrictBtn = document.getElementById("calcDistrictBtn");
     const gerrymanderBtn = document.getElementById("gerrymanderBtn");
+    const finalizePolygonsBtn = document.getElementById("finalizePolygonsBtn");
+    const claimCellsBtn = document.getElementById("claimCellsBtn");
     const regerrymanderBtn = document.getElementById("regerrymanderBtn");
     const districtCountSelect = document.getElementById("districtCountSelect");
     const districtSummary = document.getElementById("districtSummary");
@@ -776,13 +786,21 @@
         map.removeLayer(districtPointLayer);
         districtPointLayer = null;
       }
-      if (districtPolygonLayer) {
-        map.removeLayer(districtPolygonLayer);
-        districtPolygonLayer = null;
-      }
       if (rawHullLayer) {
         map.removeLayer(rawHullLayer);
         rawHullLayer = null;
+      }
+      if (adjustedPolygonLayer) {
+        map.removeLayer(adjustedPolygonLayer);
+        adjustedPolygonLayer = null;
+      }
+      if (finalPolygonLayer) {
+        map.removeLayer(finalPolygonLayer);
+        finalPolygonLayer = null;
+      }
+      if (claimedCellLayer) {
+        map.removeLayer(claimedCellLayer);
+        claimedCellLayer = null;
       }
     }
 
@@ -1002,6 +1020,16 @@
       return merged;
     }
 
+    function differenceSafe(featureA, featureB) {
+      if (!featureA || !featureB) return featureA;
+      try {
+        const diff = turf.difference(featureA, featureB);
+        return diff || null;
+      } catch (err) {
+        return featureA;
+      }
+    }
+
     function buildFallbackDistrictShapeFromPoints(fc, districtId) {
       if (!fc.features.length) return null;
 
@@ -1126,51 +1154,12 @@
         }
 
         if (!centroidInside && !ownPointCellIds.has(cellId)) continue;
-
         if (reservedCellIds.has(cellId) && !ownPointCellIds.has(cellId)) continue;
 
         candidateCellIds.add(cellId);
       }
 
       return candidateCellIds;
-    }
-
-    function findEscapePathCellIds(startCellId, candidateCellIds, forbiddenRemovalCellIds, ownPointCellIds) {
-      startCellId = String(startCellId);
-      if (!candidateCellIds.has(startCellId)) return null;
-      if (forbiddenRemovalCellIds.has(startCellId)) return null;
-
-      const queue = [startCellId];
-      const visited = new Set([startCellId]);
-      const parent = new Map();
-      let qIndex = 0;
-
-      while (qIndex < queue.length) {
-        const currentId = queue[qIndex++];
-        const currentCell = cellById.get(String(currentId));
-        if (!currentCell) continue;
-
-        for (const neighborIdRaw of currentCell.neighbors) {
-          const neighborId = String(neighborIdRaw);
-
-          if (!candidateCellIds.has(neighborId)) {
-            const path = reconstructPath(parent, currentId);
-            if (removalKeepsDistrictCellsConnected(candidateCellIds, new Set(path), ownPointCellIds)) {
-              return path;
-            }
-            continue;
-          }
-
-          if (visited.has(neighborId)) continue;
-          if (forbiddenRemovalCellIds.has(neighborId)) continue;
-
-          visited.add(neighborId);
-          parent.set(neighborId, currentId);
-          queue.push(neighborId);
-        }
-      }
-
-      return null;
     }
 
     function reconstructPath(parent, endId) {
@@ -1215,6 +1204,44 @@
       }
 
       return remainingOwnPointCells.every(id => visited.has(id));
+    }
+
+    function findEscapePathCellIds(startCellId, candidateCellIds, forbiddenRemovalCellIds, ownPointCellIds) {
+      startCellId = String(startCellId);
+      if (!candidateCellIds.has(startCellId)) return null;
+      if (forbiddenRemovalCellIds.has(startCellId)) return null;
+
+      const queue = [startCellId];
+      const visited = new Set([startCellId]);
+      const parent = new Map();
+      let qIndex = 0;
+
+      while (qIndex < queue.length) {
+        const currentId = queue[qIndex++];
+        const currentCell = cellById.get(String(currentId));
+        if (!currentCell) continue;
+
+        for (const neighborIdRaw of currentCell.neighbors) {
+          const neighborId = String(neighborIdRaw);
+
+          if (!candidateCellIds.has(neighborId)) {
+            const path = reconstructPath(parent, currentId);
+            if (removalKeepsDistrictCellsConnected(candidateCellIds, new Set(path), ownPointCellIds)) {
+              return path;
+            }
+            continue;
+          }
+
+          if (visited.has(neighborId)) continue;
+          if (forbiddenRemovalCellIds.has(neighborId)) continue;
+
+          visited.add(neighborId);
+          parent.set(neighborId, currentId);
+          queue.push(neighborId);
+        }
+      }
+
+      return null;
     }
 
     function buildPolygonFromCellIds(cellIds, districtId, polyType = "cell-union") {
@@ -1303,12 +1330,12 @@
 
     function buildAdjustedDistrictPolygons(pointDistricts) {
       const reservedCellIds = new Set();
-      const pointCellDistrictSets = getAllPointCellIdsForDistricts(pointDistricts);
       const districtPolygons = [];
       const rawHulls = [];
 
       for (const district of pointDistricts) {
         const rawHull = buildInitialDistrictHull(pointDistricts, district.id);
+
         if (!rawHull) {
           districtPolygons.push({
             districtId: district.id,
@@ -1344,9 +1371,7 @@
             continue;
           }
 
-          if (!candidateCellIds.has(foreignCellId)) {
-            continue;
-          }
+          if (!candidateCellIds.has(foreignCellId)) continue;
 
           const path = findEscapePathCellIds(
             foreignCellId,
@@ -1374,7 +1399,6 @@
         }
 
         let adjustedPolygon = buildPolygonFromCellIds(candidateCellIds, district.id, "adjusted-cell-polygon");
-
         if (adjustedPolygon) {
           adjustedPolygon = chooseBestSinglePolygonPart(adjustedPolygon, district);
         }
@@ -1426,6 +1450,149 @@
       };
     }
 
+    function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
+      const finalized = [];
+      const finalizedUnionList = [];
+
+      for (const district of pointDistricts) {
+        const row = adjustedResult.districtPolygons.find(r => r.districtId === district.id);
+        if (!row || !row.adjustedPolygon) {
+          finalized.push({
+            districtId: district.id,
+            finalPolygon: null,
+            overlapRemoved: false,
+            areaBefore: 0,
+            areaAfter: 0
+          });
+          continue;
+        }
+
+        let working = cloneFeature(row.adjustedPolygon);
+        let areaBefore = 0;
+        let areaAfter = 0;
+        let overlapRemoved = false;
+
+        try { areaBefore = turf.area(working); } catch (err) { areaBefore = 0; }
+
+        for (const older of finalizedUnionList) {
+          const diff = differenceSafe(working, older);
+          if (diff === null) {
+            working = null;
+            overlapRemoved = true;
+            break;
+          }
+
+          if (JSON.stringify(diff.geometry) !== JSON.stringify(working.geometry)) {
+            overlapRemoved = true;
+          }
+
+          working = diff;
+        }
+
+        if (working) {
+          working.properties = {
+            ...(working.properties || {}),
+            _district: district.id,
+            _polyType: "final-no-overlap"
+          };
+
+          working = chooseBestSinglePolygonPart(working, district);
+
+          if (working) {
+            try { areaAfter = turf.area(working); } catch (err) { areaAfter = 0; }
+            finalizedUnionList.push(working);
+          }
+        }
+
+        finalized.push({
+          districtId: district.id,
+          finalPolygon: working,
+          overlapRemoved,
+          areaBefore,
+          areaAfter
+        });
+      }
+
+      return {
+        rows: finalized
+      };
+    }
+
+    function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
+      const owner = new Map();
+      const countByDistrict = new Map();
+
+      for (const district of pointDistricts) {
+        countByDistrict.set(district.id, 0);
+      }
+
+      for (const row of finalResult.rows) {
+        if (!row.finalPolygon) continue;
+
+        const districtId = row.districtId;
+        const district = pointDistricts.find(d => d.id === districtId);
+        const ownPointCellIds = district ? getDistrictOwnPointCellIds(district) : new Set();
+
+        for (const cell of cellsWorking) {
+          const cellId = String(cell.id);
+          if (owner.has(cellId)) continue;
+
+          let claim = false;
+
+          if (ownPointCellIds.has(cellId)) {
+            claim = true;
+          } else {
+            try {
+              claim = turf.booleanPointInPolygon(
+                turf.point([cell.centroidLng, cell.centroidLat]),
+                row.finalPolygon
+              );
+            } catch (err) {
+              claim = false;
+            }
+          }
+
+          if (claim) {
+            owner.set(cellId, districtId);
+          }
+        }
+      }
+
+      // Second pass: make sure own point cells are always claimed by their own district
+      // unless another district already claimed that same cell first.
+      // Since same-cell points are kept together in step 3, this should stay stable.
+      for (const district of pointDistricts) {
+        const ownPointCellIds = getDistrictOwnPointCellIds(district);
+        for (const cellId of ownPointCellIds) {
+          if (!owner.has(String(cellId))) {
+            owner.set(String(cellId), district.id);
+          }
+        }
+      }
+
+      const claimedFeatures = [];
+
+      for (const cell of cellsWorking) {
+        const districtId = owner.get(String(cell.id));
+        if (districtId == null) continue;
+
+        const clone = cloneFeature(cell.feature);
+        clone.properties = {
+          ...(clone.properties || {}),
+          _district: districtId,
+          _pieceType: "claimed-cell"
+        };
+        claimedFeatures.push(clone);
+        countByDistrict.set(districtId, (countByDistrict.get(districtId) || 0) + 1);
+      }
+
+      return {
+        owner,
+        claimedFeatures,
+        countByDistrict
+      };
+    }
+
     function drawDistrictPoints(pointDistricts) {
       if (districtPointLayer) {
         map.removeLayer(districtPointLayer);
@@ -1466,14 +1633,14 @@
       ).addTo(map);
     }
 
-    function drawDistrictPolygons(result) {
-      if (districtPolygonLayer) {
-        map.removeLayer(districtPolygonLayer);
-        districtPolygonLayer = null;
-      }
+    function drawStep3Polygons(result) {
       if (rawHullLayer) {
         map.removeLayer(rawHullLayer);
         rawHullLayer = null;
+      }
+      if (adjustedPolygonLayer) {
+        map.removeLayer(adjustedPolygonLayer);
+        adjustedPolygonLayer = null;
       }
 
       const rawHullFeatures = result.rawHulls.map(cloneFeature);
@@ -1484,9 +1651,9 @@
             const districtId = feature.properties._district;
             const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
             return {
-              color,
+              color: "#111827",
               weight: 1.5,
-              opacity: 0.6,
+              opacity: 0.7,
               dashArray: "6 4",
               fillOpacity: 0
             };
@@ -1498,7 +1665,7 @@
         .filter(row => row.adjustedPolygon)
         .map(row => cloneFeature(row.adjustedPolygon));
 
-      districtPolygonLayer = L.geoJSON(
+      adjustedPolygonLayer = L.geoJSON(
         { type: "FeatureCollection", features: adjustedFeatures },
         {
           style: function(feature) {
@@ -1514,7 +1681,67 @@
           },
           onEachFeature: function(feature, layer) {
             const districtId = feature.properties._district;
-            layer.bindPopup(`<strong>District ${districtId + 1}</strong>`);
+            layer.bindPopup(`<strong>District ${districtId + 1}</strong><br>Adjusted Step 3 polygon`);
+          }
+        }
+      ).addTo(map);
+    }
+
+    function drawStep4Polygons(finalResult) {
+      if (finalPolygonLayer) {
+        map.removeLayer(finalPolygonLayer);
+        finalPolygonLayer = null;
+      }
+
+      const finalFeatures = finalResult.rows
+        .filter(r => r.finalPolygon)
+        .map(r => cloneFeature(r.finalPolygon));
+
+      finalPolygonLayer = L.geoJSON(
+        { type: "FeatureCollection", features: finalFeatures },
+        {
+          style: function(feature) {
+            const districtId = feature.properties._district;
+            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+            return {
+              color,
+              weight: 4,
+              opacity: 1,
+              fillColor: color,
+              fillOpacity: 0.18
+            };
+          },
+          onEachFeature: function(feature, layer) {
+            const districtId = feature.properties._district;
+            layer.bindPopup(`<strong>District ${districtId + 1}</strong><br>Final Step 4 polygon`);
+          }
+        }
+      ).addTo(map);
+    }
+
+    function drawClaimedCells(claimResult) {
+      if (claimedCellLayer) {
+        map.removeLayer(claimedCellLayer);
+        claimedCellLayer = null;
+      }
+
+      claimedCellLayer = L.geoJSON(
+        { type: "FeatureCollection", features: claimResult.claimedFeatures },
+        {
+          style: function(feature) {
+            const districtId = feature.properties._district;
+            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+            return {
+              color: "#059669",
+              weight: 1,
+              opacity: 0.7,
+              fillColor: color,
+              fillOpacity: 0.28
+            };
+          },
+          onEachFeature: function(feature, layer) {
+            const districtId = feature.properties._district;
+            layer.bindPopup(`<strong>District ${districtId + 1}</strong><br>Claimed Step 5 cell`);
           }
         }
       ).addTo(map);
@@ -1549,6 +1776,59 @@
       }
     }
 
+    function renderStep4Summary(finalResult) {
+      resetGerrySummary();
+
+      const intro = document.createElement("div");
+      intro.className = "district-row";
+      intro.innerHTML = `<strong>Step 4 complete</strong><br>
+        Final district polygons were created from the Step 3 polygons. Older polygons kept overlapping areas, later polygons lost overlaps, and remaining multipart results were reduced to one best polygon part per district.`;
+      gerrySummary.appendChild(intro);
+
+      for (const rowData of finalResult.rows) {
+        const row = document.createElement("div");
+        row.className = "district-row";
+        row.innerHTML = `
+          <strong>District ${rowData.districtId + 1}</strong><br>
+          Overlap removed: ${rowData.overlapRemoved ? "yes" : "no"}<br>
+          Area before overlap removal: ${formatNumber(round2(rowData.areaBefore), 2)}<br>
+          Area after overlap removal: ${formatNumber(round2(rowData.areaAfter), 2)}
+        `;
+        gerrySummary.appendChild(row);
+      }
+    }
+
+    function renderStep5Summary(claimResult) {
+      resetGerrySummary();
+
+      const intro = document.createElement("div");
+      intro.className = "district-row";
+      intro.innerHTML = `<strong>Step 5 complete</strong><br>
+        Cells were claimed from finalized district polygons, and cells containing each district’s own points were also forced into that same district.`;
+      gerrySummary.appendChild(intro);
+
+      for (const district of currentPointDistricts) {
+        const count = claimResult.countByDistrict.get(district.id) || 0;
+        const row = document.createElement("div");
+        row.className = "district-row";
+        row.innerHTML = `
+          <strong>District ${district.id + 1}</strong><br>
+          Claimed cell count: ${count}
+        `;
+        gerrySummary.appendChild(row);
+      }
+
+      const totalClaimed = claimResult.claimedFeatures.length;
+      const totalCells = cellsWorking.length;
+      const row = document.createElement("div");
+      row.className = "district-row";
+      row.innerHTML = `
+        <strong>Total claimed so far</strong><br>
+        ${totalClaimed} of ${totalCells} cells
+      `;
+      gerrySummary.appendChild(row);
+    }
+
     function runFilter() {
       if (!membersData || !wardPolygonFeatures.length || !cellsWorking.length) {
         setStatus(filterStatus, "Data is not ready yet.", "error");
@@ -1565,9 +1845,13 @@
       currentDistrictTargets = null;
       currentPointDistricts = null;
       currentDistrictPolygons = null;
+      currentFinalDistrictPolygons = null;
+      currentClaimResult = null;
 
       regerrymanderBtn.disabled = true;
       gerrymanderBtn.disabled = true;
+      finalizePolygonsBtn.disabled = true;
+      claimCellsBtn.disabled = true;
 
       setStatus(gerryStatus, "Calculate targets first.");
 
@@ -1662,6 +1946,8 @@
 
       gerrymanderBtn.disabled = false;
       regerrymanderBtn.disabled = true;
+      finalizePolygonsBtn.disabled = true;
+      claimCellsBtn.disabled = true;
 
       setStatus(
         districtStatus,
@@ -1698,17 +1984,21 @@
 
           currentPointDistricts = pointDistricts;
           currentDistrictPolygons = polygonResult;
+          currentFinalDistrictPolygons = null;
+          currentClaimResult = null;
 
           removeFilteredPreviewLayer();
           drawDistrictPoints(pointDistricts);
-          drawDistrictPolygons(polygonResult);
+          drawStep3Polygons(polygonResult);
           renderStep3Summary(pointDistricts, polygonResult);
 
           regerrymanderBtn.disabled = false;
+          finalizePolygonsBtn.disabled = false;
+          claimCellsBtn.disabled = true;
 
           setStatus(
             gerryStatus,
-            "Step 3 complete. District points and polygons were created using the new ordered group/cell method.",
+            "Step 3 complete. District points and adjusted polygons were created using the new ordered group/cell method.",
             "good"
           );
         } catch (error) {
@@ -1722,12 +2012,84 @@
       }, 40);
     }
 
+    function runStep4() {
+      if (!currentPointDistricts || !currentDistrictPolygons) {
+        setStatus(gerryStatus, "Run Step 3 first.", "warn");
+        return;
+      }
+
+      setStatus(gerryStatus, "Finalizing district polygons and removing overlaps...", "warn");
+
+      setTimeout(() => {
+        try {
+          const finalResult = finalizeDistrictPolygons(currentDistrictPolygons, currentPointDistricts);
+          currentFinalDistrictPolygons = finalResult;
+          currentClaimResult = null;
+
+          drawStep4Polygons(finalResult);
+          renderStep4Summary(finalResult);
+
+          claimCellsBtn.disabled = false;
+
+          setStatus(
+            gerryStatus,
+            "Step 4 complete. Final district polygons were reduced to non-overlapping single polygon features.",
+            "good"
+          );
+        } catch (error) {
+          console.error(error);
+          setStatus(
+            gerryStatus,
+            `Step 4 failed: ${error?.message || error}`,
+            "error"
+          );
+        }
+      }, 40);
+    }
+
+    function runStep5() {
+      if (!currentPointDistricts || !currentFinalDistrictPolygons) {
+        setStatus(gerryStatus, "Run Step 4 first.", "warn");
+        return;
+      }
+
+      setStatus(gerryStatus, "Claiming cells from finalized polygons...", "warn");
+
+      setTimeout(() => {
+        try {
+          const claimResult = buildClaimCellsFromFinalPolygons(
+            currentFinalDistrictPolygons,
+            currentPointDistricts
+          );
+
+          currentClaimResult = claimResult;
+          drawClaimedCells(claimResult);
+          renderStep5Summary(claimResult);
+
+          setStatus(
+            gerryStatus,
+            `Step 5 complete. Claimed ${claimResult.claimedFeatures.length} cells from finalized district polygons and district point cells.`,
+            "good"
+          );
+        } catch (error) {
+          console.error(error);
+          setStatus(
+            gerryStatus,
+            `Step 5 failed: ${error?.message || error}`,
+            "error"
+          );
+        }
+      }, 40);
+    }
+
     function resetPage() {
       currentFiltered = [];
       currentStats = null;
       currentDistrictTargets = null;
       currentPointDistricts = null;
       currentDistrictPolygons = null;
+      currentFinalDistrictPolygons = null;
+      currentClaimResult = null;
 
       clearMetricCards();
       resetDistrictSummary();
@@ -1752,6 +2114,8 @@
       zoomFilteredBtn.disabled = true;
       gerrymanderBtn.disabled = true;
       regerrymanderBtn.disabled = true;
+      finalizePolygonsBtn.disabled = true;
+      claimCellsBtn.disabled = true;
 
       setStatus(filterStatus, "Choose a gender and click Run Filter.");
       setStatus(districtStatus, "Run the filter first.");
@@ -1859,6 +2223,8 @@
     calcDistrictBtn.addEventListener("click", calculateDistrictTargets);
     gerrymanderBtn.addEventListener("click", runStep3);
     regerrymanderBtn.addEventListener("click", runStep3);
+    finalizePolygonsBtn.addEventListener("click", runStep4);
+    claimCellsBtn.addEventListener("click", runStep5);
 
     initMap();
   </script>
