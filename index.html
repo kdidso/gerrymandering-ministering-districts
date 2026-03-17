@@ -1452,7 +1452,7 @@
 
 function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
   const finalized = [];
-  const olderClaimedCellIds = new Set();
+  let olderMaskUnion = null;
 
   for (const district of pointDistricts) {
     const row = adjustedResult.districtPolygons.find(r => r.districtId === district.id);
@@ -1460,156 +1460,358 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
     if (!row || !row.adjustedPolygon) {
       finalized.push({
         districtId: district.id,
+        overlapPolygon: null,
         finalPolygon: null,
         overlapRemoved: false,
         areaBefore: 0,
-        areaAfter: 0,
-        finalCellIds: new Set()
+        areaAfterOverlap: 0,
+        areaAfterEscape: 0,
+        trappedForeignCount: 0,
+        escapedForeignCount: 0,
+        unresolvedForeignCount: 0
       });
       continue;
     }
 
-    const originalCellIds = new Set([...(row.usedCellIds || [])]);
-    const finalCellIds = new Set();
-    const ownPointCellIds = getDistrictOwnPointCellIds(district);
-
-    for (const cellId of originalCellIds) {
-      const cid = String(cellId);
-
-      // Keep district's own point cells no matter what
-      if (ownPointCellIds.has(cid)) {
-        finalCellIds.add(cid);
-        continue;
-      }
-
-      // Otherwise later districts lose overlap to earlier districts
-      if (!olderClaimedCellIds.has(cid)) {
-        finalCellIds.add(cid);
-      }
-    }
-
-    let finalPolygon = null;
+    let working = cloneFeature(row.adjustedPolygon);
     let areaBefore = 0;
-    let areaAfter = 0;
+    let areaAfterOverlap = 0;
+    let areaAfterEscape = 0;
     let overlapRemoved = false;
 
     try {
-      areaBefore = turf.area(row.adjustedPolygon);
+      areaBefore = turf.area(working);
     } catch (err) {
       areaBefore = 0;
     }
 
-    if (finalCellIds.size) {
-      finalPolygon = buildPolygonFromCellIds(finalCellIds, district.id, "final-no-overlap");
-      if (finalPolygon) {
-        finalPolygon = chooseBestSinglePolygonPart(finalPolygon, district);
-      }
-    }
+    // First: erase overlap against older polygons so boundaries match up
+    if (olderMaskUnion) {
+      let diff = null;
 
-    if (finalPolygon) {
       try {
-        areaAfter = turf.area(finalPolygon);
+        diff = turf.difference(working, olderMaskUnion);
       } catch (err) {
-        areaAfter = 0;
+        diff = null;
+      }
+
+      if (diff) {
+        let diffArea = 0;
+        try {
+          diffArea = turf.area(diff);
+        } catch (err) {
+          diffArea = 0;
+        }
+
+        if (diffArea > 1) {
+          if (JSON.stringify(diff.geometry) !== JSON.stringify(working.geometry)) {
+            overlapRemoved = true;
+          }
+          working = diff;
+        }
       }
     }
 
-    overlapRemoved = finalCellIds.size < originalCellIds.size;
+    try {
+      areaAfterOverlap = turf.area(working);
+    } catch (err) {
+      areaAfterOverlap = 0;
+    }
 
-    for (const cid of finalCellIds) {
-      olderClaimedCellIds.add(String(cid));
+    const overlapPolygon = cloneFeature(working);
+
+    // Second: carve escape routes for trapped foreign points
+    const trappedForeign = getForeignPointsInsidePolygon(pointDistricts, district.id, working);
+    const escapeResult = carveEscapeRoutesFromPolygon(working, district, trappedForeign);
+
+    if (escapeResult && escapeResult.finalPolygon) {
+      working = escapeResult.finalPolygon;
+    }
+
+    try {
+      areaAfterEscape = turf.area(working);
+    } catch (err) {
+      areaAfterEscape = 0;
+    }
+
+    if (working) {
+      working.properties = {
+        ...(working.properties || {}),
+        _district: district.id,
+        _polyType: "step4-final-masked"
+      };
+
+      if (!olderMaskUnion) {
+        olderMaskUnion = cloneFeature(working);
+      } else {
+        try {
+          const unioned = turf.union(turf.featureCollection([olderMaskUnion, working]));
+          if (unioned) olderMaskUnion = unioned;
+        } catch (err) {}
+      }
     }
 
     finalized.push({
       districtId: district.id,
-      finalPolygon,
+      overlapPolygon,
+      finalPolygon: working,
       overlapRemoved,
       areaBefore,
-      areaAfter,
-      finalCellIds
+      areaAfterOverlap,
+      areaAfterEscape,
+      trappedForeignCount: trappedForeign.length,
+      escapedForeignCount: escapeResult ? escapeResult.escapedCount : 0,
+      unresolvedForeignCount: escapeResult ? escapeResult.unresolvedCount : trappedForeign.length
     });
   }
 
+  return { rows: finalized };
+}
+function getCellsIntersectingPolygon(polygon) {
+  const ids = new Set();
+
+  for (const cell of cellsWorking) {
+    let intersects = false;
+
+    try {
+      const clipped = turf.intersect(cell.feature, polygon);
+      intersects = !!clipped;
+    } catch (err) {
+      intersects = false;
+    }
+
+    if (!intersects) {
+      try {
+        intersects = turf.booleanPointInPolygon(
+          turf.point([cell.centroidLng, cell.centroidLat]),
+          polygon
+        );
+      } catch (err) {
+        intersects = false;
+      }
+    }
+
+    if (intersects) {
+      ids.add(String(cell.id));
+    }
+  }
+
+  return ids;
+}
+
+function pointHasEscapeOutsidePolygon(pointFeature, polygon) {
+  try {
+    return !turf.booleanPointInPolygon(pointFeature, polygon);
+  } catch (err) {
+    return true;
+  }
+}
+
+function reconstructParentPath(parent, endId) {
+  const path = [String(endId)];
+  let current = String(endId);
+
+  while (parent.has(current)) {
+    current = parent.get(current);
+    path.push(current);
+  }
+
+  path.reverse();
+  return path;
+}
+
+function findEscapeCorridorCells(startCellId, allowedPolygonCellIds, ownPointCellIds) {
+  startCellId = String(startCellId);
+
+  if (!allowedPolygonCellIds.has(startCellId)) {
+    return null;
+  }
+
+  const queue = [startCellId];
+  const visited = new Set([startCellId]);
+  const parent = new Map();
+  let qIndex = 0;
+
+  while (qIndex < queue.length) {
+    const currentId = queue[qIndex++];
+    const currentCell = cellById.get(String(currentId));
+    if (!currentCell) continue;
+
+    for (const neighborIdRaw of currentCell.neighbors) {
+      const neighborId = String(neighborIdRaw);
+
+      // Found outside the polygon area = corridor complete
+      if (!allowedPolygonCellIds.has(neighborId)) {
+        const pathInside = reconstructParentPath(parent, currentId);
+
+        // do not carve through this district's own protected point cells
+        const invalid = pathInside.some(id => ownPointCellIds.has(String(id)));
+        if (!invalid) return pathInside;
+
+        continue;
+      }
+
+      if (visited.has(neighborId)) continue;
+      if (ownPointCellIds.has(neighborId)) continue;
+
+      visited.add(neighborId);
+      parent.set(neighborId, currentId);
+      queue.push(neighborId);
+    }
+  }
+
+  return null;
+}
+
+function carveEscapeRoutesFromPolygon(polygon, district, trappedForeign) {
+  if (!polygon) {
+    return {
+      finalPolygon: null,
+      escapedCount: 0,
+      unresolvedCount: trappedForeign.length
+    };
+  }
+
+  let currentPolygon = cloneFeature(polygon);
+  let escapedCount = 0;
+  let unresolvedCount = 0;
+  const ownPointCellIds = getDistrictOwnPointCellIds(district);
+
+  for (const foreign of trappedForeign) {
+    const foreignPoint = foreign.item.feature;
+    const foreignCellId = foreign.item.cellId ? String(foreign.item.cellId) : null;
+
+    if (!foreignCellId) {
+      unresolvedCount++;
+      continue;
+    }
+
+    let stillInside = false;
+    try {
+      stillInside = turf.booleanPointInPolygon(foreignPoint, currentPolygon);
+    } catch (err) {
+      stillInside = false;
+    }
+
+    if (!stillInside) continue;
+
+    const polygonCellIds = getCellsIntersectingPolygon(currentPolygon);
+    const corridorCellIds = findEscapeCorridorCells(foreignCellId, polygonCellIds, ownPointCellIds);
+
+    if (!corridorCellIds || !corridorCellIds.length) {
+      unresolvedCount++;
+      continue;
+    }
+
+    const corridorCells = corridorCellIds
+      .map(id => cellById.get(String(id)))
+      .filter(Boolean)
+      .map(cell => cloneFeature(cell.feature));
+
+    const corridorUnion = unionFeatures(corridorCells);
+    if (!corridorUnion) {
+      unresolvedCount++;
+      continue;
+    }
+
+    let erased = null;
+    try {
+      erased = turf.difference(currentPolygon, corridorUnion);
+    } catch (err) {
+      erased = null;
+    }
+
+    if (!erased) {
+      unresolvedCount++;
+      continue;
+    }
+
+    let best = chooseBestSinglePolygonPart(erased, district);
+    if (!best) {
+      unresolvedCount++;
+      continue;
+    }
+
+    // verify the foreign point can now escape
+    let nowInside = false;
+    try {
+      nowInside = turf.booleanPointInPolygon(foreignPoint, best);
+    } catch (err) {
+      nowInside = false;
+    }
+
+    if (nowInside) {
+      unresolvedCount++;
+      continue;
+    }
+
+    currentPolygon = best;
+    escapedCount++;
+  }
+
+  currentPolygon.properties = {
+    ...(currentPolygon.properties || {}),
+    _district: district.id,
+    _polyType: "step4-final-masked"
+  };
+
   return {
-    rows: finalized
+    finalPolygon: currentPolygon,
+    escapedCount,
+    unresolvedCount
   };
 }
 
-
 function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
-  const candidateDistrictsByCell = new Map();
-  const pointOwnerByCell = new Map();
+  const owner = new Map();
   const countByDistrict = new Map();
 
   for (const district of pointDistricts) {
     countByDistrict.set(district.id, 0);
-
-    const ownPointCellIds = getDistrictOwnPointCellIds(district);
-    for (const cellId of ownPointCellIds) {
-      pointOwnerByCell.set(String(cellId), district.id);
-    }
   }
 
+  // First pass: claim cells within each finished polygon
   for (const district of pointDistricts) {
-    const districtId = district.id;
-    const row = finalResult.rows.find(r => r.districtId === districtId);
-    const ownPointCellIds = getDistrictOwnPointCellIds(district);
-
-    // First: claim finalized Step 4 cells
-    if (row && row.finalCellIds) {
-      for (const cellId of row.finalCellIds) {
-        const cid = String(cellId);
-        if (!candidateDistrictsByCell.has(cid)) {
-          candidateDistrictsByCell.set(cid, new Set());
-        }
-        candidateDistrictsByCell.get(cid).add(districtId);
-      }
-    }
-
-    // Second: force own point cells
-    for (const cellId of ownPointCellIds) {
-      const cid = String(cellId);
-      if (!candidateDistrictsByCell.has(cid)) {
-        candidateDistrictsByCell.set(cid, new Set());
-      }
-      candidateDistrictsByCell.get(cid).add(districtId);
-    }
-
-    // Third: optionally add cells intersecting polygon
+    const row = finalResult.rows.find(r => r.districtId === district.id);
     if (!row || !row.finalPolygon) continue;
 
     for (const cell of cellsWorking) {
       const cellId = String(cell.id);
+      if (owner.has(cellId)) continue;
 
-      let intersects = false;
+      let inside = false;
+
       try {
         const clipped = turf.intersect(cell.feature, row.finalPolygon);
-        intersects = !!clipped;
+        inside = !!clipped;
       } catch (err) {
-        intersects = false;
+        inside = false;
       }
 
-      if (!intersects) continue;
-
-      if (!candidateDistrictsByCell.has(cellId)) {
-        candidateDistrictsByCell.set(cellId, new Set());
+      if (!inside) {
+        try {
+          inside = turf.booleanPointInPolygon(
+            turf.point([cell.centroidLng, cell.centroidLat]),
+            row.finalPolygon
+          );
+        } catch (err) {
+          inside = false;
+        }
       }
-      candidateDistrictsByCell.get(cellId).add(districtId);
+
+      if (inside) {
+        owner.set(cellId, district.id);
+      }
     }
   }
 
-  const owner = new Map();
-
-  for (const [cellId, districtSet] of candidateDistrictsByCell.entries()) {
-    const candidates = [...districtSet];
-
-    if (pointOwnerByCell.has(cellId)) {
-      owner.set(cellId, pointOwnerByCell.get(cellId));
-      continue;
+  // Second pass: force cells containing district points
+  for (const district of pointDistricts) {
+    for (const item of district.members) {
+      const cellId = item.cellId ? String(item.cellId) : null;
+      if (!cellId) continue;
+      owner.set(cellId, district.id);
     }
-
-    candidates.sort((a, b) => a - b);
-    owner.set(cellId, candidates[0]);
   }
 
   const claimedFeatures = [];
@@ -1744,49 +1946,29 @@ function drawStep4Polygons(finalResult) {
     finalPolygonLayer = null;
   }
 
-  const features = [];
+  const finalFeatures = finalResult.rows
+    .filter(r => r.finalPolygon)
+    .map(r => cloneFeature(r.finalPolygon));
 
-  for (const row of finalResult.rows) {
-    const districtId = row.districtId;
-    const finalCellIds = row.finalCellIds ? [...row.finalCellIds] : [];
-    if (!finalCellIds.length) continue;
-
-    let polygon = buildPolygonFromCellIds(new Set(finalCellIds), districtId, "step4-outline");
-    if (!polygon) continue;
-
-    const district = currentPointDistricts.find(d => d.id === districtId);
-    if (district) {
-      polygon = chooseBestSinglePolygonPart(polygon, district);
-    }
-
-    polygon.properties = {
-      ...(polygon.properties || {}),
-      _district: districtId
-    };
-
-    features.push(polygon);
-  }
-
-  console.log("STEP 4 OUTLINE FEATURE COUNT:", features.length);
-  console.log("STEP 4 OUTLINE FEATURES:", features);
+  console.log("STEP 4 FINAL MASKED POLYGONS:", finalFeatures);
 
   finalPolygonLayer = L.geoJSON(
-    { type: "FeatureCollection", features },
+    { type: "FeatureCollection", features: finalFeatures },
     {
       style: function(feature) {
         const districtId = feature.properties._district;
         const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
         return {
           color: "#000000",
-          weight: 8,
+          weight: 6,
           opacity: 1,
           fillColor: color,
-          fillOpacity: 0.04
+          fillOpacity: 0.18
         };
       },
       onEachFeature: function(feature, layer) {
         const districtId = feature.properties._district;
-        layer.bindPopup(`<strong>District ${districtId + 1}</strong><br>Step 4 finalized polygon`);
+        layer.bindPopup(`<strong>District ${districtId + 1}</strong><br>Step 4 finalized masked polygon`);
       }
     }
   ).addTo(map);
@@ -1857,26 +2039,31 @@ function drawStep4Polygons(finalResult) {
     }
 
     function renderStep4Summary(finalResult) {
-      resetGerrySummary();
+  resetGerrySummary();
 
-      const intro = document.createElement("div");
-      intro.className = "district-row";
-      intro.innerHTML = `<strong>Step 4 complete</strong><br>
-        Final district polygons were created from the Step 3 polygons. Older polygons kept overlapping areas, later polygons lost overlaps, and remaining multipart results were reduced to one best polygon part per district.`;
-      gerrySummary.appendChild(intro);
+  const intro = document.createElement("div");
+  intro.className = "district-row";
+  intro.innerHTML = `<strong>Step 4 complete</strong><br>
+    Initial Step 3 polygons were redrawn so older polygons kept overlapping areas and later polygons were erased back to shared edges.
+    After that, trapped foreign points were checked and escape corridors were carved through polygon areas where valid paths could be created.`;
+  gerrySummary.appendChild(intro);
 
-      for (const rowData of finalResult.rows) {
-        const row = document.createElement("div");
-        row.className = "district-row";
-        row.innerHTML = `
-          <strong>District ${rowData.districtId + 1}</strong><br>
-          Overlap removed: ${rowData.overlapRemoved ? "yes" : "no"}<br>
-          Area before overlap removal: ${formatNumber(round2(rowData.areaBefore), 2)}<br>
-          Area after overlap removal: ${formatNumber(round2(rowData.areaAfter), 2)}
-        `;
-        gerrySummary.appendChild(row);
-      }
-    }
+  for (const rowData of finalResult.rows) {
+    const row = document.createElement("div");
+    row.className = "district-row";
+    row.innerHTML = `
+      <strong>District ${rowData.districtId + 1}</strong><br>
+      Overlap removed: ${rowData.overlapRemoved ? "yes" : "no"}<br>
+      Area before overlap removal: ${formatNumber(round2(rowData.areaBefore), 2)}<br>
+      Area after overlap removal: ${formatNumber(round2(rowData.areaAfterOverlap), 2)}<br>
+      Area after escape routes: ${formatNumber(round2(rowData.areaAfterEscape), 2)}<br>
+      Trapped foreign points found: ${rowData.trappedForeignCount}<br>
+      Escape corridors carved: ${rowData.escapedForeignCount}<br>
+      Foreign points still unresolved: ${rowData.unresolvedForeignCount}
+    `;
+    gerrySummary.appendChild(row);
+  }
+}
 
     function renderStep5Summary(claimResult) {
       resetGerrySummary();
@@ -2102,14 +2289,20 @@ function drawStep4Polygons(finalResult) {
 
       setTimeout(() => {
         try {
-          const finalResult = finalizeDistrictPolygons(currentDistrictPolygons, currentPointDistricts);
-          const finalCount = finalResult.rows.filter(r => r.finalPolygon).length;
-          console.log("Step 4 final polygon count:", finalCount, finalResult);
-          currentFinalDistrictPolygons = finalResult;
-          currentClaimResult = null;
+const finalResult = finalizeDistrictPolygons(currentDistrictPolygons, currentPointDistricts);
+const finalCount = finalResult.rows.filter(r => r.finalPolygon).length;
+console.log("Step 4 final polygon count:", finalCount, finalResult);
 
-          drawStep4Polygons(finalResult);
-          renderStep4Summary(finalResult);
+currentFinalDistrictPolygons = finalResult;
+currentClaimResult = null;
+
+if (claimedCellLayer) {
+  map.removeLayer(claimedCellLayer);
+  claimedCellLayer = null;
+}
+
+drawStep4Polygons(finalResult);
+renderStep4Summary(finalResult);
 
           claimCellsBtn.disabled = false;
 
