@@ -1749,9 +1749,9 @@ function drawStep4Polygons(finalResult) {
   const finalFeatures = finalResult.rows
     .filter(r => r.finalPolygon)
     .map(r => cloneFeature(r.finalPolygon));
+
   console.log("FINAL FEATURES COUNT:", finalFeatures.length);
   console.log("FINAL FEATURES:", finalFeatures);
-  console.log("Step 4 final features:", finalFeatures);
 
   finalPolygonLayer = L.geoJSON(
     { type: "FeatureCollection", features: finalFeatures },
@@ -1760,11 +1760,11 @@ function drawStep4Polygons(finalResult) {
         const districtId = feature.properties._district;
         const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
         return {
-          color: color,
-          weight: 8,
+          color: "#000000",
+          weight: 14,
           opacity: 1,
           fillColor: color,
-          fillOpacity: 0.20
+          fillOpacity: 0.35
         };
       },
       onEachFeature: function(feature, layer) {
