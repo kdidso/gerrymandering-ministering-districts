@@ -285,14 +285,14 @@
       </div>
 
       <div class="card">
-        <div class="step-badge">Steps 3–5</div>
+        <div class="step-badge">Steps 3–7</div>
         <h2>District assignment, polygons, and claiming cells</h2>
         <p>
           Step 3 assigns districts by ordered latitude/longitude batches within each group, while keeping
           same-cell points together, then draws district areas and escape routes. Step 4 finalizes overlaps
           at the cell-mask level so older districts win and trapped foreign points can escape through carved
           corridors. Step 5 claims cells from those finalized district masks and also claims cells containing
-          that district’s own points.
+          that district’s own points.  Step 6 safely expands districts and step 7 fills all remaining cells.
         </p>
 
         <div class="row">
@@ -301,6 +301,7 @@
           <button id="claimCellsBtn" class="secondary" disabled>Run Step 5</button>
           <button id="expandBtn" class="secondary" disabled>Run Step 6</button>
           <button id="regerrymanderBtn" class="secondary" disabled>Re-run Step 3</button>
+          <button id="fillBtn" class="secondary" disabled>Run Step 7</button>
         </div>
 
         <div id="gerryStatus" class="status">Calculate targets first.</div>
@@ -390,7 +391,8 @@
     const districtCountSelect = document.getElementById("districtCountSelect");
     const districtSummary = document.getElementById("districtSummary");
     const gerrySummary = document.getElementById("gerrySummary");
-
+    const fillBtn = document.getElementById("fillBtn");
+    
     const metricGroup1 = document.getElementById("metricGroup1");
     const metricGroup2 = document.getElementById("metricGroup2");
     const metricTotal = document.getElementById("metricTotal");
@@ -2511,7 +2513,7 @@ function renderStep4Summary(finalResult) {
   }
 }
 
-    function renderStep5Summary(claimResult) {
+    function renderClaimSummary(claimResult) {
       resetGerrySummary();
 
       const intro = document.createElement("div");
@@ -2814,7 +2816,7 @@ const claimResult = cleanupClaimedDistrictIslands(
 currentClaimResult = claimResult;
 
 drawClaimedCells(claimResult);
-renderStep5Summary(claimResult);
+renderClaimSummary(claimResult);
       perfEnd("STEP 5 draw");
 
       perfEnd("STEP 5 TOTAL");
@@ -3015,13 +3017,14 @@ function runStep6() {
       currentClaimResult = expandedResult;
 
       drawClaimedCells(expandedResult);
-      renderStep5Summary(expandedResult);
+      renderClaimSummary(expandedResult);
 
       setStatus(
         gerryStatus,
         `Step 6 complete. Expanded safely to ${expandedResult.claimedFeatures.length} claimed cells without allowing disconnected islands.`,
         "good"
       );
+      fillBtn.disabled = false;
     } catch (error) {
       console.error(error);
       setStatus(
@@ -3032,7 +3035,172 @@ function runStep6() {
     }
   }, 40);
 }
+    
+function getSharedBorderCountForDistrict(cellId, districtId, owner) {
+  const cell = cellById.get(String(cellId));
+  if (!cell) return 0;
 
+  let count = 0;
+  for (const neighborIdRaw of cell.neighbors) {
+    const neighborId = String(neighborIdRaw);
+    if (owner.get(neighborId) === districtId) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
+function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10) {
+  const owner = new Map(claimResult.owner);
+
+  let changed = true;
+  let round = 0;
+
+  while (changed && round < maxRounds) {
+    changed = false;
+    round++;
+
+    const expansionNeed = getDistrictExpansionNeed(pointDistricts, owner);
+    const proposals = new Map();
+
+    for (const cell of cellsWorking) {
+      const cellId = String(cell.id);
+      if (owner.has(cellId)) continue;
+
+      const touchingDistricts = [...getTouchingDistrictIdsForCell(cellId, owner)];
+      if (!touchingDistricts.length) continue;
+
+      let bestDistrict = null;
+      let bestBorder = -1;
+      let bestNeed = -Infinity;
+
+      for (const districtId of touchingDistricts) {
+        const sharedBorder = getSharedBorderCountForDistrict(cellId, districtId, owner);
+        const need = expansionNeed.get(districtId) || 0;
+
+        if (
+          sharedBorder > bestBorder ||
+          (sharedBorder === bestBorder && need > bestNeed) ||
+          (sharedBorder === bestBorder && need === bestNeed && districtId < bestDistrict)
+        ) {
+          bestDistrict = districtId;
+          bestBorder = sharedBorder;
+          bestNeed = need;
+        }
+      }
+
+      if (bestDistrict != null) {
+        proposals.set(cellId, bestDistrict);
+      }
+    }
+
+    if (!proposals.size) break;
+
+    const tentativeOwner = new Map(owner);
+    for (const [cellId, districtId] of proposals.entries()) {
+      tentativeOwner.set(String(cellId), districtId);
+    }
+
+    const cleaned = cleanupClaimedDistrictIslands(
+      {
+        owner: tentativeOwner,
+        claimedFeatures: [],
+        countByDistrict: new Map()
+      },
+      pointDistricts
+    );
+
+    let grew = false;
+    for (const [cellId] of cleaned.owner.entries()) {
+      if (!owner.has(cellId)) {
+        grew = true;
+        break;
+      }
+    }
+
+    owner.clear();
+    for (const [k, v] of cleaned.owner.entries()) {
+      owner.set(k, v);
+    }
+
+    changed = grew;
+  }
+
+  const claimedFeatures = [];
+  const countByDistrict = new Map();
+
+  for (const district of pointDistricts) {
+    countByDistrict.set(district.id, 0);
+  }
+
+  for (const cell of cellsWorking) {
+    const districtId = owner.get(String(cell.id));
+    if (districtId == null) continue;
+
+    const clone = cloneFeature(cell.feature);
+    clone.properties = {
+      ...(clone.properties || {}),
+      _district: districtId,
+      _pieceType: "filled-cell"
+    };
+
+    claimedFeatures.push(clone);
+    countByDistrict.set(
+      districtId,
+      (countByDistrict.get(districtId) || 0) + 1
+    );
+  }
+
+  return {
+    owner,
+    claimedFeatures,
+    countByDistrict
+  };
+}
+
+function runStep7() {
+  if (!currentPointDistricts || !currentClaimResult) {
+    setStatus(gerryStatus, "Run Step 6 first.", "warn");
+    return;
+  }
+
+  setStatus(gerryStatus, "Filling remaining unclaimed cells...", "warn");
+
+  setTimeout(() => {
+    try {
+      const beforeClaimed = currentClaimResult.claimedFeatures.length;
+
+      const filledResult = fillRemainingUnclaimedCells(
+        currentClaimResult,
+        currentPointDistricts,
+        10
+      );
+
+      currentClaimResult = filledResult;
+
+      drawClaimedCells(filledResult);
+      renderClaimSummary(filledResult);
+
+      const afterClaimed = filledResult.claimedFeatures.length;
+      const added = afterClaimed - beforeClaimed;
+      const remaining = cellsWorking.length - afterClaimed;
+
+      setStatus(
+        gerryStatus,
+        `Step 7 complete. Added ${added} cells. Remaining unclaimed cells: ${remaining}.`,
+        "good"
+      );
+    } catch (error) {
+      console.error(error);
+      setStatus(
+        gerryStatus,
+        `Step 7 failed: ${error?.message || error}`,
+        "error"
+      );
+    }
+  }, 40);
+}
     function resetPage() {
       currentFiltered = [];
       currentStats = null;
@@ -3177,6 +3345,7 @@ function runStep6() {
     finalizePolygonsBtn.addEventListener("click", runStep4);
     claimCellsBtn.addEventListener("click", runStep5);
     expandBtn.addEventListener("click", runStep6);
+    fillBtn.addEventListener("click", runStep7);
     initMap();
   </script>
 </body>
