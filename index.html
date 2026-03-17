@@ -1911,11 +1911,6 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
 
       const protectedSet = protectedByDistrict.get(districtId) || new Set();
 
-      console.log(`District ${districtId + 1} components:`, components.map(comp => ({
-        size: comp.length,
-        protectedCount: comp.filter(cellId => protectedSet.has(String(cellId))).length
-      })));
-
       let mainIndex = -1;
       let bestProtectedCount = -1;
       let bestSize = -1;
@@ -1936,12 +1931,6 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
       }
 
       const mainComponent = components[mainIndex];
-      console.log(`District ${districtId + 1} selected main component:`, {
-        mainIndex,
-        size: mainComponent.length,
-        protectedCount: mainComponent.filter(cellId => protectedSet.has(String(cellId))).length
-      });
-
       const mainComponentSet = new Set(mainComponent);
 
       for (let i = 0; i < components.length; i++) {
@@ -1960,28 +1949,28 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
             changed = true;
           }
         } else {
-  const corridor = findBestCorridorToMainComponent(
-  component,
-  mainComponentSet,
-  districtId,
-  owner,
-  protectedByDistrict
-);
+          const corridor = findBestCorridorToMainComponent(
+            component,
+            mainComponentSet,
+            districtId,
+            owner,
+            protectedByDistrict
+          );
 
-if (corridor && corridor.length) {
-  console.log(`District ${districtId + 1} forced reconnect corridor:`, corridor);
+          if (corridor && corridor.length) {
+            // console.log(`District ${districtId + 1} forced reconnect corridor:`, corridor);
 
-  for (const cellId of corridor) {
-    owner.set(String(cellId), districtId);
-    mainComponentSet.add(String(cellId));
-  }
+            for (const cellId of corridor) {
+              owner.set(String(cellId), districtId);
+              mainComponentSet.add(String(cellId));
+            }
 
-  for (const cellId of component) {
-    owner.set(String(cellId), districtId);
-    mainComponentSet.add(String(cellId));
-  }
+            for (const cellId of component) {
+              owner.set(String(cellId), districtId);
+              mainComponentSet.add(String(cellId));
+            }
 
-  changed = true;
+            changed = true;
           }
         }
       }
@@ -2891,7 +2880,7 @@ function getDistrictExpansionNeed(pointDistricts, owner) {
   return need;
 }
 
-function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 20) {
+function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
   const owner = new Map(claimResult.owner);
 
   let changed = true;
@@ -2902,7 +2891,7 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 20) {
     round++;
 
     const expansionNeed = getDistrictExpansionNeed(pointDistricts, owner);
-    const proposals = [];
+    const proposals = new Map();
 
     for (const cell of cellsWorking) {
       const cellId = String(cell.id);
@@ -2911,45 +2900,69 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 20) {
       const touchingDistricts = [...getTouchingDistrictIdsForCell(cellId, owner)];
       if (!touchingDistricts.length) continue;
 
-      touchingDistricts.sort((a, b) => {
-        const needA = expansionNeed.get(a) || 0;
-        const needB = expansionNeed.get(b) || 0;
-        if (needA !== needB) return needB - needA;
-        return a - b;
-      });
+      // Score candidate districts for this unclaimed cell
+      let bestDistrict = null;
+      let bestScore = -Infinity;
 
-      const chosenDistrict = touchingDistricts[0];
-      if (chosenDistrict == null) continue;
+      for (const districtId of touchingDistricts) {
+        let sharedBorder = 0;
 
-      proposals.push({
-        cellId,
-        districtId: chosenDistrict
-      });
-    }
+        for (const neighborIdRaw of cell.neighbors) {
+          const neighborId = String(neighborIdRaw);
+          if (owner.get(neighborId) === districtId) {
+            sharedBorder++;
+          }
+        }
 
-    if (!proposals.length) break;
+        const need = expansionNeed.get(districtId) || 0;
 
-    for (const proposal of proposals) {
-      const { cellId, districtId } = proposal;
+        // Strongly prefer under-target districts, then stronger adjacency
+        const score = (need * 100) + sharedBorder;
 
-      owner.set(String(cellId), districtId);
-
-      const testResult = cleanupClaimedDistrictIslands(
-        {
-          owner: new Map(owner),
-          claimedFeatures: [],
-          countByDistrict: new Map()
-        },
-        pointDistricts
-      );
-
-      owner.clear();
-      for (const [k, v] of testResult.owner.entries()) {
-        owner.set(k, v);
+        if (score > bestScore) {
+          bestScore = score;
+          bestDistrict = districtId;
+        }
       }
 
-      changed = true;
+      if (bestDistrict != null) {
+        proposals.set(cellId, bestDistrict);
+      }
     }
+
+    if (!proposals.size) break;
+
+    // Apply whole round at once
+    const tentativeOwner = new Map(owner);
+    for (const [cellId, districtId] of proposals.entries()) {
+      tentativeOwner.set(String(cellId), districtId);
+    }
+
+    // Clean up ONCE for the whole round
+    const cleaned = cleanupClaimedDistrictIslands(
+      {
+        owner: tentativeOwner,
+        claimedFeatures: [],
+        countByDistrict: new Map()
+      },
+      pointDistricts
+    );
+
+    // Detect whether anything new was actually added
+    let grew = false;
+    for (const [cellId, districtId] of cleaned.owner.entries()) {
+      if (!owner.has(cellId)) {
+        grew = true;
+        break;
+      }
+    }
+
+    owner.clear();
+    for (const [k, v] of cleaned.owner.entries()) {
+      owner.set(k, v);
+    }
+
+    changed = grew;
   }
 
   const claimedFeatures = [];
@@ -2996,7 +3009,7 @@ function runStep6() {
       const expandedResult = expandIntoUnclaimedCells(
         currentClaimResult,
         currentPointDistricts,
-        20
+        8
       );
 
       currentClaimResult = expandedResult;
