@@ -1864,7 +1864,18 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
 
     for (const district of pointDistricts) {
       const districtId = district.id;
-      let components = getDistrictComponentsFromOwner(owner, districtId);
+let components = getDistrictComponentsFromOwner(owner, districtId);
+
+if (components.length <= 1) continue;
+
+// move this UP before logging
+const protectedSet = protectedByDistrict.get(districtId) || new Set();
+
+// log components
+console.log(`District ${districtId + 1} components:`, components.map(comp => ({
+  size: comp.length,
+  protectedCount: comp.filter(cellId => protectedSet.has(String(cellId))).length
+})));
 
       if (components.length <= 1) continue;
 
@@ -1890,6 +1901,11 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
         }
       }
       const mainComponent = components[mainIndex];
+      console.log(`District ${districtId + 1} selected main component:`, {
+      mainIndex,
+      size: mainComponent.length,
+      protectedCount: mainComponent.filter(cellId => protectedSet.has(String(cellId))).length
+});
       const mainComponentSet = new Set(mainComponent);
 
       for (let i = 0; i < components.length; i++) {
