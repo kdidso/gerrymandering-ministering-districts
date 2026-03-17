@@ -1073,26 +1073,29 @@ function perfEnd(label) {
       }
     }
 
-    function buildFallbackDistrictShapeFromPoints(fc, districtId) {
-      if (!fc.features.length) return null;
+function buildFallbackDistrictShapeFromPoints(fc, districtId) {
+  if (!fc.features.length) return null;
 
-      const buffered = [];
+  const buffered = [];
 
-      for (const feature of fc.features) {
-        try {
-          const bf = turf.buffer(feature, 0.03, { units: "kilometers" });
-          if (bf) buffered.push(bf);
-        } catch (err) {}
-      }
-      if (!merged) return null;
+  for (const feature of fc.features) {
+    try {
+      const bf = turf.buffer(feature, 0.03, { units: "kilometers" });
+      if (bf) buffered.push(bf);
+    } catch (err) {}
+  }
 
-      merged.properties = {
-        ...(merged.properties || {}),
-        _district: districtId,
-        _polyType: "buffer-fallback"
-      };
-      return merged;
-    }
+  if (!buffered.length) return null;
+
+  const merged = cloneFeature(buffered[0]);
+  merged.properties = {
+    ...(merged.properties || {}),
+    _district: districtId,
+    _polyType: "buffer-fallback"
+  };
+
+  return merged;
+}
 
     function buildInitialDistrictHull(pointDistricts, districtId) {
       const fc = buildDistrictPointFeatureCollection(pointDistricts, districtId);
@@ -1352,124 +1355,114 @@ function perfEnd(label) {
       return bestPart;
     }
 
-    function buildAdjustedDistrictPolygons(pointDistricts) {
-      const reservedCellIds = new Set();
-      const districtPolygons = [];
-      const rawHulls = [];
+function buildAdjustedDistrictPolygons(pointDistricts) {
+  const reservedCellIds = new Set();
+  const districtPolygons = [];
+  const rawHulls = [];
 
-      for (const district of pointDistricts) {
-        const rawHull = buildInitialDistrictHull(pointDistricts, district.id);
+  for (const district of pointDistricts) {
+    const rawHull = buildInitialDistrictHull(pointDistricts, district.id);
 
-        if (!rawHull) {
-          districtPolygons.push({
-            districtId: district.id,
-            rawHull: null,
-            adjustedPolygon: null,
-            usedCellIds: new Set(),
-            foreignInsideCount: 0,
-            escapedCount: 0,
-            unresolvedForeignCount: 0
-          });
-          continue;
-        }
+    if (!rawHull) {
+      districtPolygons.push({
+        districtId: district.id,
+        rawHull: null,
+        adjustedPolygon: null,
+        usedCellIds: new Set(),
+        foreignInsideCount: 0,
+        escapedCount: 0,
+        unresolvedForeignCount: 0
+      });
+      continue;
+    }
 
-        rawHulls.push(rawHull);
+    rawHulls.push(rawHull);
 
-        const ownPointCellIds = getDistrictOwnPointCellIds(district);
-        const candidateCellIds = getCandidateCellsForHull(rawHull, district, reservedCellIds);
+    const ownPointCellIds = getDistrictOwnPointCellIds(district);
+    const candidateCellIds = getCandidateCellsForHull(rawHull, district, reservedCellIds);
 
-        for (const ownCellId of ownPointCellIds) {
-          candidateCellIds.add(String(ownCellId));
-        }
+    for (const ownCellId of ownPointCellIds) {
+      candidateCellIds.add(String(ownCellId));
+    }
 
-        const foreignPoints = getForeignPointsInsidePolygon(pointDistricts, district.id, rawHull);
-        const forbiddenRemovalCellIds = new Set(ownPointCellIds);
+    const foreignPoints = getForeignPointsInsidePolygon(
+      pointDistricts,
+      district.id,
+      rawHull
+    );
 
-        let escapedCount = 0;
-        let unresolvedForeignCount = 0;
+    const forbiddenRemovalCellIds = new Set(ownPointCellIds);
 
-        for (const foreign of foreignPoints) {
-          const foreignCellId = foreign.item.cellId ? String(foreign.item.cellId) : null;
-          if (!foreignCellId) {
-            unresolvedForeignCount++;
-            continue;
-          }
+    let escapedCount = 0;
+    let unresolvedForeignCount = 0;
 
-          if (!candidateCellIds.has(foreignCellId)) continue;
+    for (const foreign of foreignPoints) {
+      const foreignCellId = foreign.item.cellId ? String(foreign.item.cellId) : null;
 
-          const path = findEscapePathCellIds(
-            foreignCellId,
-            candidateCellIds,
-            forbiddenRemovalCellIds,
-            ownPointCellIds
-          );
-
-          if (!path || !path.length) {
-            unresolvedForeignCount++;
-            continue;
-          }
-
-          for (const removeId of path) {
-            if (!forbiddenRemovalCellIds.has(String(removeId))) {
-              candidateCellIds.delete(String(removeId));
-            }
-          }
-
-          escapedCount++;
-        }
-
-        for (const ownCellId of ownPointCellIds) {
-          candidateCellIds.add(String(ownCellId));
-        }
-        if (adjustedPolygon) {
-          adjustedPolygon = chooseBestSinglePolygonPart(adjustedPolygon, district);
-        }
-
-        const finalUsedCellIds = new Set();
-
-        if (adjustedPolygon) {
-          for (const cellId of candidateCellIds) {
-            const cell = cellById.get(String(cellId));
-            if (!cell) continue;
-
-            let keep = false;
-            try {
-              keep = turf.booleanPointInPolygon(
-                turf.point([cell.centroidLng, cell.centroidLat]),
-                adjustedPolygon
-              );
-            } catch (err) {
-              keep = false;
-            }
-
-            if (keep || ownPointCellIds.has(String(cellId))) {
-              finalUsedCellIds.add(String(cellId));
-            }
-          }
-
-          adjustedPolygon = adjustedPolygon ? chooseBestSinglePolygonPart(adjustedPolygon, district) : null;
-        }
-
-        for (const id of finalUsedCellIds) {
-          reservedCellIds.add(String(id));
-        }
-
-        districtPolygons.push({
-          districtId: district.id,
-          rawHull,
-          adjustedPolygon,
-          usedCellIds: finalUsedCellIds,
-          foreignInsideCount: foreignPoints.length,
-          escapedCount,
-          unresolvedForeignCount
-        });
+      if (!foreignCellId) {
+        unresolvedForeignCount++;
+        continue;
       }
 
-      return {
-        districtPolygons,
-        rawHulls
-      };
+      if (!candidateCellIds.has(foreignCellId)) continue;
+
+      const path = findEscapePathCellIds(
+        foreignCellId,
+        candidateCellIds,
+        forbiddenRemovalCellIds,
+        ownPointCellIds
+      );
+
+      if (!path || !path.length) {
+        unresolvedForeignCount++;
+        continue;
+      }
+
+      for (const removeId of path) {
+        if (!forbiddenRemovalCellIds.has(String(removeId))) {
+          candidateCellIds.delete(String(removeId));
+        }
+      }
+
+      escapedCount++;
     }
+
+    for (const ownCellId of ownPointCellIds) {
+      candidateCellIds.add(String(ownCellId));
+    }
+
+    const finalUsedCellIds = new Set([...candidateCellIds]);
+
+    const adjustedPolygon = {
+      type: "Feature",
+      geometry: rawHull.geometry,
+      properties: {
+        ...(rawHull.properties || {}),
+        _district: district.id,
+        _polyType: "adjusted-cell-mask"
+      }
+    };
+
+    for (const id of finalUsedCellIds) {
+      reservedCellIds.add(String(id));
+    }
+
+    districtPolygons.push({
+      districtId: district.id,
+      rawHull,
+      adjustedPolygon,
+      usedCellIds: finalUsedCellIds,
+      foreignInsideCount: foreignPoints.length,
+      escapedCount,
+      unresolvedForeignCount
+    });
+  }
+
+  return {
+    districtPolygons,
+    rawHulls
+  };
+}
 
 function getCellsCoveredByPolygon(polygon) {
   const ids = new Set();
