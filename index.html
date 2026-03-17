@@ -558,24 +558,32 @@ function chooseBestNeighborDistrictForComponent(component, districtId, owner) {
 
   return bestDistrict;
 }
-function findCorridorToMainComponent(component, mainComponentSet, districtId, owner, protectedByDistrict) {
-  const queue = [];
-  const visited = new Set();
+function findBestCorridorToMainComponent(component, mainComponentSet, districtId, owner, protectedByDistrict) {
+  const startIds = component.map(String);
+  const distances = new Map();
   const parent = new Map();
+  const visited = new Set();
 
-  for (const startId of component) {
-    queue.push(String(startId));
-    visited.add(String(startId));
+  const queue = [];
+
+  function push(nodeId, cost) {
+    queue.push({ nodeId, cost });
+    queue.sort((a, b) => a.cost - b.cost);
   }
 
-  let qIndex = 0;
+  for (const startId of startIds) {
+    distances.set(startId, 0);
+    push(startId, 0);
+  }
 
-  while (qIndex < queue.length) {
-    const currentId = queue[qIndex++];
+  while (queue.length) {
+    const { nodeId, cost } = queue.shift();
+    if (visited.has(nodeId)) continue;
+    visited.add(nodeId);
 
-    if (mainComponentSet.has(currentId)) {
-      const path = [currentId];
-      let walk = currentId;
+    if (mainComponentSet.has(nodeId)) {
+      const path = [nodeId];
+      let walk = nodeId;
 
       while (parent.has(walk)) {
         walk = parent.get(walk);
@@ -586,7 +594,7 @@ function findCorridorToMainComponent(component, mainComponentSet, districtId, ow
       return path;
     }
 
-    const cell = cellById.get(String(currentId));
+    const cell = cellById.get(String(nodeId));
     if (!cell) continue;
 
     for (const neighborIdRaw of cell.neighbors) {
@@ -595,18 +603,29 @@ function findCorridorToMainComponent(component, mainComponentSet, districtId, ow
 
       const currentOwner = owner.get(neighborId);
 
-      // Allowed:
-      // - unowned cells
-      // - already this district
-      // - cells from another district ONLY if they are not protected
-      if (currentOwner != null && currentOwner !== districtId) {
-        const protectedSet = protectedByDistrict.get(currentOwner) || new Set();
-        if (protectedSet.has(neighborId)) continue;
+      let stepCost = Infinity;
+
+      if (currentOwner == null) {
+        stepCost = 1; // prefer unclaimed
+      } else if (currentOwner === districtId) {
+        stepCost = 0;
+      } else {
+        const foreignProtected = protectedByDistrict.get(currentOwner) || new Set();
+        if (!foreignProtected.has(neighborId)) {
+          stepCost = 5; // allowed, but more expensive than unclaimed
+        }
       }
 
-      visited.add(neighborId);
-      parent.set(neighborId, currentId);
-      queue.push(neighborId);
+      if (!isFinite(stepCost)) continue;
+
+      const newCost = cost + stepCost;
+      const oldCost = distances.get(neighborId);
+
+      if (oldCost == null || newCost < oldCost) {
+        distances.set(neighborId, newCost);
+        parent.set(neighborId, nodeId);
+        push(neighborId, newCost);
+      }
     }
   }
 
@@ -1965,28 +1984,28 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
             changed = true;
           }
         } else {
-          const corridor = findCorridorToMainComponent(
-            component,
-            mainComponentSet,
-            districtId,
-            owner,
-            protectedByDistrict
-          );
+  const corridor = findBestCorridorToMainComponent(
+  component,
+  mainComponentSet,
+  districtId,
+  owner,
+  protectedByDistrict
+);
 
-          if (corridor && corridor.length) {
-            // Force the whole bridge corridor to this district
-            for (const cellId of corridor) {
-              owner.set(String(cellId), districtId);
-              mainComponentSet.add(String(cellId));
-            }
+if (corridor && corridor.length) {
+  console.log(`District ${districtId + 1} forced reconnect corridor:`, corridor);
 
-            // Keep the protected island itself with this district
-            for (const cellId of component) {
-              owner.set(String(cellId), districtId);
-              mainComponentSet.add(String(cellId));
-            }
+  for (const cellId of corridor) {
+    owner.set(String(cellId), districtId);
+    mainComponentSet.add(String(cellId));
+  }
 
-            changed = true;
+  for (const cellId of component) {
+    owner.set(String(cellId), districtId);
+    mainComponentSet.add(String(cellId));
+  }
+
+  changed = true;
           }
         }
       }
