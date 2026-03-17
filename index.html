@@ -1864,27 +1864,20 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
 
     for (const district of pointDistricts) {
       const districtId = district.id;
-let components = getDistrictComponentsFromOwner(owner, districtId);
-
-if (components.length <= 1) continue;
-
-// move this UP before logging
-const protectedSet = protectedByDistrict.get(districtId) || new Set();
-
-// log components
-console.log(`District ${districtId + 1} components:`, components.map(comp => ({
-  size: comp.length,
-  protectedCount: comp.filter(cellId => protectedSet.has(String(cellId))).length
-})));
+      let components = getDistrictComponentsFromOwner(owner, districtId);
 
       if (components.length <= 1) continue;
 
-      // choose main component:
-      // prefer one containing protected cells; otherwise largest
+      const protectedSet = protectedByDistrict.get(districtId) || new Set();
+
+      console.log(`District ${districtId + 1} components:`, components.map(comp => ({
+        size: comp.length,
+        protectedCount: comp.filter(cellId => protectedSet.has(String(cellId))).length
+      })));
+
       let mainIndex = -1;
       let bestProtectedCount = -1;
       let bestSize = -1;
-      const protectedSet = protectedByDistrict.get(districtId) || new Set();
 
       for (let i = 0; i < components.length; i++) {
         const comp = components[i];
@@ -1900,12 +1893,14 @@ console.log(`District ${districtId + 1} components:`, components.map(comp => ({
           bestSize = size;
         }
       }
+
       const mainComponent = components[mainIndex];
       console.log(`District ${districtId + 1} selected main component:`, {
-      mainIndex,
-      size: mainComponent.length,
-      protectedCount: mainComponent.filter(cellId => protectedSet.has(String(cellId))).length
-});
+        mainIndex,
+        size: mainComponent.length,
+        protectedCount: mainComponent.filter(cellId => protectedSet.has(String(cellId))).length
+      });
+
       const mainComponentSet = new Set(mainComponent);
 
       for (let i = 0; i < components.length; i++) {
@@ -1915,7 +1910,6 @@ console.log(`District ${districtId + 1} components:`, components.map(comp => ({
         const componentHasProtected = component.some(cellId => protectedSet.has(String(cellId)));
 
         if (!componentHasProtected) {
-          // simple island: give it to best touching neighbor
           const replacementDistrict = chooseBestNeighborDistrictForComponent(component, districtId, owner);
 
           if (replacementDistrict != null) {
@@ -1924,8 +1918,7 @@ console.log(`District ${districtId + 1} components:`, components.map(comp => ({
             }
             changed = true;
           }
-          } else {
-          // protected island: try to split it so only the necessary part stays
+        } else {
           const splitResult = splitConflictedProtectedComponent(
             component,
             mainComponentSet,
@@ -1934,13 +1927,11 @@ console.log(`District ${districtId + 1} components:`, components.map(comp => ({
             protectedByDistrict
           );
 
-          // keep required cells with this district
           for (const cellId of splitResult.keptCellIds) {
             owner.set(String(cellId), districtId);
             mainComponentSet.add(String(cellId));
           }
 
-          // reassign released cells to the best touching neighbor
           if (splitResult.releasedCellIds.size) {
             const releasedArray = [...splitResult.releasedCellIds];
             const replacementDistrict = chooseBestNeighborDistrictForComponent(
@@ -1962,7 +1953,6 @@ console.log(`District ${districtId + 1} components:`, components.map(comp => ({
       }
     }
   }
-}
 
   const claimedFeatures = [];
   const countByDistrict = new Map();
@@ -2263,10 +2253,6 @@ function carveEscapeRoutesFromPolygon(polygon, district, trappedForeign) {
       .map(id => cellById.get(String(id)))
       .filter(Boolean)
       .map(cell => cloneFeature(cell.feature));
-    if (!corridorUnion) {
-      unresolvedCount++;
-      continue;
-    }
 
     let erased = null;
     try {
