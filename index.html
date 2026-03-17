@@ -1005,20 +1005,25 @@
       };
     }
 
-    function unionFeatures(features) {
-      if (!features || !features.length) return null;
+function unionFeatures(features) {
+  if (!features || !features.length) return null;
 
-      let merged = cloneFeature(features[0]);
+  let merged = cloneFeature(features[0]);
 
-      for (let i = 1; i < features.length; i++) {
-        try {
-          const unioned = turf.union(turf.featureCollection([merged, features[i]]));
-          if (unioned) merged = unioned;
-        } catch (err) {}
+  for (let i = 1; i < features.length; i++) {
+    try {
+      const unioned = turf.union(merged, features[i]);
+      if (unioned) {
+        merged = unioned;
       }
-
-      return merged;
+    } catch (err) {
+      console.warn("Union failed for feature index", i, err);
     }
+  }
+
+  console.log("UNION RESULT:", merged);
+  return merged;
+}
 
     function differenceSafe(featureA, featureB) {
       if (!featureA || !featureB) return featureA;
