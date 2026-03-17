@@ -3066,6 +3066,15 @@ function runStep6() {
       );
 
       currentClaimResult = expandedResult;
+if (rawHullLayer) {
+  map.removeLayer(rawHullLayer);
+  rawHullLayer = null;
+}
+
+if (finalPolygonLayer) {
+  map.removeLayer(finalPolygonLayer);
+  finalPolygonLayer = null;
+}
 
       drawClaimedCells(expandedResult);
       renderClaimSummary(expandedResult);
