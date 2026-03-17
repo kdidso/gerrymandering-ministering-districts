@@ -553,31 +553,42 @@ function chooseBestNeighborDistrictForComponent(component, districtId, owner) {
 function buildReconnectAllowedSet(districtId) {
   const allowed = new Set();
 
-  // Prefer Step 4 final cells
+  // Include Step 4 final cells
   const step4Row = currentFinalDistrictPolygons?.rows?.find(r => r.districtId === districtId);
   if (step4Row?.finalCellIds?.size) {
     for (const id of step4Row.finalCellIds) {
       allowed.add(String(id));
     }
-  } else {
-    // Fallback to Step 3 used cells
-    const step3Row = currentDistrictPolygons?.districtPolygons?.find(r => r.districtId === districtId);
-    if (step3Row?.usedCellIds?.size) {
-      for (const id of step3Row.usedCellIds) {
-        allowed.add(String(id));
-      }
+  }
+
+  // Also include Step 3 used cells
+  const step3Row = currentDistrictPolygons?.districtPolygons?.find(r => r.districtId === districtId);
+  if (step3Row?.usedCellIds?.size) {
+    for (const id of step3Row.usedCellIds) {
+      allowed.add(String(id));
     }
   }
 
-  // Add one ring of neighbors around the district mask
-  const baseIds = [...allowed];
-  for (const id of baseIds) {
-    const cell = cellById.get(String(id));
-    if (!cell) continue;
+  // Expand by 2 neighbor rings
+  let frontier = [...allowed];
+  for (let ring = 0; ring < 2; ring++) {
+    const nextFrontier = [];
 
-    for (const neighborIdRaw of cell.neighbors) {
-      allowed.add(String(neighborIdRaw));
+    for (const id of frontier) {
+      const cell = cellById.get(String(id));
+      if (!cell) continue;
+
+      for (const neighborIdRaw of cell.neighbors) {
+        const neighborId = String(neighborIdRaw);
+        if (!allowed.has(neighborId)) {
+          allowed.add(neighborId);
+          nextFrontier.push(neighborId);
+        }
+      }
     }
+
+    frontier = nextFrontier;
+    if (!frontier.length) break;
   }
 
   return allowed;
