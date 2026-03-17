@@ -395,6 +395,57 @@
     const metricAssignments = document.getElementById("metricAssignments");
     const metricOutside = document.getElementById("metricOutside");
 
+    
+    function buildBoundaryLinesFromCellIds(cellIds, districtId) {
+  const edgeMap = new Map();
+
+  function edgeKey(a, b) {
+    return `${a[0]},${a[1]}|${b[0]},${b[1]}`;
+  }
+
+  function reverseEdgeKey(a, b) {
+    return `${b[0]},${b[1]}|${a[0]},${a[1]}`;
+  }
+
+  for (const cellId of cellIds) {
+    const cell = cellById.get(String(cellId));
+    if (!cell) continue;
+
+    const coords = cell.feature.geometry.coordinates[0];
+
+    for (let i = 0; i < coords.length - 1; i++) {
+      const a = coords[i];
+      const b = coords[i + 1];
+
+      const key = edgeKey(a, b);
+      const reverse = reverseEdgeKey(a, b);
+
+      if (edgeMap.has(reverse)) {
+        edgeMap.delete(reverse); // shared edge → remove
+      } else {
+        edgeMap.set(key, [a, b]);
+      }
+    }
+  }
+
+  const features = [];
+
+  for (const [, edge] of edgeMap) {
+    features.push({
+      type: "Feature",
+      geometry: {
+        type: "LineString",
+        coordinates: edge
+      },
+      properties: {
+        _district: districtId,
+        _type: "boundary"
+      }
+    });
+  }
+
+  return features;
+}
     function perfStart(label) {
   console.time(label);
 }
@@ -1012,26 +1063,6 @@ function perfEnd(label) {
       };
     }
 
-function unionFeatures(features) {
-  if (!features || !features.length) return null;
-
-  let merged = cloneFeature(features[0]);
-
-  for (let i = 1; i < features.length; i++) {
-    try {
-      const unioned = turf.union(merged, features[i]);
-      if (unioned) {
-        merged = unioned;
-      }
-    } catch (err) {
-      console.warn("Union failed for feature index", i, err);
-    }
-  }
-
-  console.log("UNION RESULT:", merged);
-  return merged;
-}
-
     function differenceSafe(featureA, featureB) {
       if (!featureA || !featureB) return featureA;
       try {
@@ -1053,8 +1084,6 @@ function unionFeatures(features) {
           if (bf) buffered.push(bf);
         } catch (err) {}
       }
-
-      const merged = unionFeatures(buffered);
       if (!merged) return null;
 
       merged.properties = {
@@ -1256,23 +1285,6 @@ function unionFeatures(features) {
       return null;
     }
 
-    function buildPolygonFromCellIds(cellIds, districtId, polyType = "cell-union") {
-      const features = [...cellIds]
-        .map(id => cellById.get(String(id)))
-        .filter(Boolean)
-        .map(cell => cloneFeature(cell.feature));
-
-      const merged = unionFeatures(features);
-      if (!merged) return null;
-
-      merged.properties = {
-        ...(merged.properties || {}),
-        _district: districtId,
-        _polyType: polyType
-      };
-      return merged;
-    }
-
     function splitPolygonFeatureIntoParts(feature) {
       if (!feature || !feature.geometry) return [];
 
@@ -1409,8 +1421,6 @@ function unionFeatures(features) {
         for (const ownCellId of ownPointCellIds) {
           candidateCellIds.add(String(ownCellId));
         }
-
-        let adjustedPolygon = buildPolygonFromCellIds(candidateCellIds, district.id, "adjusted-cell-polygon");
         if (adjustedPolygon) {
           adjustedPolygon = chooseBestSinglePolygonPart(adjustedPolygon, district);
         }
@@ -1437,7 +1447,6 @@ function unionFeatures(features) {
             }
           }
 
-          adjustedPolygon = buildPolygonFromCellIds(finalUsedCellIds, district.id, "adjusted-cell-polygon");
           adjustedPolygon = adjustedPolygon ? chooseBestSinglePolygonPart(adjustedPolygon, district) : null;
         }
 
@@ -1652,11 +1661,6 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
     let overlapPolygon = null;
     if (overlapCellIds.size) {
       perfStart(`STEP 4 district ${district.id + 1} rebuildOverlapPolygon`);
-      overlapPolygon = buildPolygonFromCellIds(
-        overlapCellIds,
-        district.id,
-        "step4-overlap-finalized"
-      );
       perfEnd(`STEP 4 district ${district.id + 1} rebuildOverlapPolygon`);
     }
 
@@ -1692,11 +1696,6 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
 
     if (finalCellIds.size) {
       perfStart(`STEP 4 district ${district.id + 1} rebuildFinalPolygon`);
-      finalPolygon = buildPolygonFromCellIds(
-        finalCellIds,
-        district.id,
-        "step4-final-masked"
-      );
       perfEnd(`STEP 4 district ${district.id + 1} rebuildFinalPolygon`);
     }
 
@@ -1875,8 +1874,6 @@ function carveEscapeRoutesFromPolygon(polygon, district, trappedForeign) {
       .map(id => cellById.get(String(id)))
       .filter(Boolean)
       .map(cell => cloneFeature(cell.feature));
-
-    const corridorUnion = unionFeatures(corridorCells);
     if (!corridorUnion) {
       unresolvedCount++;
       continue;
@@ -2029,109 +2026,87 @@ function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
       ).addTo(map);
     }
 
-    function drawStep3Polygons(result) {
-      if (rawHullLayer) {
-        map.removeLayer(rawHullLayer);
-        rawHullLayer = null;
-      }
-      if (adjustedPolygonLayer) {
-        map.removeLayer(adjustedPolygonLayer);
-        adjustedPolygonLayer = null;
-      }
-
-      const rawHullFeatures = result.rawHulls.map(cloneFeature);
-      rawHullLayer = L.geoJSON(
-        { type: "FeatureCollection", features: rawHullFeatures },
-        {
-          style: function(feature) {
-            const districtId = feature.properties._district;
-            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
-            return {
-              color: "#111827",
-              weight: 1.5,
-              opacity: 0.7,
-              dashArray: "6 4",
-              fillOpacity: 0
-            };
-          }
-        }
-      ).addTo(map);
-
-      const adjustedFeatures = result.districtPolygons
-        .filter(row => row.adjustedPolygon)
-        .map(row => cloneFeature(row.adjustedPolygon));
-
-      adjustedPolygonLayer = L.geoJSON(
-        { type: "FeatureCollection", features: adjustedFeatures },
-        {
-          style: function(feature) {
-            const districtId = feature.properties._district;
-            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
-            return {
-              color,
-              weight: 3,
-              opacity: 1,
-              fillColor: color,
-              fillOpacity: 0.15
-            };
-          },
-          onEachFeature: function(feature, layer) {
-            const districtId = feature.properties._district;
-            layer.bindPopup(`<strong>District ${districtId + 1}</strong><br>Adjusted Step 3 polygon`);
-          }
-        }
-      ).addTo(map);
-    }
-
-function drawStep4Polygons(finalResult) {
+function drawStep3Polygons(polygonResult) {
   if (rawHullLayer) {
     map.removeLayer(rawHullLayer);
     rawHullLayer = null;
   }
 
-  if (adjustedPolygonLayer) {
-    map.removeLayer(adjustedPolygonLayer);
-    adjustedPolygonLayer = null;
+  const features = [];
+
+  for (const row of polygonResult.districtPolygons) {
+    if (!row.usedCellIds) continue;
+
+    const districtId = row.districtId;
+
+    const edges = buildBoundaryLinesFromCellIds(
+      row.usedCellIds,
+      districtId
+    );
+
+    features.push(...edges);
   }
 
+  rawHullLayer = L.geoJSON(
+    { type: "FeatureCollection", features },
+    {
+      style: function (feature) {
+        const districtId = feature.properties._district;
+        const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+
+        return {
+          color: color,
+          weight: 3,
+          opacity: 1
+        };
+      }
+    }
+  ).addTo(map);
+
+  if (rawHullLayer.bringToFront) {
+    rawHullLayer.bringToFront();
+  }
+}
+
+function drawStep4Polygons(finalResult) {
   if (finalPolygonLayer) {
     map.removeLayer(finalPolygonLayer);
     finalPolygonLayer = null;
   }
 
-  const finalFeatures = finalResult.rows
-    .filter(r => r.finalPolygon)
-    .map(r => cloneFeature(r.finalPolygon));
+  const features = [];
 
-  console.log("STEP 4 FINAL MASKED POLYGONS:", finalFeatures);
-  console.log("STEP 4 GEOMETRY TYPES:", finalFeatures.map(f => f?.geometry?.type));
+  for (const row of finalResult.rows) {
+    if (!row.finalCellIds) continue;
+
+    const districtId = row.districtId;
+
+    const edges = buildBoundaryLinesFromCellIds(
+      row.finalCellIds,
+      districtId
+    );
+
+    features.push(...edges);
+  }
 
   finalPolygonLayer = L.geoJSON(
-    { type: "FeatureCollection", features: finalFeatures },
+    { type: "FeatureCollection", features },
     {
-      style: function(feature) {
+      style: function (feature) {
         const districtId = feature.properties._district;
         const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+
         return {
           color: "#000000",
-          weight: 6,
-          opacity: 1,
-          fillColor: color,
-          fillOpacity: 0.18
+          weight: 5,
+          opacity: 1
         };
-      },
-      onEachFeature: function(feature, layer) {
-        const districtId = feature.properties._district;
-        layer.bindPopup(`<strong>District ${districtId + 1}</strong><br>Step 4 finalized masked polygon`);
       }
     }
   ).addTo(map);
 
   if (finalPolygonLayer.bringToFront) {
     finalPolygonLayer.bringToFront();
-  }
-  if (districtPointLayer && districtPointLayer.bringToFront) {
-    districtPointLayer.bringToFront();
   }
 }
 
