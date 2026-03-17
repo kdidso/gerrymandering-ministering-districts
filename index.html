@@ -396,6 +396,145 @@
     const metricAssignments = document.getElementById("metricAssignments");
     const metricOutside = document.getElementById("metricOutside");
 
+function getProtectedCellIdsByDistrict(pointDistricts) {
+  const result = new Map();
+
+  for (const district of pointDistricts) {
+    const ids = new Set();
+    for (const item of district.members) {
+      if (item.cellId != null) {
+        ids.add(String(item.cellId));
+      }
+    }
+    result.set(district.id, ids);
+  }
+
+  return result;
+}
+function getDistrictComponentsFromOwner(owner, districtId) {
+  const visited = new Set();
+  const components = [];
+
+  for (const cell of cellsWorking) {
+    const startId = String(cell.id);
+    if (owner.get(startId) !== districtId) continue;
+    if (visited.has(startId)) continue;
+
+    const component = [];
+    const queue = [startId];
+    visited.add(startId);
+
+    let qIndex = 0;
+    while (qIndex < queue.length) {
+      const currentId = queue[qIndex++];
+      component.push(currentId);
+
+      const currentCell = cellById.get(currentId);
+      if (!currentCell) continue;
+
+      for (const neighborIdRaw of currentCell.neighbors) {
+        const neighborId = String(neighborIdRaw);
+        if (visited.has(neighborId)) continue;
+        if (owner.get(neighborId) !== districtId) continue;
+
+        visited.add(neighborId);
+        queue.push(neighborId);
+      }
+    }
+
+    components.push(component);
+  }
+
+  return components;
+}
+function chooseBestNeighborDistrictForComponent(component, districtId, owner) {
+  const borderCounts = new Map();
+
+  for (const cellId of component) {
+    const cell = cellById.get(String(cellId));
+    if (!cell) continue;
+
+    for (const neighborIdRaw of cell.neighbors) {
+      const neighborId = String(neighborIdRaw);
+      const neighborDistrict = owner.get(neighborId);
+
+      if (neighborDistrict == null) continue;
+      if (neighborDistrict === districtId) continue;
+
+      borderCounts.set(
+        neighborDistrict,
+        (borderCounts.get(neighborDistrict) || 0) + 1
+      );
+    }
+  }
+
+  let bestDistrict = null;
+  let bestScore = -1;
+
+  for (const [candidateDistrict, score] of borderCounts.entries()) {
+    if (score > bestScore) {
+      bestScore = score;
+      bestDistrict = candidateDistrict;
+    }
+  }
+
+  return bestDistrict;
+}
+function findCorridorToMainComponent(component, mainComponentSet, districtId, owner, protectedByDistrict) {
+  const queue = [];
+  const visited = new Set();
+  const parent = new Map();
+
+  for (const startId of component) {
+    queue.push(String(startId));
+    visited.add(String(startId));
+  }
+
+  let qIndex = 0;
+
+  while (qIndex < queue.length) {
+    const currentId = queue[qIndex++];
+
+    if (mainComponentSet.has(currentId)) {
+      const path = [currentId];
+      let walk = currentId;
+
+      while (parent.has(walk)) {
+        walk = parent.get(walk);
+        path.push(walk);
+      }
+
+      path.reverse();
+      return path;
+    }
+
+    const cell = cellById.get(String(currentId));
+    if (!cell) continue;
+
+    for (const neighborIdRaw of cell.neighbors) {
+      const neighborId = String(neighborIdRaw);
+      if (visited.has(neighborId)) continue;
+
+      const currentOwner = owner.get(neighborId);
+
+      // Allowed:
+      // - unowned cells
+      // - already this district
+      // - cells from another district ONLY if they are not protected
+      if (currentOwner != null && currentOwner !== districtId) {
+        const protectedSet = protectedByDistrict.get(currentOwner) || new Set();
+        if (protectedSet.has(neighborId)) continue;
+      }
+
+      visited.add(neighborId);
+      parent.set(neighborId, currentId);
+      queue.push(neighborId);
+    }
+  }
+
+  return null;
+}
+
     
     function buildBoundaryLinesFromCellIds(cellIds, districtId) {
   const edgeMap = new Map();
@@ -1633,6 +1772,125 @@ function carveEscapeRoutesFromCellMask(maskCellIds, district, pointDistricts, di
     unresolvedCount
   };
 }
+function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
+  const owner = new Map(claimResult.owner);
+  const protectedByDistrict = getProtectedCellIdsByDistrict(pointDistricts);
+
+  let changed = true;
+  let pass = 0;
+  const maxPasses = 8;
+
+  while (changed && pass < maxPasses) {
+    changed = false;
+    pass++;
+
+    for (const district of pointDistricts) {
+      const districtId = district.id;
+      let components = getDistrictComponentsFromOwner(owner, districtId);
+
+      if (components.length <= 1) continue;
+
+      // choose main component:
+      // prefer one containing protected cells; otherwise largest
+      let mainIndex = -1;
+      let mainSize = -1;
+      const protectedSet = protectedByDistrict.get(districtId) || new Set();
+
+      for (let i = 0; i < components.length; i++) {
+        const comp = components[i];
+        const hasProtected = comp.some(cellId => protectedSet.has(String(cellId)));
+
+        if (hasProtected && comp.length > mainSize) {
+          mainIndex = i;
+          mainSize = comp.length;
+        }
+      }
+
+      if (mainIndex === -1) {
+        for (let i = 0; i < components.length; i++) {
+          if (components[i].length > mainSize) {
+            mainIndex = i;
+            mainSize = components[i].length;
+          }
+        }
+      }
+
+      const mainComponent = components[mainIndex];
+      const mainComponentSet = new Set(mainComponent);
+
+      for (let i = 0; i < components.length; i++) {
+        if (i === mainIndex) continue;
+
+        const component = components[i];
+        const componentHasProtected = component.some(cellId => protectedSet.has(String(cellId)));
+
+        if (!componentHasProtected) {
+          // simple island: give it to best touching neighbor
+          const replacementDistrict = chooseBestNeighborDistrictForComponent(component, districtId, owner);
+
+          if (replacementDistrict != null) {
+            for (const cellId of component) {
+              owner.set(String(cellId), replacementDistrict);
+            }
+            changed = true;
+          }
+        } else {
+          // protected island: try to connect it back to main district body
+          const corridor = findCorridorToMainComponent(
+            component,
+            mainComponentSet,
+            districtId,
+            owner,
+            protectedByDistrict
+          );
+
+          if (corridor && corridor.length) {
+            for (const cellId of corridor) {
+              owner.set(String(cellId), districtId);
+              mainComponentSet.add(String(cellId));
+            }
+            for (const cellId of component) {
+              owner.set(String(cellId), districtId);
+              mainComponentSet.add(String(cellId));
+            }
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+
+  const claimedFeatures = [];
+  const countByDistrict = new Map();
+
+  for (const district of pointDistricts) {
+    countByDistrict.set(district.id, 0);
+  }
+
+  for (const cell of cellsWorking) {
+    const districtId = owner.get(String(cell.id));
+    if (districtId == null) continue;
+
+    const clone = cloneFeature(cell.feature);
+    clone.properties = {
+      ...(clone.properties || {}),
+      _district: districtId,
+      _pieceType: "claimed-cell-cleaned"
+    };
+
+    claimedFeatures.push(clone);
+    countByDistrict.set(
+      districtId,
+      (countByDistrict.get(districtId) || 0) + 1
+    );
+  }
+
+  return {
+    owner,
+    claimedFeatures,
+    countByDistrict
+  };
+}
 function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
   perfStart("finalizeDistrictPolygons internal");
 
@@ -2521,17 +2779,20 @@ function runStep5() {
       perfStart("STEP 5 TOTAL");
 
       perfStart("STEP 5 buildClaimCellsFromFinalPolygons");
-      const claimResult = buildClaimCellsFromFinalPolygons(
-        currentFinalDistrictPolygons,
-        currentPointDistricts
-      );
-      perfEnd("STEP 5 buildClaimCellsFromFinalPolygons");
+  const rawClaimResult = buildClaimCellsFromFinalPolygons(
+  currentFinalDistrictPolygons,
+  currentPointDistricts
+);
 
-      currentClaimResult = claimResult;
+const claimResult = cleanupClaimedDistrictIslands(
+  rawClaimResult,
+  currentPointDistricts
+);
 
-      perfStart("STEP 5 draw");
-      drawClaimedCells(claimResult);
-      renderStep5Summary(claimResult);
+currentClaimResult = claimResult;
+
+drawClaimedCells(claimResult);
+renderStep5Summary(claimResult);
       perfEnd("STEP 5 draw");
 
       perfEnd("STEP 5 TOTAL");
