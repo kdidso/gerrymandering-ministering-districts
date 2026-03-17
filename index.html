@@ -1744,30 +1744,46 @@ function drawStep4Polygons(finalResult) {
     finalPolygonLayer = null;
   }
 
-  const finalFeatures = finalResult.rows
-    .filter(r => r.finalPolygon)
-    .map(r => cloneFeature(r.finalPolygon));
+  const features = [];
 
-  console.log("FINAL FEATURES COUNT:", finalFeatures.length);
-  console.log("FINAL FEATURES:", finalFeatures);
+  for (const row of finalResult.rows) {
+    const districtId = row.districtId;
+    const finalCellIds = row.finalCellIds ? [...row.finalCellIds] : [];
+
+    for (const cellId of finalCellIds) {
+      const cell = cellById.get(String(cellId));
+      if (!cell) continue;
+
+      const clone = cloneFeature(cell.feature);
+      clone.properties = {
+        ...(clone.properties || {}),
+        _district: districtId,
+        _pieceType: "step4-final-cell"
+      };
+      features.push(clone);
+    }
+  }
+
+  console.log("STEP 4 DRAWN CELL COUNT:", features.length);
+  console.log("STEP 4 DRAWN CELL FEATURES:", features);
 
   finalPolygonLayer = L.geoJSON(
-    { type: "FeatureCollection", features: finalFeatures },
+    { type: "FeatureCollection", features },
     {
       style: function(feature) {
         const districtId = feature.properties._district;
         const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
         return {
           color: "#000000",
-          weight: 14,
+          weight: 2,
           opacity: 1,
           fillColor: color,
-          fillOpacity: 0.35
+          fillOpacity: 0.32
         };
       },
       onEachFeature: function(feature, layer) {
         const districtId = feature.properties._district;
-        layer.bindPopup(`<strong>District ${districtId + 1}</strong><br>Final Step 4 polygon`);
+        layer.bindPopup(`<strong>District ${districtId + 1}</strong><br>Step 4 final cell`);
       }
     }
   ).addTo(map);
