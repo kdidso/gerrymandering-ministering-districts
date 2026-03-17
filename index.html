@@ -1871,28 +1871,24 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
       // choose main component:
       // prefer one containing protected cells; otherwise largest
       let mainIndex = -1;
-      let mainSize = -1;
+      let bestProtectedCount = -1;
+      let bestSize = -1;
       const protectedSet = protectedByDistrict.get(districtId) || new Set();
 
       for (let i = 0; i < components.length; i++) {
         const comp = components[i];
-        const hasProtected = comp.some(cellId => protectedSet.has(String(cellId)));
+        const protectedCount = comp.filter(cellId => protectedSet.has(String(cellId))).length;
+        const size = comp.length;
 
-        if (hasProtected && comp.length > mainSize) {
+        if (
+          protectedCount > bestProtectedCount ||
+          (protectedCount === bestProtectedCount && size > bestSize)
+        ) {
           mainIndex = i;
-          mainSize = comp.length;
+          bestProtectedCount = protectedCount;
+          bestSize = size;
         }
       }
-
-      if (mainIndex === -1) {
-        for (let i = 0; i < components.length; i++) {
-          if (components[i].length > mainSize) {
-            mainIndex = i;
-            mainSize = components[i].length;
-          }
-        }
-      }
-
       const mainComponent = components[mainIndex];
       const mainComponentSet = new Set(mainComponent);
 
@@ -1950,6 +1946,7 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
       }
     }
   }
+}
 
   const claimedFeatures = [];
   const countByDistrict = new Map();
