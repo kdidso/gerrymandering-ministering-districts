@@ -217,6 +217,13 @@
           <label class="option"><input type="checkbox" id="chkAdjacencyLoaded" disabled /><span>Cell adjacency JSON</span></label>
           <label class="option"><input type="checkbox" id="chkMetadataLoaded" disabled /><span>Cell metadata JSON</span></label>
         </div>
+        <div class="checkbox-group">
+          <label class="option">
+            <input type="checkbox" id="toggleCellsLayer" />
+            <span>Show ward cell outlines</span>
+          </label>
+        </div>
+        
         <div id="loadStatus" class="status">Loading data...</div>
       </div>
 
@@ -399,7 +406,22 @@
     const metricCompanionships = document.getElementById("metricCompanionships");
     const metricAssignments = document.getElementById("metricAssignments");
     const metricOutside = document.getElementById("metricOutside");
+    const toggleCellsLayer = document.getElementById("toggleCellsLayer");
    
+function updateCellsLayerVisibility() {
+  if (!map || !cellsOutlineLayer) return;
+
+  if (toggleCellsLayer.checked) {
+    if (!map.hasLayer(cellsOutlineLayer)) {
+      cellsOutlineLayer.addTo(map);
+    }
+  } else {
+    if (map.hasLayer(cellsOutlineLayer)) {
+      map.removeLayer(cellsOutlineLayer);
+    }
+  }
+}
+
 function getProtectedCellIdsByDistrict(pointDistricts) {
   const result = new Map();
 
@@ -2674,6 +2696,34 @@ function renderStep4Summary(finalResult) {
       setStatus(gerryStatus, "Click Run Step 3 to assign districts and draw polygons.", "good");
     }
 
+async function ensureCellSupportDataLoaded() {
+  if (adjacencyData && metadataData && cellsData && cellsWorking.length) {
+    return;
+  }
+
+  setStatus(gerryStatus, "Loading cell adjacency and metadata...", "warn");
+
+  const [adjacencyResponse, metadataResponse] = await Promise.all([
+    fetch(ADJACENCY_URL),
+    fetch(METADATA_URL)
+  ]);
+
+  if (!adjacencyResponse.ok) {
+    throw new Error(`Adjacency failed to load: ${adjacencyResponse.status}`);
+  }
+  if (!metadataResponse.ok) {
+    throw new Error(`Metadata failed to load: ${metadataResponse.status}`);
+  }
+
+  adjacencyData = await adjacencyResponse.json();
+  metadataData = await metadataResponse.json();
+
+  prepareCellsWorkingSet();
+
+  chkAdjacencyLoaded.checked = true;
+  chkMetadataLoaded.checked = true;
+}
+    
     function runStep3() {
   if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
     setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
@@ -2681,12 +2731,13 @@ function renderStep4Summary(finalResult) {
   }
 
   setStatus(gerryStatus, "Assigning ordered district groups and building district polygons...", "warn");
+setTimeout(async () => {
+  try {
+    removeDistrictLayers();
 
-  setTimeout(() => {
-    try {
-      removeDistrictLayers();
+    await ensureCellSupportDataLoaded();
 
-      perfStart("STEP 3 TOTAL");
+    perfStart("STEP 3 TOTAL");
 
       perfStart("STEP 3 assignDistrictsByOrderedGroups");
       const pointDistricts = assignDistrictsByOrderedGroups(
@@ -3255,38 +3306,28 @@ function runStep7() {
     async function loadAllData() {
       setStatus(loadStatus, "Loading data...");
       try {
-        const [
-          wardResponse,
-          membersResponse,
-          cellsResponse,
-          adjacencyResponse,
-          metadataResponse
-        ] = await Promise.all([
-          fetch(WARD_URL),
-          fetch(MEMBERS_URL),
-          fetch(CELLS_URL),
-          fetch(ADJACENCY_URL),
-          fetch(METADATA_URL)
-        ]);
+const [
+  wardResponse,
+  membersResponse,
+  cellsResponse
+] = await Promise.all([
+  fetch(WARD_URL),
+  fetch(MEMBERS_URL),
+  fetch(CELLS_URL)
+]);
 
         if (!wardResponse.ok) throw new Error(`Ward boundary failed to load: ${wardResponse.status}`);
         if (!membersResponse.ok) throw new Error(`Member locations failed to load: ${membersResponse.status}`);
         if (!cellsResponse.ok) throw new Error(`Cells failed to load: ${cellsResponse.status}`);
-        if (!adjacencyResponse.ok) throw new Error(`Adjacency failed to load: ${adjacencyResponse.status}`);
-        if (!metadataResponse.ok) throw new Error(`Metadata failed to load: ${metadataResponse.status}`);
 
         wardData = await wardResponse.json();
         membersData = await membersResponse.json();
         cellsData = await cellsResponse.json();
-        adjacencyData = await adjacencyResponse.json();
-        metadataData = await metadataResponse.json();
 
         wardPolygonFeatures = (wardData.features || []).filter(isPolygonLike);
         if (!wardPolygonFeatures.length) {
           throw new Error("No polygon features were found in the ward boundary GeoJSON.");
         }
-
-        prepareCellsWorkingSet();
 
         wardLayer = L.geoJSON(wardData, {
           style: {
@@ -3297,14 +3338,16 @@ function runStep7() {
           }
         }).addTo(map);
 
-        cellsOutlineLayer = L.geoJSON(cellsData, {
-          style: {
-            color: "#64748b",
-            weight: 0.5,
-            opacity: 0.35,
-            fillOpacity: 0
-          }
-        }).addTo(map);
+  cellsOutlineLayer = L.geoJSON(cellsData, {
+  style: {
+    color: "#64748b",
+    weight: 0.5,
+    opacity: 0.35,
+    fillOpacity: 0
+  }
+});
+
+updateCellsLayerVisibility();
 
         allMembersLayer = L.geoJSON(membersData, {
           pointToLayer: function(feature, latlng) {
@@ -3322,13 +3365,13 @@ function runStep7() {
           }
         }).addTo(map);
 
-        chkWardLoaded.checked = true;
-        chkMembersLoaded.checked = true;
-        chkCellsLoaded.checked = true;
-        chkAdjacencyLoaded.checked = true;
-        chkMetadataLoaded.checked = true;
+chkWardLoaded.checked = true;
+chkMembersLoaded.checked = true;
+chkCellsLoaded.checked = true;
+chkAdjacencyLoaded.checked = false;
+chkMetadataLoaded.checked = false;
 
-        setStatus(loadStatus, `Loaded ward, members, ${cellsWorking.length} cells, adjacency, and metadata.`, "good");
+        setStatus(loadStatus, "Loaded ward, members, and cells. Cell adjacency and metadata will load when districting starts.", "good");
         fitMapToWard();
       } catch (error) {
         console.error(error);
@@ -3346,6 +3389,7 @@ function runStep7() {
     claimCellsBtn.addEventListener("click", runStep5);
     expandBtn.addEventListener("click", runStep6);
     fillBtn.addEventListener("click", runStep7);
+    toggleCellsLayer.addEventListener("change", updateCellsLayerVisibility);
     initMap();
   </script>
 </body>
