@@ -1482,11 +1482,33 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
     // Erase by all older polygons at once
     if (olderUnion) {
       try {
-        const erased = turf.difference(working, olderUnion);
-        if (erased) {
-          if (JSON.stringify(erased.geometry) !== JSON.stringify(working.geometry)) {
-            overlapRemoved = true;
-          }
+        let erased = null;
+
+try {
+  erased = turf.difference(working, olderUnion);
+} catch (err) {
+  erased = null;
+}
+
+if (!erased) {
+  // fallback: KEEP original instead of losing polygon
+  console.warn("Difference failed — keeping original polygon for district", district.id);
+} else {
+  // validate geometry has area
+  let area = 0;
+  try {
+    area = turf.area(erased);
+  } catch (err) {
+    area = 0;
+  }
+
+  if (area < 1) {
+    console.warn("Erased polygon too small — keeping original for district", district.id);
+  } else {
+    working = erased;
+    overlapRemoved = true;
+  }
+}
           working = erased;
         } else {
           working = null;
@@ -1738,7 +1760,8 @@ function drawStep4Polygons(finalResult) {
   const finalFeatures = finalResult.rows
     .filter(r => r.finalPolygon)
     .map(r => cloneFeature(r.finalPolygon));
-
+  console.log("FINAL FEATURES COUNT:", finalFeatures.length);
+  console.log("FINAL FEATURES:", finalFeatures);
   console.log("Step 4 final features:", finalFeatures);
 
   finalPolygonLayer = L.geoJSON(
