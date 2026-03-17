@@ -1919,7 +1919,7 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
             changed = true;
           }
         } else {
-          const splitResult = splitConflictedProtectedComponent(
+          const corridor = findCorridorToMainComponent(
             component,
             mainComponentSet,
             districtId,
@@ -1927,26 +1927,19 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
             protectedByDistrict
           );
 
-          for (const cellId of splitResult.keptCellIds) {
-            owner.set(String(cellId), districtId);
-            mainComponentSet.add(String(cellId));
-          }
-
-          if (splitResult.releasedCellIds.size) {
-            const releasedArray = [...splitResult.releasedCellIds];
-            const replacementDistrict = chooseBestNeighborDistrictForComponent(
-              releasedArray,
-              districtId,
-              owner
-            );
-
-            if (replacementDistrict != null) {
-              for (const cellId of releasedArray) {
-                owner.set(String(cellId), replacementDistrict);
-              }
-              changed = true;
+          if (corridor && corridor.length) {
+            // Force the whole bridge corridor to this district
+            for (const cellId of corridor) {
+              owner.set(String(cellId), districtId);
+              mainComponentSet.add(String(cellId));
             }
-          } else if (splitResult.keptCellIds.size) {
+
+            // Keep the protected island itself with this district
+            for (const cellId of component) {
+              owner.set(String(cellId), districtId);
+              mainComponentSet.add(String(cellId));
+            }
+
             changed = true;
           }
         }
