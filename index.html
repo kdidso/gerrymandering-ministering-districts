@@ -3323,7 +3323,7 @@ const [
         wardData = await wardResponse.json();
         membersData = await membersResponse.json();
         cellsData = await cellsResponse.json();
-
+        prepareCellsWorkingSet();
         wardPolygonFeatures = (wardData.features || []).filter(isPolygonLike);
         if (!wardPolygonFeatures.length) {
           throw new Error("No polygon features were found in the ward boundary GeoJSON.");
