@@ -398,75 +398,6 @@
     const metricAssignments = document.getElementById("metricAssignments");
     const metricOutside = document.getElementById("metricOutside");
    
-    function splitConflictedProtectedComponent(component, mainComponentSet, districtId, owner, protectedByDistrict) {
-  const componentSet = new Set(component.map(String));
-  const protectedSet = protectedByDistrict.get(districtId) || new Set();
-
-  const localProtected = component.filter(cellId => protectedSet.has(String(cellId)));
-  if (!localProtected.length) {
-    return {
-      keptCellIds: new Set(),
-      releasedCellIds: new Set(componentSet)
-    };
-  }
-
-  const mustKeep = new Set();
-
-  // keep all local protected cells
-  for (const cellId of localProtected) {
-    mustKeep.add(String(cellId));
-  }
-
-  // keep corridor too
-  if (corridor && corridor.length) {
-    for (const cellId of corridor) {
-      mustKeep.add(String(cellId));
-    }
-  }
-
-  // Step 2: inside the component, keep only cells needed to connect protected cells together
-  const queue = [...mustKeep].filter(id => componentSet.has(id));
-  const visited = new Set(queue);
-
-  let qIndex = 0;
-  while (qIndex < queue.length) {
-    const currentId = queue[qIndex++];
-    const cell = cellById.get(String(currentId));
-    if (!cell) continue;
-
-    for (const neighborIdRaw of cell.neighbors) {
-      const neighborId = String(neighborIdRaw);
-      if (!componentSet.has(neighborId)) continue;
-      if (visited.has(neighborId)) continue;
-
-      // only grow through component cells that help keep protected structure together
-      const neighborTouchesProtected = (cellById.get(neighborId)?.neighbors || [])
-        .some(nid => protectedSet.has(String(nid)));
-
-      if (protectedSet.has(neighborId) || neighborTouchesProtected) {
-        visited.add(neighborId);
-        queue.push(neighborId);
-      }
-    }
-  }
-
-  for (const id of visited) {
-    mustKeep.add(String(id));
-  }
-
-  const released = new Set();
-  for (const cellId of componentSet) {
-    if (!mustKeep.has(cellId)) {
-      released.add(cellId);
-    }
-  }
-
-  return {
-    keptCellIds: mustKeep,
-    releasedCellIds: released
-  };
-}
-    
 function getProtectedCellIdsByDistrict(pointDistricts) {
   const result = new Map();
 
@@ -2311,94 +2242,6 @@ function findEscapeCorridorCells(startCellId, allowedPolygonCellIds, ownPointCel
 
   return null;
 }
-
-function carveEscapeRoutesFromPolygon(polygon, district, trappedForeign) {
-  if (!polygon) {
-    return {
-      finalPolygon: null,
-      escapedCount: 0,
-      unresolvedCount: trappedForeign.length
-    };
-  }
-
-  let currentPolygon = cloneFeature(polygon);
-  let escapedCount = 0;
-  let unresolvedCount = 0;
-  const ownPointCellIds = getDistrictOwnPointCellIds(district);
-
-  for (const foreign of trappedForeign) {
-    const foreignPoint = foreign.item.feature;
-    const foreignCellId = foreign.item.cellId ? String(foreign.item.cellId) : null;
-
-    if (!foreignCellId) {
-      unresolvedCount++;
-      continue;
-    }
-
-    let stillInside = false;
-    try {
-      stillInside = turf.booleanPointInPolygon(foreignPoint, currentPolygon);
-    } catch (err) {
-      stillInside = false;
-    }
-
-    if (!stillInside) continue;
-
-    const polygonCellIds = getCellsIntersectingPolygon(currentPolygon);
-    const corridorCellIds = findEscapeCorridorCells(foreignCellId, polygonCellIds, ownPointCellIds);
-
-    if (!corridorCellIds || !corridorCellIds.length) {
-      unresolvedCount++;
-      continue;
-    }
-
-    const corridorCells = corridorCellIds
-      .map(id => cellById.get(String(id)))
-      .filter(Boolean)
-      .map(cell => cloneFeature(cell.feature));
-
-    let erased = null;
-
-    if (!erased) {
-      unresolvedCount++;
-      continue;
-    }
-
-  if (!erased) {
-  unresolvedCount++;
-  continue;
-}
-
-    // verify the foreign point can now escape
-let nowInside = false;
-try {
-  nowInside = turf.booleanPointInPolygon(foreignPoint, erased);
-} catch (err) {
-  nowInside = false;
-}
-
-if (nowInside) {
-  unresolvedCount++;
-  continue;
-}
-
-currentPolygon = erased;
-escapedCount++;
-  }
-
-  currentPolygon.properties = {
-    ...(currentPolygon.properties || {}),
-    _district: district.id,
-    _polyType: "step4-final-masked"
-  };
-
-  return {
-    finalPolygon: currentPolygon,
-    escapedCount,
-    unresolvedCount
-  };
-}
-
 function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
   perfStart("buildClaimCellsFromFinalPolygons internal");
 
@@ -3004,6 +2847,142 @@ renderStep5Summary(claimResult);
   }, 40);
 }
 
+function getTouchingDistrictIdsForCell(cellId, owner) {
+  const result = new Set();
+  const cell = cellById.get(String(cellId));
+  if (!cell) return result;
+
+  for (const neighborIdRaw of cell.neighbors) {
+    const neighborId = String(neighborIdRaw);
+    const districtId = owner.get(neighborId);
+    if (districtId != null) {
+      result.add(districtId);
+    }
+  }
+
+  return result;
+}
+
+function countOwnedCellsByDistrict(owner, pointDistricts) {
+  const counts = new Map();
+  for (const district of pointDistricts) {
+    counts.set(district.id, 0);
+  }
+
+  for (const cell of cellsWorking) {
+    const districtId = owner.get(String(cell.id));
+    if (districtId == null) continue;
+    counts.set(districtId, (counts.get(districtId) || 0) + 1);
+  }
+
+  return counts;
+}
+
+function getDistrictExpansionNeed(pointDistricts, owner) {
+  const ownedCounts = countOwnedCellsByDistrict(owner, pointDistricts);
+  const need = new Map();
+
+  for (const district of pointDistricts) {
+    const current = ownedCounts.get(district.id) || 0;
+    const target = district.sTarget || 0;
+    need.set(district.id, target - current);
+  }
+
+  return need;
+}
+
+function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 20) {
+  const owner = new Map(claimResult.owner);
+
+  let changed = true;
+  let round = 0;
+
+  while (changed && round < maxRounds) {
+    changed = false;
+    round++;
+
+    const expansionNeed = getDistrictExpansionNeed(pointDistricts, owner);
+    const proposals = [];
+
+    for (const cell of cellsWorking) {
+      const cellId = String(cell.id);
+      if (owner.has(cellId)) continue;
+
+      const touchingDistricts = [...getTouchingDistrictIdsForCell(cellId, owner)];
+      if (!touchingDistricts.length) continue;
+
+      touchingDistricts.sort((a, b) => {
+        const needA = expansionNeed.get(a) || 0;
+        const needB = expansionNeed.get(b) || 0;
+        if (needA !== needB) return needB - needA;
+        return a - b;
+      });
+
+      const chosenDistrict = touchingDistricts[0];
+      if (chosenDistrict == null) continue;
+
+      proposals.push({
+        cellId,
+        districtId: chosenDistrict
+      });
+    }
+
+    if (!proposals.length) break;
+
+    for (const proposal of proposals) {
+      const { cellId, districtId } = proposal;
+
+      owner.set(String(cellId), districtId);
+
+      const testResult = cleanupClaimedDistrictIslands(
+        {
+          owner: new Map(owner),
+          claimedFeatures: [],
+          countByDistrict: new Map()
+        },
+        pointDistricts
+      );
+
+      owner.clear();
+      for (const [k, v] of testResult.owner.entries()) {
+        owner.set(k, v);
+      }
+
+      changed = true;
+    }
+  }
+
+  const claimedFeatures = [];
+  const countByDistrict = new Map();
+
+  for (const district of pointDistricts) {
+    countByDistrict.set(district.id, 0);
+  }
+
+  for (const cell of cellsWorking) {
+    const districtId = owner.get(String(cell.id));
+    if (districtId == null) continue;
+
+    const clone = cloneFeature(cell.feature);
+    clone.properties = {
+      ...(clone.properties || {}),
+      _district: districtId,
+      _pieceType: "expanded-cell"
+    };
+
+    claimedFeatures.push(clone);
+    countByDistrict.set(
+      districtId,
+      (countByDistrict.get(districtId) || 0) + 1
+    );
+  }
+
+  return {
+    owner,
+    claimedFeatures,
+    countByDistrict
+  };
+}
 function runStep6() {
   if (!currentPointDistricts || !currentClaimResult) {
     setStatus(gerryStatus, "Run Step 5 first.", "warn");
