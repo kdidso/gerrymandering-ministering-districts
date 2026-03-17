@@ -396,6 +396,84 @@
     const metricAssignments = document.getElementById("metricAssignments");
     const metricOutside = document.getElementById("metricOutside");
 
+function splitConflictedProtectedComponent(component, mainComponentSet, districtId, owner, protectedByDistrict) {
+  const componentSet = new Set(component.map(String));
+  const protectedSet = protectedByDistrict.get(districtId) || new Set();
+
+  const localProtected = component.filter(cellId => protectedSet.has(String(cellId)));
+  if (!localProtected.length) {
+    return {
+      keptCellIds: new Set(),
+      releasedCellIds: new Set(componentSet)
+    };
+  }
+
+  // Step 1: find corridor from this component back to the main component
+  const corridor = findCorridorToMainComponent(
+    component,
+    mainComponentSet,
+    districtId,
+    owner,
+    protectedByDistrict
+  );
+
+  const mustKeep = new Set();
+
+  // keep all local protected cells
+  for (const cellId of localProtected) {
+    mustKeep.add(String(cellId));
+  }
+
+  // keep corridor too
+  if (corridor && corridor.length) {
+    for (const cellId of corridor) {
+      mustKeep.add(String(cellId));
+    }
+  }
+
+  // Step 2: inside the component, keep only cells needed to connect protected cells together
+  const queue = [...mustKeep].filter(id => componentSet.has(id));
+  const visited = new Set(queue);
+
+  let qIndex = 0;
+  while (qIndex < queue.length) {
+    const currentId = queue[qIndex++];
+    const cell = cellById.get(String(currentId));
+    if (!cell) continue;
+
+    for (const neighborIdRaw of cell.neighbors) {
+      const neighborId = String(neighborIdRaw);
+      if (!componentSet.has(neighborId)) continue;
+      if (visited.has(neighborId)) continue;
+
+      // only grow through component cells that help keep protected structure together
+      const neighborTouchesProtected = (cellById.get(neighborId)?.neighbors || [])
+        .some(nid => protectedSet.has(String(nid)));
+
+      if (protectedSet.has(neighborId) || neighborTouchesProtected) {
+        visited.add(neighborId);
+        queue.push(neighborId);
+      }
+    }
+  }
+
+  for (const id of visited) {
+    mustKeep.add(String(id));
+  }
+
+  const released = new Set();
+  for (const cellId of componentSet) {
+    if (!mustKeep.has(cellId)) {
+      released.add(cellId);
+    }
+  }
+
+  return {
+    keptCellIds: mustKeep,
+    releasedCellIds: released
+  };
+}
+    
 function getProtectedCellIdsByDistrict(pointDistricts) {
   const result = new Map();
 
@@ -1834,9 +1912,9 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
             }
             changed = true;
           }
-        } else {
-          // protected island: try to connect it back to main district body
-          const corridor = findCorridorToMainComponent(
+          } else {
+          // protected island: try to split it so only the necessary part stays
+          const splitResult = splitConflictedProtectedComponent(
             component,
             mainComponentSet,
             districtId,
@@ -1844,15 +1922,28 @@ function cleanupClaimedDistrictIslands(claimResult, pointDistricts) {
             protectedByDistrict
           );
 
-          if (corridor && corridor.length) {
-            for (const cellId of corridor) {
-              owner.set(String(cellId), districtId);
-              mainComponentSet.add(String(cellId));
+          // keep required cells with this district
+          for (const cellId of splitResult.keptCellIds) {
+            owner.set(String(cellId), districtId);
+            mainComponentSet.add(String(cellId));
+          }
+
+          // reassign released cells to the best touching neighbor
+          if (splitResult.releasedCellIds.size) {
+            const releasedArray = [...splitResult.releasedCellIds];
+            const replacementDistrict = chooseBestNeighborDistrictForComponent(
+              releasedArray,
+              districtId,
+              owner
+            );
+
+            if (replacementDistrict != null) {
+              for (const cellId of releasedArray) {
+                owner.set(String(cellId), replacementDistrict);
+              }
+              changed = true;
             }
-            for (const cellId of component) {
-              owner.set(String(cellId), districtId);
-              mainComponentSet.add(String(cellId));
-            }
+          } else if (splitResult.keptCellIds.size) {
             changed = true;
           }
         }
