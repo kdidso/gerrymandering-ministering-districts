@@ -2432,33 +2432,35 @@ function drawClaimedCells(claimResult) {
 }
 
     function renderStep3Summary(pointDistricts, polygonResult) {
-      resetGerrySummary();
+  resetGerrySummary();
 
-      const intro = document.createElement("div");
-      intro.className = "district-row";
-      intro.innerHTML = `<strong>Step 3 complete</strong><br>
-        Districts were assigned by ordered latitude/longitude batches within each group while keeping same-cell points together.
-        Convex-style hulls were then built, and foreign trapped points were given a cell-based escape route whenever a valid route could be found.`;
-      gerrySummary.appendChild(intro);
+  const intro = document.createElement("div");
+  intro.className = "district-row";
+  intro.innerHTML = `<strong>Step 3 complete</strong><br>
+    Districts were assigned by ordered latitude/longitude batches within each group while keeping same-cell points together.
+    A starting hull was created for each district, then a cell-based mask was built from that hull.
+    Where foreign district points were trapped inside that mask, escape corridors were carved by removing cells.
+    The Step 3 result is therefore a kept-cell mask, not the final overlap-resolved district boundary yet.`;
+  gerrySummary.appendChild(intro);
 
-      for (const district of pointDistricts) {
-        const polyRow = polygonResult.districtPolygons.find(r => r.districtId === district.id);
+  for (const district of pointDistricts) {
+    const polyRow = polygonResult.districtPolygons.find(r => r.districtId === district.id);
 
-        const row = document.createElement("div");
-        row.className = "district-row";
-        row.innerHTML = `
-          <strong>District ${district.id + 1}</strong><br>
-          Group 1 assigned: ${district.group1} / step target ${district.xTarget}<br>
-          Group 2 assigned: ${district.group2} / step target ${district.yTarget}<br>
-          Total assigned: ${district.total} / step target ${district.sTarget}<br>
-          Cells used in adjusted polygon: ${polyRow ? polyRow.usedCellIds.size : 0}<br>
-          Foreign points inside raw hull: ${polyRow ? polyRow.foreignInsideCount : 0}<br>
-          Escape routes created: ${polyRow ? polyRow.escapedCount : 0}<br>
-          Foreign points still unresolved: ${polyRow ? polyRow.unresolvedForeignCount : 0}
-        `;
-        gerrySummary.appendChild(row);
-      }
-    }
+    const row = document.createElement("div");
+    row.className = "district-row";
+    row.innerHTML = `
+      <strong>District ${district.id + 1}</strong><br>
+      Group 1 assigned: ${district.group1} / step target ${district.xTarget}<br>
+      Group 2 assigned: ${district.group2} / step target ${district.yTarget}<br>
+      Total assigned: ${district.total} / step target ${district.sTarget}<br>
+      Step 3 kept cells: ${polyRow ? polyRow.usedCellIds.size : 0}<br>
+      Foreign points inside starting hull: ${polyRow ? polyRow.foreignInsideCount : 0}<br>
+      Escape corridors created: ${polyRow ? polyRow.escapedCount : 0}<br>
+      Foreign points still unresolved: ${polyRow ? polyRow.unresolvedForeignCount : 0}
+    `;
+    gerrySummary.appendChild(row);
+  }
+}
 
 function renderStep4Summary(finalResult) {
   resetGerrySummary();
@@ -2466,9 +2468,9 @@ function renderStep4Summary(finalResult) {
   const intro = document.createElement("div");
   intro.className = "district-row";
   intro.innerHTML = `<strong>Step 4 complete</strong><br>
-    Step 3 district areas were finalized at the cell-mask level. Older districts kept overlapping cells,
-    later districts were erased back to shared edges, and escape corridors were carved where trapped foreign
-    points needed a path out of the wrong district mask.`;
+    The Step 3 kept-cell masks were finalized so older districts kept overlapping cells and later districts lost them.
+    After that, trapped foreign points were checked again and additional escape corridors were carved where possible.
+    The Step 4 result is the finalized masked district cell set that Step 5 uses to claim cells.`;
   gerrySummary.appendChild(intro);
 
   for (const rowData of finalResult.rows) {
