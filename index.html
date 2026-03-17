@@ -395,8 +395,8 @@
     const metricCompanionships = document.getElementById("metricCompanionships");
     const metricAssignments = document.getElementById("metricAssignments");
     const metricOutside = document.getElementById("metricOutside");
-
-function splitConflictedProtectedComponent(component, mainComponentSet, districtId, owner, protectedByDistrict) {
+   
+    function splitConflictedProtectedComponent(component, mainComponentSet, districtId, owner, protectedByDistrict) {
   const componentSet = new Set(component.map(String));
   const protectedSet = protectedByDistrict.get(districtId) || new Set();
 
@@ -407,15 +407,6 @@ function splitConflictedProtectedComponent(component, mainComponentSet, district
       releasedCellIds: new Set(componentSet)
     };
   }
-
-  // Step 1: find corridor from this component back to the main component
-  const corridor = findCorridorToMainComponent(
-    component,
-    mainComponentSet,
-    districtId,
-    owner,
-    protectedByDistrict
-  );
 
   const mustKeep = new Set();
 
@@ -558,31 +549,49 @@ function chooseBestNeighborDistrictForComponent(component, districtId, owner) {
 
   return bestDistrict;
 }
-function findBestCorridorToMainComponent(component, mainComponentSet, districtId, owner, protectedByDistrict) {
-  // First try: only same-district and unclaimed cells
-  let path = findBestCorridorToMainComponentInternal(
-    component,
-    mainComponentSet,
-    districtId,
-    owner,
-    protectedByDistrict,
-    false
-  );
 
-  if (path && path.length) return path;
+function buildReconnectAllowedSet(districtId) {
+  const allowed = new Set();
 
-  // Fallback: allow foreign non-protected cells
-  return findBestCorridorToMainComponentInternal(
-    component,
-    mainComponentSet,
-    districtId,
-    owner,
-    protectedByDistrict,
-    true
-  );
+  // Prefer Step 4 final cells
+  const step4Row = currentFinalDistrictPolygons?.rows?.find(r => r.districtId === districtId);
+  if (step4Row?.finalCellIds?.size) {
+    for (const id of step4Row.finalCellIds) {
+      allowed.add(String(id));
+    }
+  } else {
+    // Fallback to Step 3 used cells
+    const step3Row = currentDistrictPolygons?.districtPolygons?.find(r => r.districtId === districtId);
+    if (step3Row?.usedCellIds?.size) {
+      for (const id of step3Row.usedCellIds) {
+        allowed.add(String(id));
+      }
+    }
+  }
+
+  // Add one ring of neighbors around the district mask
+  const baseIds = [...allowed];
+  for (const id of baseIds) {
+    const cell = cellById.get(String(id));
+    if (!cell) continue;
+
+    for (const neighborIdRaw of cell.neighbors) {
+      allowed.add(String(neighborIdRaw));
+    }
+  }
+
+  return allowed;
 }
 
-function findBestCorridorToMainComponentInternal(component, mainComponentSet, districtId, owner, protectedByDistrict, allowForeign) {
+function findBestCorridorToMainComponent(
+  component,
+  mainComponentSet,
+  districtId,
+  owner,
+  protectedByDistrict
+) {
+  const allowedSet = buildReconnectAllowedSet(districtId);
+
   const startIds = component.map(String);
   const distances = new Map();
   const parent = new Map();
@@ -623,6 +632,7 @@ function findBestCorridorToMainComponentInternal(component, mainComponentSet, di
     for (const neighborIdRaw of cell.neighbors) {
       const neighborId = String(neighborIdRaw);
       if (visited.has(neighborId)) continue;
+      if (!allowedSet.has(neighborId)) continue;
 
       const currentOwner = owner.get(neighborId);
       let stepCost = Infinity;
@@ -631,10 +641,10 @@ function findBestCorridorToMainComponentInternal(component, mainComponentSet, di
         stepCost = 0;
       } else if (currentOwner == null) {
         stepCost = 1;
-      } else if (allowForeign) {
+      } else {
         const foreignProtected = protectedByDistrict.get(currentOwner) || new Set();
         if (!foreignProtected.has(neighborId)) {
-          stepCost = 1000;
+          stepCost = 50;
         }
       }
 
@@ -2335,11 +2345,6 @@ function carveEscapeRoutesFromPolygon(polygon, district, trappedForeign) {
       .map(cell => cloneFeature(cell.feature));
 
     let erased = null;
-    try {
-      erased = turf.difference(currentPolygon, corridorUnion);
-    } catch (err) {
-      erased = null;
-    }
 
     if (!erased) {
       unresolvedCount++;
@@ -2607,7 +2612,7 @@ function drawClaimedCells(claimResult) {
   const intro = document.createElement("div");
   intro.className = "district-row";
   intro.innerHTML = `<strong>Step 3 complete</strong><br>
-    Districts were assigned by ordered latitude/longitude batches within each group while keeping same-cell points together.
+    Districts were assigned by ordered latitude/longitude batches within each group while keeping same-cell points and also keeping same-group points within 55 meters together.
     A starting hull was created for each district, then a cell-based mask was built from that hull.
     Where foreign district points were trapped inside that mask, escape corridors were carved by removing cells.
     The Step 3 result is therefore a kept-cell mask, not the final overlap-resolved district boundary yet.`;
