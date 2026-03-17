@@ -299,6 +299,7 @@
           <button id="gerrymanderBtn" disabled>Run Step 3</button>
           <button id="finalizePolygonsBtn" class="secondary" disabled>Run Step 4</button>
           <button id="claimCellsBtn" class="secondary" disabled>Run Step 5</button>
+          <button id="expandBtn" class="secondary" disabled>Run Step 6</button>
           <button id="regerrymanderBtn" class="secondary" disabled>Re-run Step 3</button>
         </div>
 
@@ -384,6 +385,7 @@
     const gerrymanderBtn = document.getElementById("gerrymanderBtn");
     const finalizePolygonsBtn = document.getElementById("finalizePolygonsBtn");
     const claimCellsBtn = document.getElementById("claimCellsBtn");
+    const expandBtn = document.getElementById("expandBtn");
     const regerrymanderBtn = document.getElementById("regerrymanderBtn");
     const districtCountSelect = document.getElementById("districtCountSelect");
     const districtSummary = document.getElementById("districtSummary");
@@ -2990,11 +2992,49 @@ renderStep5Summary(claimResult);
         `Step 5 complete. Claimed ${claimResult.claimedFeatures.length} cells from finalized district polygons and district point cells.`,
         "good"
       );
+      expandBtn.disabled = false;
     } catch (error) {
       console.error(error);
       setStatus(
         gerryStatus,
         `Step 5 failed: ${error?.message || error}`,
+        "error"
+      );
+    }
+  }, 40);
+}
+
+function runStep6() {
+  if (!currentPointDistricts || !currentClaimResult) {
+    setStatus(gerryStatus, "Run Step 5 first.", "warn");
+    return;
+  }
+
+  setStatus(gerryStatus, "Expanding districts safely into unclaimed cells...", "warn");
+
+  setTimeout(() => {
+    try {
+      const expandedResult = expandIntoUnclaimedCells(
+        currentClaimResult,
+        currentPointDistricts,
+        20
+      );
+
+      currentClaimResult = expandedResult;
+
+      drawClaimedCells(expandedResult);
+      renderStep5Summary(expandedResult);
+
+      setStatus(
+        gerryStatus,
+        `Step 6 complete. Expanded safely to ${expandedResult.claimedFeatures.length} claimed cells without allowing disconnected islands.`,
+        "good"
+      );
+    } catch (error) {
+      console.error(error);
+      setStatus(
+        gerryStatus,
+        `Step 6 failed: ${error?.message || error}`,
         "error"
       );
     }
@@ -3144,7 +3184,7 @@ renderStep5Summary(claimResult);
     regerrymanderBtn.addEventListener("click", runStep3);
     finalizePolygonsBtn.addEventListener("click", runStep4);
     claimCellsBtn.addEventListener("click", runStep5);
-
+    expandBtn.addEventListener("click", runStep6);
     initMap();
   </script>
 </body>
