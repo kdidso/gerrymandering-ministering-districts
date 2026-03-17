@@ -289,9 +289,10 @@
         <h2>District assignment, polygons, and claiming cells</h2>
         <p>
           Step 3 assigns districts by ordered latitude/longitude batches within each group, while keeping
-          same-cell points together, then draws district polygons and escape routes. Step 4 finalizes polygon
-          overlaps so older polygons win. Step 5 claims cells from finalized polygons and also claims cells
-          containing that district’s own points.
+          same-cell points together, then draws district areas and escape routes. Step 4 finalizes overlaps
+          at the cell-mask level so older districts win and trapped foreign points can escape through carved
+          corridors. Step 5 claims cells from those finalized district masks and also claims cells containing
+          that district’s own points.
         </p>
 
         <div class="row">
@@ -2070,7 +2071,7 @@ function drawStep4Polygons(finalResult) {
   const features = [];
 
   for (const row of finalResult.rows) {
-    if (!row.finalCellIds) continue;
+    if (!row.finalCellIds || !row.finalCellIds.size) continue;
 
     const districtId = row.districtId;
 
@@ -2085,15 +2086,18 @@ function drawStep4Polygons(finalResult) {
   finalPolygonLayer = L.geoJSON(
     { type: "FeatureCollection", features },
     {
-      style: function (feature) {
-        const districtId = feature.properties._district;
-        const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
-
+      style: function(feature) {
         return {
-          color: "#000000",
-          weight: 5,
-          opacity: 1
+          color: "#374151",
+          weight: 2,
+          opacity: 0.8
         };
+      },
+      onEachFeature: function(feature, layer) {
+        const districtId = feature.properties._district;
+        layer.bindPopup(
+          `<strong>District ${districtId + 1}</strong><br>Step 4 finalized masked boundary`
+        );
       }
     }
   ).addTo(map);
@@ -2101,35 +2105,40 @@ function drawStep4Polygons(finalResult) {
   if (finalPolygonLayer.bringToFront) {
     finalPolygonLayer.bringToFront();
   }
+  if (districtPointLayer && districtPointLayer.bringToFront) {
+    districtPointLayer.bringToFront();
+  }
 }
 
-    function drawClaimedCells(claimResult) {
-      if (claimedCellLayer) {
-        map.removeLayer(claimedCellLayer);
-        claimedCellLayer = null;
-      }
+function drawClaimedCells(claimResult) {
+  if (claimedCellLayer) {
+    map.removeLayer(claimedCellLayer);
+    claimedCellLayer = null;
+  }
 
-      claimedCellLayer = L.geoJSON(
-        { type: "FeatureCollection", features: claimResult.claimedFeatures },
-        {
-          style: function(feature) {
-            const districtId = feature.properties._district;
-            const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
-            return {
-              color: "#059669",
-              weight: 1,
-              opacity: 0.7,
-              fillColor: color,
-              fillOpacity: 0.28
-            };
-          },
-          onEachFeature: function(feature, layer) {
-            const districtId = feature.properties._district;
-            layer.bindPopup(`<strong>District ${districtId + 1}</strong><br>Claimed Step 5 cell`);
-          }
-        }
-      ).addTo(map);
+  claimedCellLayer = L.geoJSON(
+    { type: "FeatureCollection", features: claimResult.claimedFeatures },
+    {
+      style: function(feature) {
+        const districtId = feature.properties._district;
+        const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+        return {
+          color: "#374151",
+          weight: 0.35,
+          opacity: 0.3,
+          fillColor: color,
+          fillOpacity: 0.24
+        };
+      },
+      onEachFeature: function(feature, layer) {
+        const districtId = feature.properties._district;
+        layer.bindPopup(
+          `<strong>District ${districtId + 1}</strong><br>Claimed Step 5 cell`
+        );
+      }
     }
+  ).addTo(map);
+}
 
     function renderStep3Summary(pointDistricts, polygonResult) {
       resetGerrySummary();
@@ -2160,14 +2169,15 @@ function drawStep4Polygons(finalResult) {
       }
     }
 
-    function renderStep4Summary(finalResult) {
+function renderStep4Summary(finalResult) {
   resetGerrySummary();
 
   const intro = document.createElement("div");
   intro.className = "district-row";
   intro.innerHTML = `<strong>Step 4 complete</strong><br>
-    Step 3 polygons were first redrawn so older polygons kept overlapping areas and later polygons were erased back to shared edges.
-    Then trapped foreign points were checked and escape corridors were carved through the polygon mask by removing corridor cells.`;
+    Step 3 district areas were finalized at the cell-mask level. Older districts kept overlapping cells,
+    later districts were erased back to shared edges, and escape corridors were carved where trapped foreign
+    points needed a path out of the wrong district mask.`;
   gerrySummary.appendChild(intro);
 
   for (const rowData of finalResult.rows) {
@@ -2429,7 +2439,7 @@ function runStep4() {
       const finalResult = finalizeDistrictPolygons(currentDistrictPolygons, currentPointDistricts);
       perfEnd("STEP 4 finalizeDistrictPolygons");
 
-      const finalCount = finalResult.rows.filter(r => r.finalPolygon).length;
+      const finalCount = finalResult.rows.filter(r => r.finalCellIds && r.finalCellIds.size).length;
       console.log("Step 4 final polygon count:", finalCount, finalResult);
 
       currentFinalDistrictPolygons = finalResult;
@@ -2451,7 +2461,7 @@ function runStep4() {
 
       setStatus(
         gerryStatus,
-        `Step 4 complete. ${finalCount} final district polygons were created after overlap removal.`,
+        `Step 4 complete. ${finalCount} finalized district masks were created after overlap removal and escape-route carving.`,
         "good"
       );
     } catch (error) {
