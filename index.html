@@ -395,6 +395,13 @@
     const metricAssignments = document.getElementById("metricAssignments");
     const metricOutside = document.getElementById("metricOutside");
 
+    function perfStart(label) {
+  console.time(label);
+}
+
+function perfEnd(label) {
+  console.timeEnd(label);
+}
     function setStatus(el, text, cls = "") {
       el.textContent = text;
       el.className = "status" + (cls ? " " + cls : "");
@@ -1593,6 +1600,8 @@ function carveEscapeRoutesFromCellMask(maskCellIds, district, trappedForeign) {
   };
 }
 function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
+  perfStart("finalizeDistrictPolygons internal");
+
   const finalized = [];
   const olderClaimedCellIds = new Set();
 
@@ -1617,7 +1626,10 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
     }
 
     const ownPointCellIds = getDistrictOwnPointCellIds(district);
+
+    perfStart(`STEP 4 district ${district.id + 1} cellsCovered`);
     const originalCellIds = getCellsCoveredByPolygon(row.adjustedPolygon);
+    perfEnd(`STEP 4 district ${district.id + 1} cellsCovered`);
 
     let areaBefore = 0;
     try {
@@ -1639,7 +1651,13 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
 
     let overlapPolygon = null;
     if (overlapCellIds.size) {
-      overlapPolygon = buildPolygonFromCellIds(overlapCellIds, district.id, "step4-overlap-finalized");
+      perfStart(`STEP 4 district ${district.id + 1} rebuildOverlapPolygon`);
+      overlapPolygon = buildPolygonFromCellIds(
+        overlapCellIds,
+        district.id,
+        "step4-overlap-finalized"
+      );
+      perfEnd(`STEP 4 district ${district.id + 1} rebuildOverlapPolygon`);
     }
 
     let areaAfterOverlap = 0;
@@ -1651,15 +1669,35 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
       }
     }
 
-    // Step 4B: find trapped foreign points and carve escape corridors
-    const trappedForeign = getForeignPointsInsideCellMask(pointDistricts, district.id, overlapCellIds);
-    const escapeResult = carveEscapeRoutesFromCellMask(overlapCellIds, district, trappedForeign);
+    // Step 4B: detect trapped foreign points inside the overlap-finalized cell mask
+    perfStart(`STEP 4 district ${district.id + 1} trappedForeign`);
+    const trappedForeign = getForeignPointsInsideCellMask(
+      pointDistricts,
+      district.id,
+      overlapCellIds
+    );
+    perfEnd(`STEP 4 district ${district.id + 1} trappedForeign`);
+
+    // Step 4C: carve escape corridors through the cell mask
+    perfStart(`STEP 4 district ${district.id + 1} carveEscapeRoutes`);
+    const escapeResult = carveEscapeRoutesFromCellMask(
+      overlapCellIds,
+      district,
+      trappedForeign
+    );
+    perfEnd(`STEP 4 district ${district.id + 1} carveEscapeRoutes`);
 
     const finalCellIds = escapeResult.finalCellIds;
     let finalPolygon = null;
 
     if (finalCellIds.size) {
-      finalPolygon = buildPolygonFromCellIds(finalCellIds, district.id, "step4-final-masked");
+      perfStart(`STEP 4 district ${district.id + 1} rebuildFinalPolygon`);
+      finalPolygon = buildPolygonFromCellIds(
+        finalCellIds,
+        district.id,
+        "step4-final-masked"
+      );
+      perfEnd(`STEP 4 district ${district.id + 1} rebuildFinalPolygon`);
     }
 
     let areaAfterEscape = 0;
@@ -1671,7 +1709,7 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
       }
     }
 
-    // older districts keep the final mask they ended with
+    // Older polygons keep the final mask they ended with
     for (const cid of finalCellIds) {
       olderClaimedCellIds.add(String(cid));
     }
@@ -1690,6 +1728,8 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
       unresolvedForeignCount: escapeResult.unresolvedCount
     });
   }
+
+  perfEnd("finalizeDistrictPolygons internal");
 
   return {
     rows: finalized
@@ -1890,6 +1930,8 @@ escapedCount++;
 }
 
 function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
+  perfStart("buildClaimCellsFromFinalPolygons internal");
+
   const owner = new Map();
   const countByDistrict = new Map();
 
@@ -1897,7 +1939,7 @@ function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
     countByDistrict.set(district.id, 0);
   }
 
-  // First: cells within each finalized masked polygon result
+  // First: claim cells from each finalized Step 4 masked cell set
   for (const row of finalResult.rows) {
     const districtId = row.districtId;
     const finalCellIds = row.finalCellIds ? [...row.finalCellIds] : [];
@@ -1910,7 +1952,7 @@ function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
     }
   }
 
-  // Second: add cells containing that district's own points
+  // Second: force in all cells containing the district's own points
   for (const district of pointDistricts) {
     for (const item of district.members) {
       const cellId = item.cellId ? String(item.cellId) : null;
@@ -1931,9 +1973,15 @@ function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
       _district: districtId,
       _pieceType: "claimed-cell"
     };
+
     claimedFeatures.push(clone);
-    countByDistrict.set(districtId, (countByDistrict.get(districtId) || 0) + 1);
+    countByDistrict.set(
+      districtId,
+      (countByDistrict.get(districtId) || 0) + 1
+    );
   }
+
+  perfEnd("buildClaimCellsFromFinalPolygons internal");
 
   return {
     owner,
@@ -2334,135 +2382,164 @@ function drawStep4Polygons(finalResult) {
     }
 
     function runStep3() {
-      if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
-        setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
-        return;
+  if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
+    setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
+    return;
+  }
+
+  setStatus(gerryStatus, "Assigning ordered district groups and building district polygons...", "warn");
+
+  setTimeout(() => {
+    try {
+      removeDistrictLayers();
+
+      perfStart("STEP 3 TOTAL");
+
+      perfStart("STEP 3 assignDistrictsByOrderedGroups");
+      const pointDistricts = assignDistrictsByOrderedGroups(
+        currentFiltered,
+        currentDistrictTargets.districtCount
+      );
+      perfEnd("STEP 3 assignDistrictsByOrderedGroups");
+
+      if (!pointDistricts || !pointDistricts.length) {
+        throw new Error("Could not assign districts.");
       }
 
-      setStatus(gerryStatus, "Assigning ordered district groups and building district polygons...", "warn");
+      perfStart("STEP 3 buildAdjustedDistrictPolygons");
+      const polygonResult = buildAdjustedDistrictPolygons(pointDistricts);
+      perfEnd("STEP 3 buildAdjustedDistrictPolygons");
 
-      setTimeout(() => {
-        try {
-          removeDistrictLayers();
+      currentPointDistricts = pointDistricts;
+      currentDistrictPolygons = polygonResult;
+      currentFinalDistrictPolygons = null;
+      currentClaimResult = null;
 
-          const pointDistricts = assignDistrictsByOrderedGroups(
-            currentFiltered,
-            currentDistrictTargets.districtCount
-          );
+      removeFilteredPreviewLayer();
 
-          if (!pointDistricts || !pointDistricts.length) {
-            throw new Error("Could not assign districts.");
-          }
+      perfStart("STEP 3 draw");
+      drawDistrictPoints(pointDistricts);
+      drawStep3Polygons(polygonResult);
+      renderStep3Summary(pointDistricts, polygonResult);
+      perfEnd("STEP 3 draw");
 
-          const polygonResult = buildAdjustedDistrictPolygons(pointDistricts);
+      regerrymanderBtn.disabled = false;
+      finalizePolygonsBtn.disabled = false;
+      claimCellsBtn.disabled = true;
 
-          currentPointDistricts = pointDistricts;
-          currentDistrictPolygons = polygonResult;
-          currentFinalDistrictPolygons = null;
-          currentClaimResult = null;
+      perfEnd("STEP 3 TOTAL");
 
-          removeFilteredPreviewLayer();
-          drawDistrictPoints(pointDistricts);
-          drawStep3Polygons(polygonResult);
-          renderStep3Summary(pointDistricts, polygonResult);
-
-          regerrymanderBtn.disabled = false;
-          finalizePolygonsBtn.disabled = false;
-          claimCellsBtn.disabled = true;
-
-          setStatus(
-            gerryStatus,
-            "Step 3 complete. District points and adjusted polygons were created using the new ordered group/cell method.",
-            "good"
-          );
-        } catch (error) {
-          console.error(error);
-          setStatus(
-            gerryStatus,
-            `Step 3 failed: ${error?.message || error}`,
-            "error"
-          );
-        }
-      }, 40);
+      setStatus(
+        gerryStatus,
+        "Step 3 complete. District points and adjusted polygons were created using the new ordered group/cell method.",
+        "good"
+      );
+    } catch (error) {
+      console.error(error);
+      setStatus(
+        gerryStatus,
+        `Step 3 failed: ${error?.message || error}`,
+        "error"
+      );
     }
-
-    function runStep4() {
-      if (!currentPointDistricts || !currentDistrictPolygons) {
-        setStatus(gerryStatus, "Run Step 3 first.", "warn");
-        return;
-      }
-
-      setStatus(gerryStatus, "Finalizing district polygons and removing overlaps...", "warn");
-
-      setTimeout(() => {
-        try {
-const finalResult = finalizeDistrictPolygons(currentDistrictPolygons, currentPointDistricts);
-const finalCount = finalResult.rows.filter(r => r.finalPolygon).length;
-console.log("Step 4 final polygon count:", finalCount, finalResult);
-
-currentFinalDistrictPolygons = finalResult;
-currentClaimResult = null;
-
-if (claimedCellLayer) {
-  map.removeLayer(claimedCellLayer);
-  claimedCellLayer = null;
+  }, 40);
 }
 
-drawStep4Polygons(finalResult);
-renderStep4Summary(finalResult);
+function runStep4() {
+  if (!currentPointDistricts || !currentDistrictPolygons) {
+    setStatus(gerryStatus, "Run Step 3 first.", "warn");
+    return;
+  }
 
-          claimCellsBtn.disabled = false;
+  setStatus(gerryStatus, "Finalizing district polygons and removing overlaps...", "warn");
 
-          setStatus(
-            gerryStatus,
-            `Step 4 complete. ${finalCount} final district polygons were created after overlap removal.`,
-            "good"
-);
-        } catch (error) {
-          console.error(error);
-          setStatus(
-            gerryStatus,
-            `Step 4 failed: ${error?.message || error}`,
-            "error"
-          );
-        }
-      }, 40);
-    }
+  setTimeout(() => {
+    try {
+      perfStart("STEP 4 TOTAL");
 
-    function runStep5() {
-      if (!currentPointDistricts || !currentFinalDistrictPolygons) {
-        setStatus(gerryStatus, "Run Step 4 first.", "warn");
-        return;
+      perfStart("STEP 4 finalizeDistrictPolygons");
+      const finalResult = finalizeDistrictPolygons(currentDistrictPolygons, currentPointDistricts);
+      perfEnd("STEP 4 finalizeDistrictPolygons");
+
+      const finalCount = finalResult.rows.filter(r => r.finalPolygon).length;
+      console.log("Step 4 final polygon count:", finalCount, finalResult);
+
+      currentFinalDistrictPolygons = finalResult;
+      currentClaimResult = null;
+
+      if (claimedCellLayer) {
+        map.removeLayer(claimedCellLayer);
+        claimedCellLayer = null;
       }
 
-      setStatus(gerryStatus, "Claiming cells from finalized polygons...", "warn");
+      perfStart("STEP 4 draw");
+      drawStep4Polygons(finalResult);
+      renderStep4Summary(finalResult);
+      perfEnd("STEP 4 draw");
 
-      setTimeout(() => {
-        try {
-          const claimResult = buildClaimCellsFromFinalPolygons(
-            currentFinalDistrictPolygons,
-            currentPointDistricts
-          );
+      claimCellsBtn.disabled = false;
 
-          currentClaimResult = claimResult;
-          drawClaimedCells(claimResult);
-          renderStep5Summary(claimResult);
+      perfEnd("STEP 4 TOTAL");
 
-          setStatus(
-            gerryStatus,
-            `Step 5 complete. Claimed ${claimResult.claimedFeatures.length} cells from finalized district polygons and district point cells.`,
-            "good"
-          );
-        } catch (error) {
-          console.error(error);
-          setStatus(
-            gerryStatus,
-            `Step 5 failed: ${error?.message || error}`,
-            "error"
-          );
-        }
-      }, 40);
+      setStatus(
+        gerryStatus,
+        `Step 4 complete. ${finalCount} final district polygons were created after overlap removal.`,
+        "good"
+      );
+    } catch (error) {
+      console.error(error);
+      setStatus(
+        gerryStatus,
+        `Step 4 failed: ${error?.message || error}`,
+        "error"
+      );
     }
+  }, 40);
+}
+
+function runStep5() {
+  if (!currentPointDistricts || !currentFinalDistrictPolygons) {
+    setStatus(gerryStatus, "Run Step 4 first.", "warn");
+    return;
+  }
+
+  setStatus(gerryStatus, "Claiming cells from finalized polygons...", "warn");
+
+  setTimeout(() => {
+    try {
+      perfStart("STEP 5 TOTAL");
+
+      perfStart("STEP 5 buildClaimCellsFromFinalPolygons");
+      const claimResult = buildClaimCellsFromFinalPolygons(
+        currentFinalDistrictPolygons,
+        currentPointDistricts
+      );
+      perfEnd("STEP 5 buildClaimCellsFromFinalPolygons");
+
+      currentClaimResult = claimResult;
+
+      perfStart("STEP 5 draw");
+      drawClaimedCells(claimResult);
+      renderStep5Summary(claimResult);
+      perfEnd("STEP 5 draw");
+
+      perfEnd("STEP 5 TOTAL");
+
+      setStatus(
+        gerryStatus,
+        `Step 5 complete. Claimed ${claimResult.claimedFeatures.length} cells from finalized district polygons and district point cells.`,
+        "good"
+      );
+    } catch (error) {
+      console.error(error);
+      setStatus(
+        gerryStatus,
+        `Step 5 failed: ${error?.message || error}`,
+        "error"
+      );
+    }
+  }, 40);
+}
 
     function resetPage() {
       currentFiltered = [];
