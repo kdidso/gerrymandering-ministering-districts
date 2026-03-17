@@ -1726,27 +1726,26 @@ function carveEscapeRoutesFromPolygon(polygon, district, trappedForeign) {
       continue;
     }
 
-    let best = chooseBestSinglePolygonPart(erased, district);
-    if (!best) {
-      unresolvedCount++;
-      continue;
-    }
+  if (!erased) {
+  unresolvedCount++;
+  continue;
+}
 
     // verify the foreign point can now escape
-    let nowInside = false;
-    try {
-      nowInside = turf.booleanPointInPolygon(foreignPoint, best);
-    } catch (err) {
-      nowInside = false;
-    }
+let nowInside = false;
+try {
+  nowInside = turf.booleanPointInPolygon(foreignPoint, erased);
+} catch (err) {
+  nowInside = false;
+}
 
-    if (nowInside) {
-      unresolvedCount++;
-      continue;
-    }
+if (nowInside) {
+  unresolvedCount++;
+  continue;
+}
 
-    currentPolygon = best;
-    escapedCount++;
+currentPolygon = erased;
+escapedCount++;
   }
 
   currentPolygon.properties = {
@@ -1951,7 +1950,8 @@ function drawStep4Polygons(finalResult) {
     .map(r => cloneFeature(r.finalPolygon));
 
   console.log("STEP 4 FINAL MASKED POLYGONS:", finalFeatures);
-
+  console.log("STEP 4 GEOMETRY TYPES:", finalFeatures.map(f => f?.geometry?.type)
+);
   finalPolygonLayer = L.geoJSON(
     { type: "FeatureCollection", features: finalFeatures },
     {
