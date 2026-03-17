@@ -559,11 +559,34 @@ function chooseBestNeighborDistrictForComponent(component, districtId, owner) {
   return bestDistrict;
 }
 function findBestCorridorToMainComponent(component, mainComponentSet, districtId, owner, protectedByDistrict) {
+  // First try: only same-district and unclaimed cells
+  let path = findBestCorridorToMainComponentInternal(
+    component,
+    mainComponentSet,
+    districtId,
+    owner,
+    protectedByDistrict,
+    false
+  );
+
+  if (path && path.length) return path;
+
+  // Fallback: allow foreign non-protected cells
+  return findBestCorridorToMainComponentInternal(
+    component,
+    mainComponentSet,
+    districtId,
+    owner,
+    protectedByDistrict,
+    true
+  );
+}
+
+function findBestCorridorToMainComponentInternal(component, mainComponentSet, districtId, owner, protectedByDistrict, allowForeign) {
   const startIds = component.map(String);
   const distances = new Map();
   const parent = new Map();
   const visited = new Set();
-
   const queue = [];
 
   function push(nodeId, cost) {
@@ -602,17 +625,16 @@ function findBestCorridorToMainComponent(component, mainComponentSet, districtId
       if (visited.has(neighborId)) continue;
 
       const currentOwner = owner.get(neighborId);
-
       let stepCost = Infinity;
 
-      if (currentOwner == null) {
-        stepCost = 1; // prefer unclaimed
-      } else if (currentOwner === districtId) {
+      if (currentOwner === districtId) {
         stepCost = 0;
-      } else {
+      } else if (currentOwner == null) {
+        stepCost = 1;
+      } else if (allowForeign) {
         const foreignProtected = protectedByDistrict.get(currentOwner) || new Set();
         if (!foreignProtected.has(neighborId)) {
-          stepCost = 5; // allowed, but more expensive than unclaimed
+          stepCost = 1000;
         }
       }
 
