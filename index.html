@@ -1720,6 +1720,12 @@ function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
     }
 
 function drawStep4Polygons(finalResult) {
+  // Remove all Step 3 polygon visuals so Step 4 fully replaces them
+  if (rawHullLayer) {
+    map.removeLayer(rawHullLayer);
+    rawHullLayer = null;
+  }
+
   if (adjustedPolygonLayer) {
     map.removeLayer(adjustedPolygonLayer);
     adjustedPolygonLayer = null;
@@ -1744,9 +1750,8 @@ function drawStep4Polygons(finalResult) {
           color,
           weight: 6,
           opacity: 1,
-          dashArray: null,
           fillColor: color,
-          fillOpacity: 0.04
+          fillOpacity: 0.03
         };
       },
       onEachFeature: function(feature, layer) {
