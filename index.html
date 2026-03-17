@@ -1479,7 +1479,6 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
       areaBefore = 0;
     }
 
-    // Erase by all older polygons at once
     if (olderUnion) {
       let erased = null;
 
@@ -1492,16 +1491,16 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
       if (!erased) {
         console.warn("Difference failed — keeping original polygon for district", district.id);
       } else {
-        let area = 0;
+        let erasedArea = 0;
 
         try {
-          area = turf.area(erased);
+          erasedArea = turf.area(erased);
         } catch (err) {
-          area = 0;
+          erasedArea = 0;
         }
 
-        if (area < 1) {
-          console.warn("Erased polygon too small — keeping original for district", district.id);
+        if (erasedArea < 1) {
+          console.warn("Erased polygon too small — keeping original polygon for district", district.id);
         } else {
           if (JSON.stringify(erased.geometry) !== JSON.stringify(working.geometry)) {
             overlapRemoved = true;
@@ -1527,50 +1526,6 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
           areaAfter = 0;
         }
 
-        if (!olderUnion) {
-          olderUnion = cloneFeature(working);
-        } else {
-          try {
-            const unioned = turf.union(turf.featureCollection([olderUnion, working]));
-            if (unioned) olderUnion = unioned;
-          } catch (err) {}
-        }
-      }
-    }
-
-    finalized.push({
-      districtId: district.id,
-      finalPolygon: working,
-      overlapRemoved,
-      areaBefore,
-      areaAfter
-    });
-  }
-
-  return {
-    rows: finalized
-  };
-}
-    }
-
-    if (working) {
-      working.properties = {
-        ...(working.properties || {}),
-        _district: district.id,
-        _polyType: "final-no-overlap"
-      };
-
-      // If multipart remains, keep the best single piece
-      working = chooseBestSinglePolygonPart(working, district);
-
-      if (working) {
-        try {
-          areaAfter = turf.area(working);
-        } catch (err) {
-          areaAfter = 0;
-        }
-
-        // add this finished polygon to the running older union
         if (!olderUnion) {
           olderUnion = cloneFeature(working);
         } else {
