@@ -3294,14 +3294,18 @@ function runStep7() {
       fitMapToWard();
     }
 
-    function initMap() {
-      map = L.map("map", { zoomControl: true });
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap contributors"
-      }).addTo(map);
+function initMap() {
+  map = L.map("map", {
+    zoomControl: true,
+    preferCanvas: true
+  });
 
-      loadAllData();
-    }
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap contributors"
+  }).addTo(map);
+
+  loadAllData();
+}
 
     async function loadAllData() {
       setStatus(loadStatus, "Loading data...");
