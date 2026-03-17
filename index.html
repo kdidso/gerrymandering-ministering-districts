@@ -1561,44 +1561,75 @@ function findEscapeCorridorCellsWithinMask(startCellId, maskCellIds, protectedCe
   return null;
 }
 
-function carveEscapeRoutesFromCellMask(maskCellIds, district, trappedForeign) {
-  const finalCellIds = new Set([...maskCellIds]);
+function carveEscapeRoutesFromCellMask(maskCellIds, district, pointDistricts, districtId, maxPasses = 12) {
+  let finalCellIds = new Set([...maskCellIds]);
   const protectedCellIds = getDistrictOwnPointCellIds(district);
 
-  let escapedCount = 0;
+  let totalEscapedCount = 0;
   let unresolvedCount = 0;
 
-  for (const foreign of trappedForeign) {
-    const foreignCellId = foreign.item.cellId ? String(foreign.item.cellId) : null;
-
-    if (!foreignCellId || !finalCellIds.has(foreignCellId)) {
-      unresolvedCount++;
-      continue;
-    }
-
-    const corridor = findEscapeCorridorCellsWithinMask(
-      foreignCellId,
-      finalCellIds,
-      protectedCellIds
+  for (let pass = 0; pass < maxPasses; pass++) {
+    const trappedForeign = getForeignPointsInsideCellMask(
+      pointDistricts,
+      districtId,
+      finalCellIds
     );
 
-    if (!corridor || !corridor.length) {
-      unresolvedCount++;
-      continue;
+    if (!trappedForeign.length) {
+      unresolvedCount = 0;
+      break;
     }
 
-    for (const cid of corridor) {
-      if (!protectedCellIds.has(String(cid))) {
-        finalCellIds.delete(String(cid));
+    let changedThisPass = false;
+    let unresolvedThisPass = 0;
+
+    for (const foreign of trappedForeign) {
+      const foreignCellId = foreign.item.cellId ? String(foreign.item.cellId) : null;
+
+      if (!foreignCellId || !finalCellIds.has(foreignCellId)) {
+        unresolvedThisPass++;
+        continue;
+      }
+
+      const corridor = findEscapeCorridorCellsWithinMask(
+        foreignCellId,
+        finalCellIds,
+        protectedCellIds
+      );
+
+      if (!corridor || !corridor.length) {
+        unresolvedThisPass++;
+        continue;
+      }
+
+      let removedAny = false;
+
+      for (const cid of corridor) {
+        const id = String(cid);
+        if (!protectedCellIds.has(id) && finalCellIds.has(id)) {
+          finalCellIds.delete(id);
+          removedAny = true;
+        }
+      }
+
+      if (removedAny) {
+        totalEscapedCount++;
+        changedThisPass = true;
+      } else {
+        unresolvedThisPass++;
       }
     }
 
-    escapedCount++;
+    unresolvedCount = unresolvedThisPass;
+
+    if (!changedThisPass) {
+      break;
+    }
   }
 
   return {
     finalCellIds,
-    escapedCount,
+    escapedCount: totalEscapedCount,
     unresolvedCount
   };
 }
@@ -1678,11 +1709,13 @@ function finalizeDistrictPolygons(adjustedResult, pointDistricts) {
 
     // Step 4C: carve escape corridors through the cell mask
     perfStart(`STEP 4 district ${district.id + 1} carveEscapeRoutes`);
-    const escapeResult = carveEscapeRoutesFromCellMask(
-      overlapCellIds,
-      district,
-      trappedForeign
-    );
+const escapeResult = carveEscapeRoutesFromCellMask(
+  overlapCellIds,
+  district,
+  pointDistricts,
+  district.id,
+  12
+);
     perfEnd(`STEP 4 district ${district.id + 1} carveEscapeRoutes`);
 
     const finalCellIds = escapeResult.finalCellIds;
