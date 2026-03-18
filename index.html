@@ -481,43 +481,15 @@
     const stepProgressBar = document.getElementById("stepProgressBar");
     const stepProgressText = document.getElementById("stepProgressText");
 
-function startStep3Progress() {
-  step3ProgressStartTime = Date.now();
-
-  if (step3ProgressInterval) {
-    clearInterval(step3ProgressInterval);
-    step3ProgressInterval = null;
-  }
-
+ function showStepProgress(percent, text = "") {
   stepProgressWrap.style.display = "block";
-  stepProgressBar.style.width = "0%";
-  stepProgressText.textContent = "0%";
-
-  step3ProgressInterval = setInterval(() => {
-    const elapsed = Date.now() - step3ProgressStartTime;
-
-    // Reach 99% at about 45 seconds, then stay there
-    const progress = Math.min(99, (elapsed / STEP3_ESTIMATED_MS) * 99);
-
-    stepProgressBar.style.width = `${progress}%`;
-    stepProgressText.textContent = `${Math.floor(progress)}%`;
-  }, 200);
+  stepProgressBar.style.width = `${percent}%`;
+  stepProgressText.textContent = text || `${Math.floor(percent)}%`;
 }
 
-function finishStep3Progress() {
-  if (step3ProgressInterval) {
-    clearInterval(step3ProgressInterval);
-    step3ProgressInterval = null;
-  }
-
-  stepProgressBar.style.width = "100%";
-  stepProgressText.textContent = "100%";
-
-  setTimeout(() => {
-    stepProgressWrap.style.display = "none";
-  }, 400);
+function hideStepProgress() {
+  stepProgressWrap.style.display = "none";
 }
-    
 function updateCellsLayerVisibility() {
   if (!map || !cellsOutlineLayer) return;
 
@@ -2842,16 +2814,18 @@ function runStep3() {
 
   setStatus(gerryStatus, "Assigning ordered district groups and building district polygons...", "warn");
   showStepSpinner("Running Step 3...");
-  startStep3Progress();
+  showStepProgress(10, "Starting Step 3...");
 
   setTimeout(async () => {
     try {
       removeDistrictLayers();
 
+      showStepProgress(25, "Loading cell support data...");
       await ensureCellSupportDataLoaded();
 
       perfStart("STEP 3 TOTAL");
 
+      showStepProgress(45, "Assigning districts...");
       perfStart("STEP 3 assignDistrictsByOrderedGroups");
       const pointDistricts = assignDistrictsByOrderedGroups(
         currentFiltered,
@@ -2863,6 +2837,7 @@ function runStep3() {
         throw new Error("Could not assign districts.");
       }
 
+      showStepProgress(75, "Building district polygons...");
       perfStart("STEP 3 buildAdjustedDistrictPolygons");
       const polygonResult = buildAdjustedDistrictPolygons(pointDistricts);
       perfEnd("STEP 3 buildAdjustedDistrictPolygons");
@@ -2874,6 +2849,7 @@ function runStep3() {
 
       removeFilteredPreviewLayer();
 
+      showStepProgress(92, "Drawing results...");
       perfStart("STEP 3 draw");
       drawDistrictPoints(pointDistricts);
       drawStep3Polygons(polygonResult);
@@ -2888,8 +2864,13 @@ function runStep3() {
       fillBtn.disabled = true;
 
       perfEnd("STEP 3 TOTAL");
-      finishStep3Progress();
-      hideStepSpinner();
+
+      showStepProgress(100, "Step 3 complete");
+
+      setTimeout(() => {
+        hideStepProgress();
+        hideStepSpinner();
+      }, 250);
 
       setStatus(
         gerryStatus,
@@ -2898,7 +2879,7 @@ function runStep3() {
       );
     } catch (error) {
       console.error(error);
-      finishStep3Progress();
+      hideStepProgress();
       hideStepSpinner();
 
       setStatus(
