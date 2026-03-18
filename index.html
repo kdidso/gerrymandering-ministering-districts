@@ -194,6 +194,38 @@
         border-right: none;
         border-bottom: 1px solid var(--border);
       }
+.spinner-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 3px solid #d9dfeb;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+
+.spinner-text {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
     }
   </style>
 </head>
@@ -310,7 +342,10 @@
           <button id="regerrymanderBtn" class="secondary" disabled>Re-run Step 3</button>
           <button id="fillBtn" class="secondary" disabled>Run Step 7</button>
         </div>
-
+         <div id="stepSpinner" class="spinner-wrap" style="display: none;">
+          <div class="spinner"></div>
+          <div class="spinner-text">Working...</div>
+        </div>
         <div id="gerryStatus" class="status">Calculate targets first.</div>
         <div class="district-summary" id="gerrySummary"></div>
 
@@ -407,6 +442,7 @@
     const metricAssignments = document.getElementById("metricAssignments");
     const metricOutside = document.getElementById("metricOutside");
     const toggleCellsLayer = document.getElementById("toggleCellsLayer");
+    const stepSpinner = document.getElementById("stepSpinner");
    
 function updateCellsLayerVisibility() {
   if (!map || !cellsOutlineLayer) return;
@@ -2724,20 +2760,22 @@ async function ensureCellSupportDataLoaded() {
   chkMetadataLoaded.checked = true;
 }
     
-    function runStep3() {
+function runStep3() {
   if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
     setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
     return;
   }
 
   setStatus(gerryStatus, "Assigning ordered district groups and building district polygons...", "warn");
-setTimeout(async () => {
-  try {
-    removeDistrictLayers();
+  showStepSpinner("Running Step 3...");
 
-    await ensureCellSupportDataLoaded();
+  setTimeout(async () => {
+    try {
+      removeDistrictLayers();
 
-    perfStart("STEP 3 TOTAL");
+      await ensureCellSupportDataLoaded();
+
+      perfStart("STEP 3 TOTAL");
 
       perfStart("STEP 3 assignDistrictsByOrderedGroups");
       const pointDistricts = assignDistrictsByOrderedGroups(
@@ -2768,10 +2806,14 @@ setTimeout(async () => {
       perfEnd("STEP 3 draw");
 
       regerrymanderBtn.disabled = false;
+      gerrymanderBtn.disabled = true;
       finalizePolygonsBtn.disabled = false;
       claimCellsBtn.disabled = true;
+      expandBtn.disabled = true;
+      fillBtn.disabled = true;
 
       perfEnd("STEP 3 TOTAL");
+      hideStepSpinner();
 
       setStatus(
         gerryStatus,
@@ -2780,6 +2822,8 @@ setTimeout(async () => {
       );
     } catch (error) {
       console.error(error);
+      hideStepSpinner();
+
       setStatus(
         gerryStatus,
         `Step 3 failed: ${error?.message || error}`,
@@ -2796,6 +2840,7 @@ function runStep4() {
   }
 
   setStatus(gerryStatus, "Finalizing district polygons and removing overlaps...", "warn");
+  showStepSpinner("Running Step 4...");
 
   setTimeout(() => {
     try {
@@ -2806,7 +2851,6 @@ function runStep4() {
       perfEnd("STEP 4 finalizeDistrictPolygons");
 
       const finalCount = finalResult.rows.filter(r => r.finalCellIds && r.finalCellIds.size).length;
-      console.log("Step 4 final polygon count:", finalCount, finalResult);
 
       currentFinalDistrictPolygons = finalResult;
       currentClaimResult = null;
@@ -2821,9 +2865,15 @@ function runStep4() {
       renderStep4Summary(finalResult);
       perfEnd("STEP 4 draw");
 
+      gerrymanderBtn.disabled = true;
+      regerrymanderBtn.disabled = true;
+      finalizePolygonsBtn.disabled = true;
       claimCellsBtn.disabled = false;
+      expandBtn.disabled = true;
+      fillBtn.disabled = true;
 
       perfEnd("STEP 4 TOTAL");
+      hideStepSpinner();
 
       setStatus(
         gerryStatus,
@@ -2832,6 +2882,8 @@ function runStep4() {
       );
     } catch (error) {
       console.error(error);
+      hideStepSpinner();
+
       setStatus(
         gerryStatus,
         `Step 4 failed: ${error?.message || error}`,
@@ -2848,38 +2900,48 @@ function runStep5() {
   }
 
   setStatus(gerryStatus, "Claiming cells from finalized polygons...", "warn");
+  showStepSpinner("Running Step 5...");
 
   setTimeout(() => {
     try {
       perfStart("STEP 5 TOTAL");
 
       perfStart("STEP 5 buildClaimCellsFromFinalPolygons");
-  const rawClaimResult = buildClaimCellsFromFinalPolygons(
-  currentFinalDistrictPolygons,
-  currentPointDistricts
-);
+      const rawClaimResult = buildClaimCellsFromFinalPolygons(
+        currentFinalDistrictPolygons,
+        currentPointDistricts
+      );
+      perfEnd("STEP 5 buildClaimCellsFromFinalPolygons");
 
-const claimResult = cleanupClaimedDistrictIslands(
-  rawClaimResult,
-  currentPointDistricts
-);
+      const claimResult = cleanupClaimedDistrictIslands(
+        rawClaimResult,
+        currentPointDistricts
+      );
 
-currentClaimResult = claimResult;
+      currentClaimResult = claimResult;
 
-drawClaimedCells(claimResult);
-renderClaimSummary(claimResult);
-      perfEnd("STEP 5 draw");
+      drawClaimedCells(claimResult);
+      renderClaimSummary(claimResult);
+
+      gerrymanderBtn.disabled = true;
+      regerrymanderBtn.disabled = true;
+      finalizePolygonsBtn.disabled = true;
+      claimCellsBtn.disabled = true;
+      expandBtn.disabled = false;
+      fillBtn.disabled = true;
 
       perfEnd("STEP 5 TOTAL");
+      hideStepSpinner();
 
       setStatus(
         gerryStatus,
         `Step 5 complete. Claimed ${claimResult.claimedFeatures.length} cells from finalized district polygons and district point cells.`,
         "good"
       );
-      expandBtn.disabled = false;
     } catch (error) {
       console.error(error);
+      hideStepSpinner();
+
       setStatus(
         gerryStatus,
         `Step 5 failed: ${error?.message || error}`,
@@ -3056,6 +3118,7 @@ function runStep6() {
   }
 
   setStatus(gerryStatus, "Expanding districts safely into unclaimed cells...", "warn");
+  showStepSpinner("Running Step 6...");
 
   setTimeout(() => {
     try {
@@ -3066,27 +3129,38 @@ function runStep6() {
       );
 
       currentClaimResult = expandedResult;
-if (rawHullLayer) {
-  map.removeLayer(rawHullLayer);
-  rawHullLayer = null;
-}
 
-if (finalPolygonLayer) {
-  map.removeLayer(finalPolygonLayer);
-  finalPolygonLayer = null;
-}
+      if (rawHullLayer) {
+        map.removeLayer(rawHullLayer);
+        rawHullLayer = null;
+      }
+
+      if (finalPolygonLayer) {
+        map.removeLayer(finalPolygonLayer);
+        finalPolygonLayer = null;
+      }
 
       drawClaimedCells(expandedResult);
       renderClaimSummary(expandedResult);
+      gerrymanderBtn.disabled = true;
+      regerrymanderBtn.disabled = true;
+      finalizePolygonsBtn.disabled = true;
+      claimCellsBtn.disabled = true;
+      expandBtn.disabled = false;
+      fillBtn.disabled = true;
+      hideStepSpinner();
 
       setStatus(
         gerryStatus,
         `Step 6 complete. Expanded safely to ${expandedResult.claimedFeatures.length} claimed cells without allowing disconnected islands.`,
         "good"
       );
+
       fillBtn.disabled = false;
     } catch (error) {
       console.error(error);
+      hideStepSpinner();
+
       setStatus(
         gerryStatus,
         `Step 6 failed: ${error?.message || error}`,
@@ -3226,6 +3300,7 @@ function runStep7() {
   }
 
   setStatus(gerryStatus, "Filling remaining unclaimed cells...", "warn");
+  showStepSpinner("Running Step 7...");
 
   setTimeout(() => {
     try {
@@ -3239,12 +3314,29 @@ function runStep7() {
 
       currentClaimResult = filledResult;
 
+      if (rawHullLayer) {
+        map.removeLayer(rawHullLayer);
+        rawHullLayer = null;
+      }
+
+      if (finalPolygonLayer) {
+        map.removeLayer(finalPolygonLayer);
+        finalPolygonLayer = null;
+      }
+
       drawClaimedCells(filledResult);
       renderClaimSummary(filledResult);
 
       const afterClaimed = filledResult.claimedFeatures.length;
       const added = afterClaimed - beforeClaimed;
       const remaining = cellsWorking.length - afterClaimed;
+      gerrymanderBtn.disabled = true;
+      regerrymanderBtn.disabled = true;
+      finalizePolygonsBtn.disabled = true;
+      claimCellsBtn.disabled = true;
+      expandBtn.disabled = true;
+      fillBtn.disabled = true;
+      hideStepSpinner();
 
       setStatus(
         gerryStatus,
@@ -3253,6 +3345,8 @@ function runStep7() {
       );
     } catch (error) {
       console.error(error);
+      hideStepSpinner();
+
       setStatus(
         gerryStatus,
         `Step 7 failed: ${error?.message || error}`,
@@ -3276,7 +3370,7 @@ function runStep7() {
 
       removeDistrictLayers();
       removeFilteredPreviewLayer();
-
+      hideStepSpinner();
       if (allMembersLayer) {
         allMembersLayer.setStyle({
           radius: 5,
@@ -3315,7 +3409,18 @@ function initMap() {
 
   loadAllData();
 }
+    
+function showStepSpinner(text = "Working...") {
+  if (!stepSpinner) return;
+  stepSpinner.style.display = "flex";
+  const textEl = stepSpinner.querySelector(".spinner-text");
+  if (textEl) textEl.textContent = text;
+}
 
+function hideStepSpinner() {
+  if (!stepSpinner) return;
+  stepSpinner.style.display = "none";
+}
     async function loadAllData() {
       setStatus(loadStatus, "Loading data...");
       try {
