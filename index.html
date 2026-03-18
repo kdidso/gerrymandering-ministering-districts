@@ -1085,7 +1085,7 @@ function perfEnd(label) {
 
     
 async function saveToBackend(payload) {
-  const resp = await fetch("https://ministering-distric-boundaries.onrender.com/save-districts", {
+  const resp = await fetch("https://shiny-tooth-c6a6.idsokyle.workers.dev/save-districts", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -3385,22 +3385,18 @@ function buildDistrictAssignmentPayload(claimResult) {
       districtMap.set(dId, []);
     }
 
-    districtMap.get(dId).push(String(cellId));
+    districtMap.get(dId).push(Number(cellId));
   }
-
-  const districts = [...districtMap.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([districtId, cellIds]) => ({
-      district_id: districtId,
-      district_color: DISTRICT_COLORS[districtId % DISTRICT_COLORS.length],
-      cell_ids: cellIds.sort((a, b) => Number(a) - Number(b))
-    }));
 
   return {
     type: "district_cell_assignment",
-    created_at: new Date().toISOString(),
-    district_count: districts.length,
-    districts
+    districts: [...districtMap.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([districtId, cellIds]) => ({
+        district_id: districtId,
+        district_color: DISTRICT_COLORS[districtId % DISTRICT_COLORS.length],
+        cell_ids: cellIds
+      }))
   };
 }
 async function runStep7() {
@@ -3438,13 +3434,12 @@ async function runStep7() {
       renderClaimSummary(filledResult);
 
       // ✅ 👉 ADD THIS BLOCK RIGHT HERE
-      const geojsonToSave = {
-        type: "FeatureCollection",
-        features: filledResult.claimedFeatures
-      };
+drawClaimedCells(filledResult);
+renderClaimSummary(filledResult);
 
-      await saveToBackend(geojsonToSave);
-      console.log("Saved to backend successfully");
+const payloadToSave = buildDistrictAssignmentPayload(filledResult);
+await saveToBackend(payloadToSave);
+console.log("Saved district assignment payload to backend successfully");
 
       const afterClaimed = filledResult.claimedFeatures.length;
       const added = afterClaimed - beforeClaimed;
