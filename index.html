@@ -3399,6 +3399,42 @@ function buildDistrictAssignmentPayload(claimResult) {
       }))
   };
 }
+    function buildDistrictGeoJSONFromClaimResult(claimResult) {
+  const features = claimResult.claimedFeatures.map(feature => {
+    const clone = cloneFeature(feature);
+    const districtId = Number(clone.properties?._district);
+
+    clone.properties = {
+      ...(clone.properties || {}),
+      district_id: districtId,
+      district_color: DISTRICT_COLORS[districtId % DISTRICT_COLORS.length]
+    };
+
+    return clone;
+  });
+
+  return {
+    type: "FeatureCollection",
+    features
+  };
+}
+
+function downloadGeoJSONFile(geojson, filename = "district_assignment.geojson") {
+  const blob = new Blob([JSON.stringify(geojson, null, 2)], {
+    type: "application/geo+json"
+  });
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  URL.revokeObjectURL(url);
+}
 async function runStep7() {
   if (!currentPointDistricts || !currentClaimResult) {
     setStatus(gerryStatus, "Run Step 6 first.", "warn");
@@ -3433,13 +3469,14 @@ async function runStep7() {
       drawClaimedCells(filledResult);
       renderClaimSummary(filledResult);
 
-      // ✅ 👉 ADD THIS BLOCK RIGHT HERE
-drawClaimedCells(filledResult);
-renderClaimSummary(filledResult);
+      const geojsonToSave = buildDistrictGeoJSONFromClaimResult(filledResult);
 
-const payloadToSave = buildDistrictAssignmentPayload(filledResult);
-await saveToBackend(payloadToSave);
-console.log("Saved district assignment payload to backend successfully");
+      // Download real GeoJSON to browser downloads
+      downloadGeoJSONFile(geojsonToSave, "district_assignment.geojson");
+
+      // Save the same real GeoJSON to backend
+      await saveToBackend(geojsonToSave);
+      console.log("Saved district GeoJSON to backend successfully");
 
       const afterClaimed = filledResult.claimedFeatures.length;
       const added = afterClaimed - beforeClaimed;
@@ -3456,7 +3493,7 @@ console.log("Saved district assignment payload to backend successfully");
 
       setStatus(
         gerryStatus,
-        `Step 7 complete. Added ${added} cells. Remaining unclaimed cells: ${remaining}.`,
+        `Step 7 complete. Added ${added} cells. Remaining unclaimed cells: ${remaining}. GeoJSON downloaded and saved.`,
         "good"
       );
     } catch (error) {
