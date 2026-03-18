@@ -502,7 +502,6 @@
     const stepProgressWrap = document.getElementById("stepProgressWrap");
     const stepProgressBar = document.getElementById("stepProgressBar");
     const stepProgressText = document.getElementById("stepProgressText");
-    const fillBtn = document.getElementById("fillBtn");
     const uploadBtn = document.getElementById("uploadBtn");
     const continueBtn = document.getElementById("continueBtn");
     const step8Card = document.getElementById("step8Card");
@@ -2746,10 +2745,15 @@ function renderStep4Summary(finalResult) {
       currentFinalDistrictPolygons = null;
       currentClaimResult = null;
 
-      regerrymanderBtn.disabled = true;
-      gerrymanderBtn.disabled = true;
-      finalizePolygonsBtn.disabled = true;
-      claimCellsBtn.disabled = true;
+regerrymanderBtn.disabled = true;
+gerrymanderBtn.disabled = true;
+finalizePolygonsBtn.disabled = true;
+claimCellsBtn.disabled = true;
+expandBtn.disabled = true;
+fillBtn.disabled = true;
+uploadBtn.disabled = true;
+continueBtn.disabled = true;
+if (step8Card) step8Card.style.display = "none";
 
       setStatus(gerryStatus, "Calculate targets first.");
 
