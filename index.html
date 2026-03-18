@@ -1083,6 +1083,26 @@ function perfEnd(label) {
       });
     }
 
+    
+async function saveToBackend(finalGeojson) {
+  const resp = await fetch("https://ministering-distric-boundaries.onrender.com/save-districts", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      geojson: finalGeojson,
+      secret: "Dist@nceSw0re"
+    })
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(text || "Save failed");
+  }
+
+  return await resp.json();
+}
     function pointInBBox(coords, bbox) {
       return coords[0] >= bbox[0] && coords[0] <= bbox[2] && coords[1] >= bbox[1] && coords[1] <= bbox[3];
     }
@@ -3355,7 +3375,7 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
   };
 }
 
-function runStep7() {
+async function runStep7() {
   if (!currentPointDistricts || !currentClaimResult) {
     setStatus(gerryStatus, "Run Step 6 first.", "warn");
     return;
@@ -3364,7 +3384,7 @@ function runStep7() {
   setStatus(gerryStatus, "Filling remaining unclaimed cells...", "warn");
   showStepSpinner("Running Step 7...");
 
-  setTimeout(() => {
+  setTimeout(async () => {
     try {
       const beforeClaimed = currentClaimResult.claimedFeatures.length;
 
@@ -3389,15 +3409,26 @@ function runStep7() {
       drawClaimedCells(filledResult);
       renderClaimSummary(filledResult);
 
+      // ✅ 👉 ADD THIS BLOCK RIGHT HERE
+      const geojsonToSave = {
+        type: "FeatureCollection",
+        features: filledResult.claimedFeatures
+      };
+
+      await saveToBackend(geojsonToSave);
+      console.log("Saved to backend successfully");
+
       const afterClaimed = filledResult.claimedFeatures.length;
       const added = afterClaimed - beforeClaimed;
       const remaining = cellsWorking.length - afterClaimed;
+
       gerrymanderBtn.disabled = true;
       regerrymanderBtn.disabled = true;
       finalizePolygonsBtn.disabled = true;
       claimCellsBtn.disabled = true;
       expandBtn.disabled = true;
       fillBtn.disabled = true;
+
       hideStepSpinner();
 
       setStatus(
@@ -3417,6 +3448,8 @@ function runStep7() {
     }
   }, 40);
 }
+    
+    
     function resetPage() {
       currentFiltered = [];
       currentStats = null;
