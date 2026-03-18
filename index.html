@@ -481,7 +481,34 @@
     const stepProgressBar = document.getElementById("stepProgressBar");
     const stepProgressText = document.getElementById("stepProgressText");
 
- function showStepProgress(percent, text = "") {
+ function buildDistrictPointsGeoJSON(pointDistricts) {
+  const features = [];
+
+  for (const district of pointDistricts) {
+    const districtId = district.id;
+    const districtColor = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+
+    for (const item of district.members) {
+      const clone = cloneFeature(item.feature);
+      clone.properties = {
+        ...(clone.properties || {}),
+        district_id: districtId,
+        district_color: districtColor,
+        district_label: districtId + 1,
+        group: item.group,
+        cell_id: item.cellId ?? null
+      };
+      features.push(clone);
+    }
+  }
+
+  return {
+    type: "FeatureCollection",
+    features
+  };
+}
+
+function showStepProgress(percent, text = "") {
   if (!stepProgressWrap || !stepProgressBar || !stepProgressText) return;
   stepProgressWrap.style.display = "block";
   stepProgressBar.style.width = `${percent}%`;
@@ -1084,7 +1111,7 @@ function perfEnd(label) {
     }
 
     
-async function saveToBackend(payload) {
+async function saveToBackend(payload, filename) {
   const resp = await fetch("https://shiny-tooth-c6a6.idsokyle.workers.dev/save-districts", {
     method: "POST",
     headers: {
@@ -1092,6 +1119,7 @@ async function saveToBackend(payload) {
     },
     body: JSON.stringify({
       geojson: payload,
+      filename,
       secret: "Dist@nceSw0re"
     })
   });
@@ -3438,7 +3466,10 @@ drawClaimedCells(filledResult);
 renderClaimSummary(filledResult);
 
 const payloadToSave = buildDistrictAssignmentPayload(filledResult);
-await saveToBackend(payloadToSave);
+const pointsGeoJSON = buildDistrictPointsGeoJSON(currentPointDistricts);
+
+await saveToBackend(payloadToSave, "district_assignment.json");
+await saveToBackend(pointsGeoJSON, "district_points.geojson");
 console.log("Saved district assignment payload to backend successfully");
 
       const afterClaimed = filledResult.claimedFeatures.length;
