@@ -224,7 +224,32 @@
 @keyframes spin {
   to {
     transform: rotate(360deg);
-  }
+  }}
+.progress-wrap {
+  margin-top: 10px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 10px;
+  background: #e5e7eb;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.progress-text {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  font-weight: 700;
+}
 }
     }
   </style>
@@ -346,8 +371,14 @@
           <div class="spinner"></div>
           <div class="spinner-text">Working...</div>
         </div>
+     <div id="stepProgressWrap" class="progress-wrap" style="display:none;">
+        <div class="progress-bar">
+          <div id="stepProgressBar" class="progress-fill"></div>
+        </div>
+        <div id="stepProgressText" class="progress-text">0%</div>
+      </div>
         <div id="gerryStatus" class="status">Calculate targets first.</div>
-        <div class="district-summary" id="gerrySummary"></div>
+      <div class="district-summary" id="gerrySummary"></div>
 
         <div class="small-note">
           This version stops after Step 5. Expansion and cleanup can be added next on top of this version.
@@ -409,6 +440,9 @@
     let cellsWorking = [];
     let cellById = new Map();
     let cellFeatureById = new Map();
+    let step3ProgressInterval = null;
+    let step3ProgressStartTime = null;
+    const STEP3_ESTIMATED_MS = 45000;
 
     const chkWardLoaded = document.getElementById("chkWardLoaded");
     const chkMembersLoaded = document.getElementById("chkMembersLoaded");
@@ -443,7 +477,47 @@
     const metricOutside = document.getElementById("metricOutside");
     const toggleCellsLayer = document.getElementById("toggleCellsLayer");
     const stepSpinner = document.getElementById("stepSpinner");
-   
+    const stepProgressWrap = document.getElementById("stepProgressWrap");
+    const stepProgressBar = document.getElementById("stepProgressBar");
+    const stepProgressText = document.getElementById("stepProgressText");
+
+function startStep3Progress() {
+  step3ProgressStartTime = Date.now();
+
+  if (step3ProgressInterval) {
+    clearInterval(step3ProgressInterval);
+    step3ProgressInterval = null;
+  }
+
+  stepProgressWrap.style.display = "block";
+  stepProgressBar.style.width = "0%";
+  stepProgressText.textContent = "0%";
+
+  step3ProgressInterval = setInterval(() => {
+    const elapsed = Date.now() - step3ProgressStartTime;
+
+    // Reach 99% at about 45 seconds, then stay there
+    const progress = Math.min(99, (elapsed / STEP3_ESTIMATED_MS) * 99);
+
+    stepProgressBar.style.width = `${progress}%`;
+    stepProgressText.textContent = `${Math.floor(progress)}%`;
+  }, 200);
+}
+
+function finishStep3Progress() {
+  if (step3ProgressInterval) {
+    clearInterval(step3ProgressInterval);
+    step3ProgressInterval = null;
+  }
+
+  stepProgressBar.style.width = "100%";
+  stepProgressText.textContent = "100%";
+
+  setTimeout(() => {
+    stepProgressWrap.style.display = "none";
+  }, 400);
+}
+    
 function updateCellsLayerVisibility() {
   if (!map || !cellsOutlineLayer) return;
 
@@ -2768,6 +2842,7 @@ function runStep3() {
 
   setStatus(gerryStatus, "Assigning ordered district groups and building district polygons...", "warn");
   showStepSpinner("Running Step 3...");
+  startStep3Progress();
 
   setTimeout(async () => {
     try {
@@ -2813,6 +2888,7 @@ function runStep3() {
       fillBtn.disabled = true;
 
       perfEnd("STEP 3 TOTAL");
+      finishStep3Progress();
       hideStepSpinner();
 
       setStatus(
@@ -2822,6 +2898,7 @@ function runStep3() {
       );
     } catch (error) {
       console.error(error);
+      finishStep3Progress();
       hideStepSpinner();
 
       setStatus(
