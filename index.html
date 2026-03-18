@@ -359,14 +359,36 @@
           that district’s own points.  Step 6 safely expands districts and step 7 fills all remaining cells.
         </p>
 
-        <div class="row">
-          <button id="gerrymanderBtn" disabled>Run Step 3</button>
-          <button id="finalizePolygonsBtn" class="secondary" disabled>Run Step 4</button>
-          <button id="claimCellsBtn" class="secondary" disabled>Run Step 5</button>
-          <button id="expandBtn" class="secondary" disabled>Run Step 6</button>
-          <button id="regerrymanderBtn" class="secondary" disabled>Re-run Step 3</button>
-          <button id="fillBtn" class="secondary" disabled>Run Step 7</button>
-        </div>
+<div class="row">
+  <button id="gerrymanderBtn" disabled>Run Step 3</button>
+  <button id="finalizePolygonsBtn" class="secondary" disabled>Run Step 4</button>
+  <button id="claimCellsBtn" class="secondary" disabled>Run Step 5</button>
+  <button id="expandBtn" class="secondary" disabled>Run Step 6</button>
+  <button id="regerrymanderBtn" class="secondary" disabled>Re-run Step 3</button>
+  <button id="fillBtn" class="secondary" disabled>Run Step 7</button>
+</div>
+
+<div class="row" style="margin-top:10px;">
+  <button id="uploadBtn" class="secondary" disabled>Upload District Files</button>
+  <button id="continueBtn" class="secondary" disabled>Continue</button>
+</div>
+  
+<div class="card" id="step8Card" style="display:none;">
+  <div class="step-badge">Next workflow</div>
+  <h2>Companionships, assignments, and Excel output</h2>
+  <p>
+    This section will hold the next steps after district boundaries are finalized:
+    assigning companionships, creating ministering assignments, and producing a downloadable Excel output.
+  </p>
+
+  <div id="continueStatus" class="status good">
+    You have moved past districting. The next workflow panel is now open.
+  </div>
+
+  <div class="small-note">
+    This is a placeholder panel for the upcoming post-districting workflow.
+  </div>
+</div>
          <div id="stepSpinner" class="spinner-wrap" style="display: none;">
           <div class="spinner"></div>
           <div class="spinner-text">Working...</div>
@@ -380,9 +402,9 @@
         <div id="gerryStatus" class="status">Calculate targets first.</div>
       <div class="district-summary" id="gerrySummary"></div>
 
-        <div class="small-note">
-          This version stops after Step 5. Expansion and cleanup can be added next on top of this version.
-        </div>
+<div class="small-note">
+  This version now runs through Step 7. After Step 7 finishes, you can re-run Step 3, upload the district files, or continue to the next workflow section.
+</div>
       </div>
     </aside>
 
@@ -480,8 +502,13 @@
     const stepProgressWrap = document.getElementById("stepProgressWrap");
     const stepProgressBar = document.getElementById("stepProgressBar");
     const stepProgressText = document.getElementById("stepProgressText");
-
- function buildDistrictPointsGeoJSON(pointDistricts) {
+    const fillBtn = document.getElementById("fillBtn");
+    const uploadBtn = document.getElementById("uploadBtn");
+    const continueBtn = document.getElementById("continueBtn");
+    const step8Card = document.getElementById("step8Card");
+    const continueStatus = document.getElementById("continueStatus");
+ 
+function buildDistrictPointsGeoJSON(pointDistricts) {
   const features = [];
 
   for (const district of pointDistricts) {
@@ -2819,7 +2846,9 @@ function renderStep4Summary(finalResult) {
       regerrymanderBtn.disabled = true;
       finalizePolygonsBtn.disabled = true;
       claimCellsBtn.disabled = true;
-
+      uploadBtn.disabled = true;
+      continueBtn.disabled = true;
+      if (step8Card) step8Card.style.display = "none";
       setStatus(
         districtStatus,
         currentStats.trioNeeded
@@ -3427,6 +3456,67 @@ function buildDistrictAssignmentPayload(claimResult) {
       }))
   };
 }
+async function uploadDistrictFiles() {
+  if (!currentPointDistricts || !currentClaimResult) {
+    setStatus(gerryStatus, "Run Step 7 first before uploading.", "warn");
+    return;
+  }
+
+  setStatus(gerryStatus, "Uploading district files to backend...", "warn");
+  showStepSpinner("Uploading district files...");
+
+  try {
+    const payloadToSave = buildDistrictAssignmentPayload(currentClaimResult);
+    const pointsGeoJSON = buildDistrictPointsGeoJSON(currentPointDistricts);
+
+    await saveToBackend(payloadToSave, "district_assignment.json");
+    await saveToBackend(pointsGeoJSON, "district_points.geojson");
+
+    hideStepSpinner();
+
+    setStatus(
+      gerryStatus,
+      "Upload complete. District assignment and district points files were sent to the backend successfully.",
+      "good"
+    );
+  } catch (error) {
+    console.error(error);
+    hideStepSpinner();
+
+    setStatus(
+      gerryStatus,
+      `Upload failed: ${error?.message || error}`,
+      "error"
+    );
+  }
+}
+function continueToNextWorkflow() {
+  if (!currentPointDistricts || !currentClaimResult) {
+    setStatus(gerryStatus, "Run Step 7 first before continuing.", "warn");
+    return;
+  }
+
+  if (step8Card) {
+    step8Card.style.display = "block";
+    step8Card.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  if (continueStatus) {
+    setStatus(
+      continueStatus,
+      "Districting is complete. This panel is ready for the next workflow steps.",
+      "good"
+    );
+  }
+
+  setStatus(
+    gerryStatus,
+    "Districting complete. You can now work in the next workflow section.",
+    "good"
+  );
+}
+    
+
 async function runStep7() {
   if (!currentPointDistricts || !currentClaimResult) {
     setStatus(gerryStatus, "Run Step 6 first.", "warn");
@@ -3461,33 +3551,24 @@ async function runStep7() {
       drawClaimedCells(filledResult);
       renderClaimSummary(filledResult);
 
-      // ✅ 👉 ADD THIS BLOCK RIGHT HERE
-drawClaimedCells(filledResult);
-renderClaimSummary(filledResult);
-
-const payloadToSave = buildDistrictAssignmentPayload(filledResult);
-const pointsGeoJSON = buildDistrictPointsGeoJSON(currentPointDistricts);
-
-await saveToBackend(payloadToSave, "district_assignment.json");
-await saveToBackend(pointsGeoJSON, "district_points.geojson");
-console.log("Saved district assignment payload to backend successfully");
-
       const afterClaimed = filledResult.claimedFeatures.length;
       const added = afterClaimed - beforeClaimed;
       const remaining = cellsWorking.length - afterClaimed;
 
       gerrymanderBtn.disabled = true;
-      regerrymanderBtn.disabled = true;
+      regerrymanderBtn.disabled = false;
       finalizePolygonsBtn.disabled = true;
       claimCellsBtn.disabled = true;
       expandBtn.disabled = true;
       fillBtn.disabled = true;
+      uploadBtn.disabled = false;
+      continueBtn.disabled = false;
 
       hideStepSpinner();
 
       setStatus(
         gerryStatus,
-        `Step 7 complete. Added ${added} cells. Remaining unclaimed cells: ${remaining}.`,
+        `Step 7 complete. Added ${added} cells. Remaining unclaimed cells: ${remaining}. You can now re-run Step 3, upload district files, or continue to the next workflow section.`,
         "good"
       );
     } catch (error) {
@@ -3502,7 +3583,6 @@ console.log("Saved district assignment payload to backend successfully");
     }
   }, 40);
 }
-    
     
     function resetPage() {
       currentFiltered = [];
@@ -3534,10 +3614,15 @@ console.log("Saved district assignment payload to backend successfully");
       calcDistrictBtn.disabled = true;
       districtCountSelect.disabled = true;
       zoomFilteredBtn.disabled = true;
-      gerrymanderBtn.disabled = true;
       regerrymanderBtn.disabled = true;
+      gerrymanderBtn.disabled = true;
       finalizePolygonsBtn.disabled = true;
       claimCellsBtn.disabled = true;
+      expandBtn.disabled = true;
+      fillBtn.disabled = true;
+      uploadBtn.disabled = true;
+      continueBtn.disabled = true;
+      if (step8Card) step8Card.style.display = "none";
 
       setStatus(filterStatus, "Choose a gender and click Run Filter.");
       setStatus(districtStatus, "Run the filter first.");
@@ -3657,6 +3742,8 @@ chkMetadataLoaded.checked = false;
     expandBtn.addEventListener("click", runStep6);
     fillBtn.addEventListener("click", runStep7);
     toggleCellsLayer.addEventListener("change", updateCellsLayerVisibility);
+    uploadBtn.addEventListener("click", uploadDistrictFiles);
+    continueBtn.addEventListener("click", continueToNextWorkflow);
     initMap();
   </script>
 </body>
