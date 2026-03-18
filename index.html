@@ -347,33 +347,51 @@
         <div id="districtStatus" class="status">Run the filter first.</div>
         <div class="district-summary" id="districtSummary"></div>
       </div>
+<div class="card" id="step3to7Card">
+  <div class="step-badge">Steps 3–7</div>
+  <h2>District assignment, polygons, and claiming cells</h2>
+  <p>
+    Step 3 assigns districts by ordered latitude/longitude batches within each group, while keeping
+    same-cell points together, then draws district areas and escape routes. Step 4 finalizes overlaps
+    at the cell-mask level so older districts win and trapped foreign points can escape through carved
+    corridors. Step 5 claims cells from those finalized district masks and also claims cells containing
+    that district’s own points. Step 6 safely expands districts and step 7 fills all remaining cells.
+  </p>
 
-      <div class="card" id="step3to7Card">
-        <div class="step-badge">Steps 3–7</div>
-      </div> 
-        <h2>District assignment, polygons, and claiming cells</h2>
-        <p>
-          Step 3 assigns districts by ordered latitude/longitude batches within each group, while keeping
-          same-cell points together, then draws district areas and escape routes. Step 4 finalizes overlaps
-          at the cell-mask level so older districts win and trapped foreign points can escape through carved
-          corridors. Step 5 claims cells from those finalized district masks and also claims cells containing
-          that district’s own points.  Step 6 safely expands districts and step 7 fills all remaining cells.
-        </p>
+  <div class="row">
+    <button id="gerrymanderBtn" disabled>Run Step 3</button>
+    <button id="finalizePolygonsBtn" class="secondary" disabled>Run Step 4</button>
+    <button id="claimCellsBtn" class="secondary" disabled>Run Step 5</button>
+    <button id="expandBtn" class="secondary" disabled>Run Step 6</button>
+    <button id="regerrymanderBtn" class="secondary" disabled>Re-run Step 3</button>
+    <button id="fillBtn" class="secondary" disabled>Run Step 7</button>
+  </div>
 
-<div class="row">
-  <button id="gerrymanderBtn" disabled>Run Step 3</button>
-  <button id="finalizePolygonsBtn" class="secondary" disabled>Run Step 4</button>
-  <button id="claimCellsBtn" class="secondary" disabled>Run Step 5</button>
-  <button id="expandBtn" class="secondary" disabled>Run Step 6</button>
-  <button id="regerrymanderBtn" class="secondary" disabled>Re-run Step 3</button>
-  <button id="fillBtn" class="secondary" disabled>Run Step 7</button>
+  <div class="row" style="margin-top:10px;">
+    <button id="uploadBtn" class="secondary" disabled>Upload District Files</button>
+    <button id="continueBtn" class="secondary" disabled>Continue</button>
+  </div>
+
+  <div id="stepSpinner" class="spinner-wrap" style="display: none;">
+    <div class="spinner"></div>
+    <div class="spinner-text">Working...</div>
+  </div>
+
+  <div id="stepProgressWrap" class="progress-wrap" style="display:none;">
+    <div class="progress-bar">
+      <div id="stepProgressBar" class="progress-fill"></div>
+    </div>
+    <div id="stepProgressText" class="progress-text">0%</div>
+  </div>
+
+  <div id="gerryStatus" class="status">Calculate targets first.</div>
+  <div class="district-summary" id="gerrySummary"></div>
+
+  <div class="small-note">
+    This version now runs through Step 7. After Step 7 finishes, you can re-run Step 3, upload the district files, or continue to the next workflow section.
+  </div>
 </div>
 
-<div class="row" style="margin-top:10px;">
-  <button id="uploadBtn" class="secondary" disabled>Upload District Files</button>
-  <button id="continueBtn" class="secondary" disabled>Continue</button>
-</div>
-  
 <div class="card" id="step8Card" style="display:none;">
   <div class="step-badge">Step 8</div>
   <h2>Companionships, assignments, and Excel output</h2>
@@ -524,7 +542,7 @@ function showDistrictingWorkflow() {
   if (step2Card) step2Card.style.display = "";
   if (step3to7Card) step3to7Card.style.display = "";
   if (step8Card) step8Card.style.display = "none";
-  showDistrictingWorkflow();
+
   if (sidebarEl) sidebarEl.scrollTop = 0;
 }
 
@@ -3670,8 +3688,7 @@ async function runStep7() {
       fillBtn.disabled = true;
       uploadBtn.disabled = true;
       continueBtn.disabled = true;
-      if (step8Card) step8Card.style.display = "none";
-
+      showDistrictingWorkflow();
       setStatus(filterStatus, "Choose a gender and click Run Filter.");
       setStatus(districtStatus, "Run the filter first.");
       setStatus(gerryStatus, "Calculate targets first.");
