@@ -264,7 +264,7 @@
         and then claim cells from those polygons.
       </p>
 
-      <div class="card">
+      <div class="card" id="dataStatusCard">
         <div class="step-badge">Data status</div>
         <h2>Layer loading</h2>
         <div class="checkbox-group">
@@ -284,7 +284,7 @@
         <div id="loadStatus" class="status">Loading data...</div>
       </div>
 
-      <div class="card">
+      <div class="card" id="step1Card">
         <div class="step-badge">Step 1</div>
         <h2>Filter ministering pool</h2>
         <p>
@@ -326,7 +326,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card" id="step2Card">
         <div class="step-badge">Step 2</div>
         <h2>District target math</h2>
         <div class="row">
@@ -348,8 +348,9 @@
         <div class="district-summary" id="districtSummary"></div>
       </div>
 
-      <div class="card">
+      <div class="card" id="step3to7Card">
         <div class="step-badge">Steps 3–7</div>
+      </div> 
         <h2>District assignment, polygons, and claiming cells</h2>
         <p>
           Step 3 assigns districts by ordered latitude/longitude batches within each group, while keeping
@@ -374,19 +375,23 @@
 </div>
   
 <div class="card" id="step8Card" style="display:none;">
-  <div class="step-badge">Next workflow</div>
+  <div class="step-badge">Step 8</div>
   <h2>Companionships, assignments, and Excel output</h2>
   <p>
-    This section will hold the next steps after district boundaries are finalized:
-    assigning companionships, creating ministering assignments, and producing a downloadable Excel output.
+    Districting is complete. This next workflow section will handle companionship creation,
+    ministering assignments, and downloadable Excel output.
   </p>
 
   <div id="continueStatus" class="status good">
-    You have moved past districting. The next workflow panel is now open.
+    Districting is complete. This panel is ready for the next workflow steps.
+  </div>
+
+  <div class="row" style="margin-top:10px;">
+    <button id="backToDistrictingBtn" class="secondary">Back to Districting</button>
   </div>
 
   <div class="small-note">
-    This is a placeholder panel for the upcoming post-districting workflow.
+    This is the new workflow panel. The Step 8 tools can be added here next.
   </div>
 </div>
          <div id="stepSpinner" class="spinner-wrap" style="display: none;">
@@ -506,7 +511,48 @@
     const continueBtn = document.getElementById("continueBtn");
     const step8Card = document.getElementById("step8Card");
     const continueStatus = document.getElementById("continueStatus");
- 
+    const sidebarEl = document.querySelector(".sidebar");
+    const dataStatusCard = document.getElementById("dataStatusCard");
+    const step1Card = document.getElementById("step1Card");
+    const step2Card = document.getElementById("step2Card");
+    const step3to7Card = document.getElementById("step3to7Card");
+    const backToDistrictingBtn = document.getElementById("backToDistrictingBtn");
+
+function showDistrictingWorkflow() {
+  if (dataStatusCard) dataStatusCard.style.display = "";
+  if (step1Card) step1Card.style.display = "";
+  if (step2Card) step2Card.style.display = "";
+  if (step3to7Card) step3to7Card.style.display = "";
+  if (step8Card) step8Card.style.display = "none";
+  showDistrictingWorkflow();
+  if (sidebarEl) sidebarEl.scrollTop = 0;
+}
+
+function showStep8Workflow() {
+  if (dataStatusCard) dataStatusCard.style.display = "none";
+  if (step1Card) step1Card.style.display = "none";
+  if (step2Card) step2Card.style.display = "none";
+  if (step3to7Card) step3to7Card.style.display = "none";
+  if (step8Card) step8Card.style.display = "block";
+
+  if (continueStatus) {
+    setStatus(
+      continueStatus,
+      "Districting is complete. This panel is ready for the next workflow steps.",
+      "good"
+    );
+  }
+
+  if (sidebarEl) {
+    sidebarEl.scrollTop = 0;
+  }
+
+  window.scrollTo({
+    top: 0,
+    behavior: "smooth"
+  });
+}
+    
 function buildDistrictPointsGeoJSON(pointDistricts) {
   const features = [];
 
@@ -2754,7 +2800,7 @@ fillBtn.disabled = true;
 uploadBtn.disabled = true;
 continueBtn.disabled = true;
 if (step8Card) step8Card.style.display = "none";
-
+showDistrictingWorkflow();
       setStatus(gerryStatus, "Calculate targets first.");
 
       const chosenGender = getSelectedGender();
@@ -2853,6 +2899,7 @@ if (step8Card) step8Card.style.display = "none";
       uploadBtn.disabled = true;
       continueBtn.disabled = true;
       if (step8Card) step8Card.style.display = "none";
+      showDistrictingWorkflow();
       setStatus(
         districtStatus,
         currentStats.trioNeeded
@@ -3500,27 +3547,24 @@ function continueToNextWorkflow() {
     return;
   }
 
-  if (step8Card) {
-    step8Card.style.display = "block";
-    step8Card.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  if (continueStatus) {
-    setStatus(
-      continueStatus,
-      "Districting is complete. This panel is ready for the next workflow steps.",
-      "good"
-    );
-  }
+  showStep8Workflow();
 
   setStatus(
     gerryStatus,
-    "Districting complete. You can now work in the next workflow section.",
+    "Districting complete. You are now in the Step 8 workflow.",
     "good"
   );
 }
     
+function goBackToDistricting() {
+  showDistrictingWorkflow();
 
+  setStatus(
+    gerryStatus,
+    "Returned to the districting workflow.",
+    "good"
+  );
+}
 async function runStep7() {
   if (!currentPointDistricts || !currentClaimResult) {
     setStatus(gerryStatus, "Run Step 6 first.", "warn");
@@ -3748,6 +3792,9 @@ chkMetadataLoaded.checked = false;
     toggleCellsLayer.addEventListener("change", updateCellsLayerVisibility);
     uploadBtn.addEventListener("click", uploadDistrictFiles);
     continueBtn.addEventListener("click", continueToNextWorkflow);
+    if (backToDistrictingBtn) {
+  backToDistrictingBtn.addEventListener("click", goBackToDistricting);
+}
     initMap();
   </script>
 </body>
