@@ -1084,14 +1084,14 @@ function perfEnd(label) {
     }
 
     
-async function saveToBackend(finalGeojson) {
+async function saveToBackend(payload) {
   const resp = await fetch("https://ministering-distric-boundaries.onrender.com/save-districts", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      geojson: finalGeojson,
+      geojson: payload,
       secret: "Dist@nceSw0re"
     })
   });
@@ -3375,6 +3375,34 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
   };
 }
 
+function buildDistrictAssignmentPayload(claimResult) {
+  const districtMap = new Map();
+
+  for (const [cellId, districtId] of claimResult.owner.entries()) {
+    const dId = Number(districtId);
+
+    if (!districtMap.has(dId)) {
+      districtMap.set(dId, []);
+    }
+
+    districtMap.get(dId).push(String(cellId));
+  }
+
+  const districts = [...districtMap.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([districtId, cellIds]) => ({
+      district_id: districtId,
+      district_color: DISTRICT_COLORS[districtId % DISTRICT_COLORS.length],
+      cell_ids: cellIds.sort((a, b) => Number(a) - Number(b))
+    }));
+
+  return {
+    type: "district_cell_assignment",
+    created_at: new Date().toISOString(),
+    district_count: districts.length,
+    districts
+  };
+}
 async function runStep7() {
   if (!currentPointDistricts || !currentClaimResult) {
     setStatus(gerryStatus, "Run Step 6 first.", "warn");
