@@ -4374,10 +4374,7 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
       const touchingDistricts = [...getTouchingDistrictIdsForCell(cellId, owner)];
       if (!touchingDistricts.length) continue;
 
-      let bestScore = -Infinity;
-      let bestDistricts = [];
-
-      for (const districtId of touchingDistricts) {
+      const scoredCandidates = touchingDistricts.map(districtId => {
         let sharedBorder = 0;
 
         for (const neighborIdRaw of cell.neighbors) {
@@ -4389,21 +4386,28 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
 
         const need = expansionNeed.get(districtId) || 0;
 
-        const score = (need * 100) + sharedBorder;
+        // Softer weighting than before
+        const score = (need * 3) + (sharedBorder * 5);
 
-        if (score > bestScore) {
-          bestScore = score;
-          bestDistricts = [districtId];
-        } else if (score === bestScore) {
-          bestDistricts.push(districtId);
-        }
-      }
+        return {
+          districtId,
+          need,
+          sharedBorder,
+          score
+        };
+      });
 
-      if (bestDistricts.length) {
-        const chosenDistrict =
-          bestDistricts[Math.floor(Math.random() * bestDistricts.length)];
-        proposals.set(cellId, chosenDistrict);
-      }
+      scoredCandidates.sort((a, b) => b.score - a.score);
+
+      const bestScore = scoredCandidates[0].score;
+
+      // Allow near-best candidates, not just exact ties
+      const nearBest = scoredCandidates.filter(c => c.score >= bestScore - 2);
+
+      const chosen =
+        nearBest[Math.floor(Math.random() * nearBest.length)];
+
+      proposals.set(cellId, chosen.districtId);
     }
 
     if (!proposals.size) break;
@@ -4423,7 +4427,7 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
     );
 
     let grew = false;
-    for (const [cellId, districtId] of cleaned.owner.entries()) {
+    for (const [cellId] of cleaned.owner.entries()) {
       if (!owner.has(cellId)) {
         grew = true;
         break;
