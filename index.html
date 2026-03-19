@@ -674,13 +674,70 @@ function downloadAssignmentsExcel() {
     if (exportStatus) {
       setStatus(exportStatus, "Excel file downloaded successfully.", "good");
     }
+showProcessingModal(5);
   } catch (error) {
     console.error(error);
     if (exportStatus) {
       setStatus(exportStatus, `Excel export failed: ${error?.message || error}`, "error");
     }
   }
-}    
+}  
+
+function formatExpectedViewTime(minutesFromNow = 5) {
+  const now = new Date();
+  const future = new Date(now.getTime() + minutesFromNow * 60 * 1000);
+
+  return future.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+function showProcessingModal(minutesFromNow = 5) {
+  const modal = document.getElementById("processingModal");
+  const message = document.getElementById("processingModalMessage");
+
+  if (!modal || !message) return;
+
+  const expectedTime = formatExpectedViewTime(minutesFromNow);
+
+  message.innerHTML = `
+    Your map from Step 7 has been saved and is now processing.<br><br>
+    It is expected to be viewable in about ${minutesFromNow} minutes, around <strong>${expectedTime}</strong>.<br><br>
+    You can view it at this page here:
+  `;
+
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+}
+
+function hideProcessingModal() {
+  const modal = document.getElementById("processingModal");
+  if (!modal) return;
+
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const closeBtn = document.getElementById("processingModalClose");
+  const modal = document.getElementById("processingModal");
+  const backdrop = document.querySelector(".processing-modal-backdrop");
+
+  if (closeBtn) {
+    closeBtn.addEventListener("click", hideProcessingModal);
+  }
+
+  if (backdrop) {
+    backdrop.addEventListener("click", hideProcessingModal);
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && modal && !modal.classList.contains("hidden")) {
+      hideProcessingModal();
+    }
+  });
+});
 
 function resetAssignmentSummary() {
   if (assignmentSummary) assignmentSummary.innerHTML = "";
@@ -4746,5 +4803,23 @@ if (downloadExcelBtn) {
 }   
     initMap();
   </script>
+ <div id="processingModal" class="processing-modal hidden" aria-hidden="true">
+  <div class="processing-modal-backdrop"></div>
+  <div class="processing-modal-box" role="dialog" aria-modal="true" aria-labelledby="processingModalTitle">
+    <button id="processingModalClose" class="processing-modal-close" aria-label="Close popup">&times;</button>
+    <h2 id="processingModalTitle">Map Processing</h2>
+    <p id="processingModalMessage"></p>
+    <p class="processing-modal-link-wrap">
+      <a
+        id="processingModalLink"
+        href="https://kdidso.github.io/ministering-distric-boundaries/"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Open Ministering District Boundaries
+      </a>
+    </p>
+  </div>
+</div> 
 </body>
 </html>
