@@ -4570,6 +4570,7 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
   let changed = true;
   let round = 0;
 
+  // First: your normal Step 7 fill logic
   while (changed && round < maxRounds) {
     changed = false;
     round++;
@@ -4595,7 +4596,7 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
         if (
           sharedBorder > bestBorder ||
           (sharedBorder === bestBorder && need > bestNeed) ||
-          (sharedBorder === bestBorder && need === bestNeed && districtId < bestDistrict)
+          (sharedBorder === bestBorder && need === bestNeed && (bestDistrict == null || districtId < bestDistrict))
         ) {
           bestDistrict = districtId;
           bestBorder = sharedBorder;
@@ -4640,6 +4641,67 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
     changed = grew;
   }
 
+  // Second: forced final sweep until every cell is claimed
+  let forcedPass = 0;
+  const maxForcedPasses = cellsWorking.length;
+
+  while (forcedPass < maxForcedPasses) {
+    forcedPass++;
+
+    const unclaimedCells = cellsWorking.filter(cell => !owner.has(String(cell.id)));
+    if (!unclaimedCells.length) break;
+
+    let assignedAnyThisPass = false;
+
+    for (const cell of unclaimedCells) {
+      const cellId = String(cell.id);
+
+      const touchingDistricts = [...getTouchingDistrictIdsForCell(cellId, owner)];
+      if (!touchingDistricts.length) continue;
+
+      let bestDistrict = null;
+      let bestBorder = -1;
+      let bestNeed = -Infinity;
+
+      const expansionNeed = getDistrictExpansionNeed(pointDistricts, owner);
+
+      for (const districtId of touchingDistricts) {
+        const sharedBorder = getSharedBorderCountForDistrict(cellId, districtId, owner);
+        const need = expansionNeed.get(districtId) || 0;
+
+        if (
+          sharedBorder > bestBorder ||
+          (sharedBorder === bestBorder && need > bestNeed) ||
+          (sharedBorder === bestBorder && need === bestNeed && (bestDistrict == null || districtId < bestDistrict))
+        ) {
+          bestDistrict = districtId;
+          bestBorder = sharedBorder;
+          bestNeed = need;
+        }
+      }
+
+      if (bestDistrict != null) {
+        owner.set(cellId, bestDistrict);
+        assignedAnyThisPass = true;
+      }
+    }
+
+    if (!assignedAnyThisPass) {
+      break;
+    }
+  }
+
+  // Final cleanup after all forced claims
+  const cleanedFinal = cleanupClaimedDistrictIslands(
+    {
+      owner: new Map(owner),
+      claimedFeatures: [],
+      countByDistrict: new Map()
+    },
+    pointDistricts
+  );
+
+  const finalOwner = cleanedFinal.owner;
   const claimedFeatures = [];
   const countByDistrict = new Map();
 
@@ -4648,7 +4710,7 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
   }
 
   for (const cell of cellsWorking) {
-    const districtId = owner.get(String(cell.id));
+    const districtId = finalOwner.get(String(cell.id));
     if (districtId == null) continue;
 
     const clone = cloneFeature(cell.feature);
@@ -4666,7 +4728,7 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
   }
 
   return {
-    owner,
+    owner: finalOwner,
     claimedFeatures,
     countByDistrict
   };
@@ -4803,11 +4865,13 @@ async function runStep7() {
 
       hideStepSpinner();
 
-      setStatus(
-        gerryStatus,
-        `Step 7 complete. Added ${added} cells. Remaining unclaimed cells: ${remaining}. You can now re-run Step 6, upload district files, or continue to the next workflow section.`,
-        "good"
-      );
+setStatus(
+  gerryStatus,
+  remaining === 0
+    ? `Step 7 complete. Added ${added} cells. All cells are now claimed.`
+    : `Step 7 complete, but ${remaining} cell(s) are still unclaimed.`,
+  remaining === 0 ? "good" : "warn"
+);
     } catch (error) {
       console.error(error);
       hideStepSpinner();
