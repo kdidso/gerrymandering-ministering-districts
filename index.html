@@ -1335,6 +1335,11 @@ function runStep9CreateAssignments() {
       drawAssignmentResults(districtAssignmentResults);
       renderAssignmentSummary(districtAssignmentResults);
 
+      downloadExcelBtn.disabled = false;
+      if (exportStatus) {
+        setStatus(exportStatus, "Assignments created. You can now download the Excel file.", "good");
+      }
+
       const totalUnassigned = districtAssignmentResults.reduce((sum, r) => sum + r.unassignedCount, 0);
 
       hideStepSpinner();
@@ -1346,14 +1351,11 @@ function runStep9CreateAssignments() {
           : `Assignment step complete with ${totalUnassigned} unassigned person(s) remaining.`,
         totalUnassigned === 0 ? "good" : "warn"
       );
-      
+
     } catch (error) {
       console.error(error);
       hideStepSpinner();
-downloadExcelBtn.disabled = false;
-if (exportStatus) {
-  setStatus(exportStatus, "Assignments created. You can now download the Excel file.", "good");
-}
+
       setStatus(
         assignmentStatus,
         `Assignment creation failed: ${error?.message || error}`,
