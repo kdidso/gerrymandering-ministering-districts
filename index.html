@@ -545,6 +545,76 @@
     const downloadExcelBtn = document.getElementById("downloadExcelBtn");
     const exportStatus = document.getElementById("exportStatus");
 
+function buildExcelRowsFromAssignments(districtAssignmentResults) {
+  const rows = [];
+  const merges = [];
+
+  let maxAssignmentCount = 0;
+
+  for (const districtResult of districtAssignmentResults) {
+    for (const comp of districtResult.companionships) {
+      if ((comp.assignedPeople?.length || 0) > maxAssignmentCount) {
+        maxAssignmentCount = comp.assignedPeople.length;
+      }
+    }
+  }
+
+  const headerRow = [
+    "Companion 1",
+    "Companion 2",
+    "Companion 3",
+    ...Array.from({ length: maxAssignmentCount }, (_, i) => `Assignment ${i + 1}`)
+  ];
+
+  const headerRowLength = headerRow.length;
+
+  districtAssignmentResults
+    .slice()
+    .sort((a, b) => a.districtId - b.districtId)
+    .forEach((districtResult, districtIndex) => {
+      const titleRowIndex = rows.length;
+
+      rows.push([`District ${districtResult.districtId + 1}`]);
+      merges.push({
+        s: { r: titleRowIndex, c: 0 },
+        e: { r: titleRowIndex, c: headerRowLength - 1 }
+      });
+
+      rows.push(headerRow);
+
+      districtResult.companionships.forEach(comp => {
+        const sortedMembers = comp.members.slice().sort(compareItemsAlphabetically);
+        const companionNames = [
+          sortedMembers[0] ? formatPersonName(sortedMembers[0]) : "",
+          sortedMembers[1] ? formatPersonName(sortedMembers[1]) : "",
+          sortedMembers[2] ? formatPersonName(sortedMembers[2]) : ""
+        ];
+
+        const assignmentNames = (comp.assignedPeople || []).map(person => formatPersonName(person));
+
+        while (assignmentNames.length < maxAssignmentCount) {
+          assignmentNames.push("");
+        }
+
+        rows.push([
+          ...companionNames,
+          ...assignmentNames
+        ]);
+      });
+
+      if (districtIndex < districtAssignmentResults.length - 1) {
+        rows.push([]);
+        rows.push([]);
+      }
+    });
+
+  return {
+    rows,
+    merges,
+    headerRowLength
+  };
+}
+    
 function formatPersonName(item) {
   const p = item?.feature?.properties || {};
   const last = String(p.Last_Name ?? p.last_name ?? "").trim();
