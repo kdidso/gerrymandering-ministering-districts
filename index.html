@@ -4386,14 +4386,17 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
 
         const need = expansionNeed.get(districtId) || 0;
 
-        // Softer weighting than before
-        const score = (need * 3) + (sharedBorder * 5);
+        // Much softer balance so multiple districts can compete
+        const baseScore = (sharedBorder * 4) + (need * 1.5);
+
+        // Add random jitter so reruns actually differ
+        const randomJitter = Math.random() * 6;
 
         return {
           districtId,
           need,
           sharedBorder,
-          score
+          score: baseScore + randomJitter
         };
       });
 
@@ -4401,8 +4404,8 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
 
       const bestScore = scoredCandidates[0].score;
 
-      // Allow near-best candidates, not just exact ties
-      const nearBest = scoredCandidates.filter(c => c.score >= bestScore - 2);
+      // Allow a wider band of near-best candidates
+      const nearBest = scoredCandidates.filter(c => c.score >= bestScore - 4);
 
       const chosen =
         nearBest[Math.floor(Math.random() * nearBest.length)];
