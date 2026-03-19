@@ -405,7 +405,7 @@
     <button id="finalizePolygonsBtn" class="secondary" disabled>Run Step 4</button>
     <button id="claimCellsBtn" class="secondary" disabled>Run Step 5</button>
     <button id="expandBtn" class="secondary" disabled>Run Step 6</button>
-    <button id="regerrymanderBtn" class="secondary" disabled>Re-run Step 3</button>
+    <button id="rerunStep6Btn" class="secondary" disabled>Re-run Step 6</button>
     <button id="fillBtn" class="secondary" disabled>Run Step 7</button>
   </div>
 
@@ -430,7 +430,7 @@
   <div class="district-summary" id="gerrySummary"></div>
 
   <div class="small-note">
-    This version now runs through Step 7. After Step 7 finishes, you can re-run Step 3, upload the district files, or continue to the next workflow section.
+    This version now runs through Step 7. After Step 6, you can re-run Step 6 from the same Step 5 baseline to try a different safe expansion. After Step 7 finishes, you can upload the district files or continue to the next workflow section.
   </div>
 </div>
 
@@ -524,6 +524,7 @@
     let currentDistrictPolygons = null;
     let currentFinalDistrictPolygons = null;
     let currentClaimResult = null;
+    let currentStep5ClaimResult = null;
     let currentCompanionships = null;
     let cellsWorking = [];
     let cellById = new Map();
@@ -551,7 +552,7 @@
     const finalizePolygonsBtn = document.getElementById("finalizePolygonsBtn");
     const claimCellsBtn = document.getElementById("claimCellsBtn");
     const expandBtn = document.getElementById("expandBtn");
-    const regerrymanderBtn = document.getElementById("regerrymanderBtn");
+    const rerunStep6Btn = document.getElementById("rerunStep6Btn");
     const districtCountSelect = document.getElementById("districtCountSelect");
     const districtSummary = document.getElementById("districtSummary");
     const gerrySummary = document.getElementById("gerrySummary");
@@ -3809,9 +3810,10 @@ function renderStep4Summary(finalResult) {
       currentDistrictPolygons = null;
       currentFinalDistrictPolygons = null;
       currentClaimResult = null;
+      currentStep5ClaimResult = null;
       currentCompanionships = null;
       currentAssignments = null;
-regerrymanderBtn.disabled = true;
+rerunStep6Btn.disabled = true;
 gerrymanderBtn.disabled = true;
 finalizePolygonsBtn.disabled = true;
 claimCellsBtn.disabled = true;
@@ -3922,7 +3924,7 @@ if (exportStatus) {
       renderTargetSummary(currentDistrictTargets, currentStats);
 
       gerrymanderBtn.disabled = false;
-      regerrymanderBtn.disabled = true;
+      rerunStep6Btn.disabled = true;
       finalizePolygonsBtn.disabled = true;
       claimCellsBtn.disabled = true;
       uploadBtn.disabled = true;
@@ -4016,7 +4018,7 @@ function runStep3() {
       renderStep3Summary(pointDistricts, polygonResult);
       perfEnd("STEP 3 draw");
 
-      regerrymanderBtn.disabled = false;
+      rerunStep6Btn.disabled = true;
       gerrymanderBtn.disabled = true;
       finalizePolygonsBtn.disabled = false;
       claimCellsBtn.disabled = true;
@@ -4084,7 +4086,7 @@ function runStep4() {
       perfEnd("STEP 4 draw");
 
       gerrymanderBtn.disabled = true;
-      regerrymanderBtn.disabled = true;
+      rerunStep6Btn.disabled = true;
       finalizePolygonsBtn.disabled = true;
       claimCellsBtn.disabled = false;
       expandBtn.disabled = true;
@@ -4109,6 +4111,18 @@ function runStep4() {
       );
     }
   }, 40);
+}
+
+function cloneClaimResult(claimResult) {
+  if (!claimResult) return null;
+
+  return {
+    owner: new Map(claimResult.owner ? [...claimResult.owner.entries()] : []),
+    claimedFeatures: (claimResult.claimedFeatures || []).map(cloneFeature),
+    countByDistrict: new Map(
+      claimResult.countByDistrict ? [...claimResult.countByDistrict.entries()] : []
+    )
+  };
 }
 
 function runStep5() {
@@ -4137,12 +4151,12 @@ function runStep5() {
       );
 
       currentClaimResult = claimResult;
-
+      currentStep5ClaimResult = cloneClaimResult(claimResult);
       drawClaimedCells(claimResult);
       renderClaimSummary(claimResult);
 
       gerrymanderBtn.disabled = true;
-      regerrymanderBtn.disabled = true;
+      rerunStep6Btn.disabled = true;
       finalizePolygonsBtn.disabled = true;
       claimCellsBtn.disabled = true;
       expandBtn.disabled = false;
@@ -4226,16 +4240,17 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
     const expansionNeed = getDistrictExpansionNeed(pointDistricts, owner);
     const proposals = new Map();
 
-    for (const cell of cellsWorking) {
+    const shuffledCells = cellsWorking.slice().sort(() => Math.random() - 0.5);
+
+    for (const cell of shuffledCells) {
       const cellId = String(cell.id);
       if (owner.has(cellId)) continue;
 
       const touchingDistricts = [...getTouchingDistrictIdsForCell(cellId, owner)];
       if (!touchingDistricts.length) continue;
 
-      // Score candidate districts for this unclaimed cell
-      let bestDistrict = null;
       let bestScore = -Infinity;
+      let bestDistricts = [];
 
       for (const districtId of touchingDistricts) {
         let sharedBorder = 0;
@@ -4249,29 +4264,30 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
 
         const need = expansionNeed.get(districtId) || 0;
 
-        // Strongly prefer under-target districts, then stronger adjacency
         const score = (need * 100) + sharedBorder;
 
         if (score > bestScore) {
           bestScore = score;
-          bestDistrict = districtId;
+          bestDistricts = [districtId];
+        } else if (score === bestScore) {
+          bestDistricts.push(districtId);
         }
       }
 
-      if (bestDistrict != null) {
-        proposals.set(cellId, bestDistrict);
+      if (bestDistricts.length) {
+        const chosenDistrict =
+          bestDistricts[Math.floor(Math.random() * bestDistricts.length)];
+        proposals.set(cellId, chosenDistrict);
       }
     }
 
     if (!proposals.size) break;
 
-    // Apply whole round at once
     const tentativeOwner = new Map(owner);
     for (const [cellId, districtId] of proposals.entries()) {
       tentativeOwner.set(String(cellId), districtId);
     }
 
-    // Clean up ONCE for the whole round
     const cleaned = cleanupClaimedDistrictIslands(
       {
         owner: tentativeOwner,
@@ -4281,7 +4297,6 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
       pointDistricts
     );
 
-    // Detect whether anything new was actually added
     let grew = false;
     for (const [cellId, districtId] of cleaned.owner.entries()) {
       if (!owner.has(cellId)) {
@@ -4330,18 +4345,18 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
   };
 }
 function runStep6() {
-  if (!currentPointDistricts || !currentClaimResult) {
+  if (!currentPointDistricts || !currentStep5ClaimResult) {
     setStatus(gerryStatus, "Run Step 5 first.", "warn");
     return;
   }
 
-  setStatus(gerryStatus, "Expanding districts safely into unclaimed cells...", "warn");
+  setStatus(gerryStatus, "Expanding districts safely into unclaimed cells from the Step 5 baseline...", "warn");
   showStepSpinner("Running Step 6...");
 
   setTimeout(() => {
     try {
       const expandedResult = expandIntoUnclaimedCells(
-        currentClaimResult,
+        cloneClaimResult(currentStep5ClaimResult),
         currentPointDistricts,
         8
       );
@@ -4360,21 +4375,21 @@ function runStep6() {
 
       drawClaimedCells(expandedResult);
       renderClaimSummary(expandedResult);
+
       gerrymanderBtn.disabled = true;
-      regerrymanderBtn.disabled = true;
+      rerunStep6Btn.disabled = false;
       finalizePolygonsBtn.disabled = true;
       claimCellsBtn.disabled = true;
       expandBtn.disabled = true;
-      fillBtn.disabled = true;
+      fillBtn.disabled = false;
+
       hideStepSpinner();
 
       setStatus(
         gerryStatus,
-        `Step 6 complete. Expanded safely to ${expandedResult.claimedFeatures.length} claimed cells without allowing disconnected islands.`,
+        `Step 6 complete. Expanded safely to ${expandedResult.claimedFeatures.length} claimed cells from the Step 5 baseline. You can re-run Step 6 for a different safe expansion or continue to Step 7.`,
         "good"
       );
-
-      fillBtn.disabled = false;
     } catch (error) {
       console.error(error);
       hideStepSpinner();
@@ -4632,7 +4647,7 @@ async function runStep7() {
       const remaining = cellsWorking.length - afterClaimed;
 
       gerrymanderBtn.disabled = true;
-      regerrymanderBtn.disabled = false;
+      rerunStep6Btn.disabled = false;
       finalizePolygonsBtn.disabled = true;
       claimCellsBtn.disabled = true;
       expandBtn.disabled = true;
@@ -4644,7 +4659,7 @@ async function runStep7() {
 
       setStatus(
         gerryStatus,
-        `Step 7 complete. Added ${added} cells. Remaining unclaimed cells: ${remaining}. You can now re-run Step 3, upload district files, or continue to the next workflow section.`,
+        `Step 7 complete. Added ${added} cells. Remaining unclaimed cells: ${remaining}. You can now re-run Step 6, upload district files, or continue to the next workflow section.`
         "good"
       );
     } catch (error) {
@@ -4668,6 +4683,7 @@ async function runStep7() {
       currentDistrictPolygons = null;
       currentFinalDistrictPolygons = null;
       currentClaimResult = null;
+      currentStep5ClaimResult = null;
       currentCompanionships = null;
       currentAssignments = null;
       clearMetricCards();
@@ -4703,7 +4719,7 @@ if (exportStatus) {
       calcDistrictBtn.disabled = true;
       districtCountSelect.disabled = true;
       zoomFilteredBtn.disabled = true;
-      regerrymanderBtn.disabled = true;
+      rerunStep6Btn.disabled = true;
       gerrymanderBtn.disabled = true;
       finalizePolygonsBtn.disabled = true;
       claimCellsBtn.disabled = true;
@@ -4824,7 +4840,7 @@ chkMetadataLoaded.checked = false;
     resetBtn.addEventListener("click", resetPage);
     calcDistrictBtn.addEventListener("click", calculateDistrictTargets);
     gerrymanderBtn.addEventListener("click", runStep3);
-    regerrymanderBtn.addEventListener("click", runStep3);
+    rerunStep6Btn.addEventListener("click", runStep6);
     finalizePolygonsBtn.addEventListener("click", runStep4);
     claimCellsBtn.addEventListener("click", runStep5);
     expandBtn.addEventListener("click", runStep6);
