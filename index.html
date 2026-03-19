@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
-
+  <script type="text/javascript" src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <style>
     :root {
       --bg: #f5f7fb;
@@ -406,7 +406,8 @@
 
   <div class="row" style="margin-top:10px;">
     <button id="createCompanionshipsBtn" class="secondary" type="button">Create Companionships</button>
-    <button id="createAssignmentsBtn" class="secondary" type="button">Create Assignments</button> 
+    <button id="createAssignmentsBtn" class="secondary" type="button">Create Assignments</button>
+    <button id="downloadExcelBtn" class="secondary" type="button" disabled>Download Excel</button>
     <button id="backToDistrictingBtn" class="secondary" type="button">Back to Districting</button>
   </div>
   <div id="companionshipStatus" class="status">
@@ -419,7 +420,9 @@
 </div>
 
 <div class="district-summary" id="assignmentSummary"></div>
-
+<div id="exportStatus" class="status">
+  Create assignments first, then download the Excel file.
+</div>
   <div class="small-note">
     This step creates companionships only from people with Assigned_to_minister = yes, within the same district, using nearest-neighbor proximity.
   </div>
@@ -539,6 +542,75 @@
     const createAssignmentsBtn = document.getElementById("createAssignmentsBtn");
     const assignmentStatus = document.getElementById("assignmentStatus");
     const assignmentSummary = document.getElementById("assignmentSummary");
+    const downloadExcelBtn = document.getElementById("downloadExcelBtn");
+    const exportStatus = document.getElementById("exportStatus");
+
+function formatPersonName(item) {
+  const p = item?.feature?.properties || {};
+  const last = String(p.Last_Name ?? p.last_name ?? "").trim();
+  const first = String(p.First_Name ?? p.first_name ?? "").trim();
+
+  if (last && first) return `${last}, ${first}`;
+  if (last) return last;
+  if (first) return first;
+  return "";
+}
+
+function downloadAssignmentsExcel() {
+  if (!currentAssignments || !currentAssignments.length) {
+    if (exportStatus) {
+      setStatus(exportStatus, "Create assignments first before downloading Excel.", "warn");
+    }
+    return;
+  }
+
+  try {
+    const { rows, merges, headerRowLength } = buildExcelRowsFromAssignments(currentAssignments);
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+
+    ws["!merges"] = merges;
+
+    ws["!cols"] = [
+      { wch: 24 },
+      { wch: 24 },
+      { wch: 24 },
+      ...Array.from({ length: headerRowLength - 3 }, () => ({ wch: 24 }))
+    ];
+
+    // Bold district title + header rows if cells exist
+    rows.forEach((row, rIdx) => {
+      if (!row || !row.length) return;
+
+      const isDistrictTitle = typeof row[0] === "string" && row.length === 1 && row[0].startsWith("District ");
+      const isHeaderRow = row[0] === "Companion 1";
+
+      if (isDistrictTitle || isHeaderRow) {
+        for (let c = 0; c < Math.max(row.length, headerRowLength); c++) {
+          const ref = XLSX.utils.encode_cell({ r: rIdx, c });
+          if (ws[ref]) {
+            ws[ref].s = ws[ref].s || {};
+            ws[ref].s.font = ws[ref].s.font || {};
+            ws[ref].s.font.bold = true;
+          }
+        }
+      }
+    });
+
+    XLSX.utils.book_append_sheet(wb, ws, "Ministering Assignments");
+    XLSX.writeFile(wb, "ministering_assignments.xlsx");
+
+    if (exportStatus) {
+      setStatus(exportStatus, "Excel file downloaded successfully.", "good");
+    }
+  } catch (error) {
+    console.error(error);
+    if (exportStatus) {
+      setStatus(exportStatus, `Excel export failed: ${error?.message || error}`, "error");
+    }
+  }
+}    
 
 function resetAssignmentSummary() {
   if (assignmentSummary) assignmentSummary.innerHTML = "";
@@ -1225,6 +1297,10 @@ function runStep8CreateCompanionships() {
         "good"
         
       );
+if (downloadExcelBtn) downloadExcelBtn.disabled = true;
+if (exportStatus) {
+  setStatus(exportStatus, "Create assignments first, then download the Excel file.");
+}
     } catch (error) {
       console.error(error);
       hideStepSpinner();
@@ -1270,10 +1346,14 @@ function runStep9CreateAssignments() {
           : `Assignment step complete with ${totalUnassigned} unassigned person(s) remaining.`,
         totalUnassigned === 0 ? "good" : "warn"
       );
+      
     } catch (error) {
       console.error(error);
       hideStepSpinner();
-
+downloadExcelBtn.disabled = false;
+if (exportStatus) {
+  setStatus(exportStatus, "Assignments created. You can now download the Excel file.", "good");
+}
       setStatus(
         assignmentStatus,
         `Assignment creation failed: ${error?.message || error}`,
@@ -3576,7 +3656,10 @@ if (companionshipStatus) {
 }
 if (step8Card) step8Card.style.display = "none";
       setStatus(gerryStatus, "Calculate targets first.");
-
+if (downloadExcelBtn) downloadExcelBtn.disabled = true;
+if (exportStatus) {
+  setStatus(exportStatus, "Create assignments first, then download the Excel file.");
+}
       const chosenGender = getSelectedGender();
       const features = membersData.features || [];
       let outsideWardExcluded = 0;
@@ -4441,7 +4524,10 @@ if (companionshipStatus) {
           opacity: 0.95
         });
       }
-
+if (downloadExcelBtn) downloadExcelBtn.disabled = true;
+if (exportStatus) {
+  setStatus(exportStatus, "Create assignments first, then download the Excel file.");
+}
       calcDistrictBtn.disabled = true;
       districtCountSelect.disabled = true;
       zoomFilteredBtn.disabled = true;
@@ -4583,6 +4669,9 @@ if (createCompanionshipsBtn) {
 if (createAssignmentsBtn) {
   createAssignmentsBtn.addEventListener("click", runStep9CreateAssignments);
 }
+if (downloadExcelBtn) {
+  downloadExcelBtn.addEventListener("click", downloadAssignmentsExcel);
+}   
     initMap();
   </script>
 </body>
