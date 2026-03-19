@@ -251,6 +251,48 @@
   font-weight: 700;
 }
 }
+.processing-modal.hidden {
+  display: none !important;
+}
+
+.processing-modal {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 99999 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 16px !important;
+  box-sizing: border-box !important;
+}
+
+.processing-modal-backdrop {
+  position: absolute !important;
+  inset: 0 !important;
+  background: rgba(0, 0, 0, 0.45) !important;
+}
+
+.processing-modal-box {
+  position: relative !important;
+  z-index: 100000 !important;
+  width: min(520px, 92vw) !important;
+  max-height: 85vh !important;
+  overflow-y: auto !important;
+  background: #ffffff !important;
+  border-radius: 12px !important;
+  padding: 22px !important;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28) !important;
+  font-family: sans-serif !important;
+}
+
+.processing-modal-close {
+  position: absolute !important;
+  top: 10px !important;
+  right: 12px !important;
+  font-size: 28px !important;
+  cursor: pointer !important;
+  border: none !important;
+  background: transparent !important;
     }
   </style>
 </head>
@@ -544,7 +586,8 @@
     const assignmentSummary = document.getElementById("assignmentSummary");
     const downloadExcelBtn = document.getElementById("downloadExcelBtn");
     const exportStatus = document.getElementById("exportStatus");
-
+    const closeBtn = document.getElementById("processingModalClose");
+    const backdrop = document.querySelector(".processing-modal-backdrop");
 function buildExcelRowsFromAssignments(districtAssignmentResults) {
   const rows = [];
   const merges = [];
@@ -4800,7 +4843,9 @@ if (createAssignmentsBtn) {
 }
 if (downloadExcelBtn) {
   downloadExcelBtn.addEventListener("click", downloadAssignmentsExcel);
-}   
+}  
+if (closeBtn) closeBtn.addEventListener("click", hideProcessingModal);
+if (backdrop) backdrop.addEventListener("click", hideProcessingModal);
     initMap();
   </script>
  <div id="processingModal" class="processing-modal hidden" aria-hidden="true">
