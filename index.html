@@ -406,6 +406,7 @@
 
   <div class="row" style="margin-top:10px;">
     <button id="createCompanionshipsBtn" class="secondary" type="button">Create Companionships</button>
+    <button id="createAssignmentsBtn" class="secondary" type="button">Create Assignments</button> 
     <button id="backToDistrictingBtn" class="secondary" type="button">Back to Districting</button>
   </div>
   <div id="companionshipStatus" class="status">
@@ -413,6 +414,11 @@
   </div>
   
   <div class="district-summary" id="companionshipSummary"></div>
+  <div id="assignmentStatus" class="status">
+  Create companionships first, then create ministering assignments.
+</div>
+
+<div class="district-summary" id="assignmentSummary"></div>
 
   <div class="small-note">
     This step creates companionships only from people with Assigned_to_minister = yes, within the same district, using nearest-neighbor proximity.
@@ -463,7 +469,9 @@
     let finalPolygonLayer = null;
     let claimedCellLayer = null;
     let companionshipLineLayer = null;
-    
+    let assignmentLineLayer = null;
+    let companionshipMidpointLayer = null;
+    let currentAssignments = null;
     let currentFiltered = [];
     let currentStats = null;
     let currentDistrictTargets = null;
@@ -528,11 +536,391 @@
     const createCompanionshipsBtn = document.getElementById("createCompanionshipsBtn");
     const companionshipStatus = document.getElementById("companionshipStatus");
     const companionshipSummary = document.getElementById("companionshipSummary");
+    const createAssignmentsBtn = document.getElementById("createAssignmentsBtn");
+    const assignmentStatus = document.getElementById("assignmentStatus");
+    const assignmentSummary = document.getElementById("assignmentSummary");
 
+function resetAssignmentSummary() {
+  if (assignmentSummary) assignmentSummary.innerHTML = "";
+}
+
+function removeAssignmentLayers() {
+  if (assignmentLineLayer) {
+    map.removeLayer(assignmentLineLayer);
+    assignmentLineLayer = null;
+  }
+  if (companionshipMidpointLayer) {
+    map.removeLayer(companionshipMidpointLayer);
+    companionshipMidpointLayer = null;
+  }
+}
+
+function getCompanionshipMemberCoords(comp) {
+  return comp.members.map(m => m.feature.geometry.coordinates);
+}
+
+function getCompanionshipMidpoint(comp) {
+  const coords = getCompanionshipMemberCoords(comp);
+  if (!coords.length) return null;
+
+  let sumLng = 0;
+  let sumLat = 0;
+
+  for (const [lng, lat] of coords) {
+    sumLng += lng;
+    sumLat += lat;
+  }
+
+  return [sumLng / coords.length, sumLat / coords.length];
+}
+
+function getCompanionshipKey(comp) {
+  const names = comp.members
+    .slice()
+    .sort(compareItemsAlphabetically)
+    .map(m => `${getMemberLastName(m)}|${getMemberFirstName(m)}`);
+  return `d${comp.districtId}|${names.join("~")}`;
+}
+
+function getPersonKey(item) {
+  const p = item.feature.properties || {};
+  const last = String(p.Last_Name ?? p.last_name ?? "").trim().toLowerCase();
+  const first = String(p.First_Name ?? p.first_name ?? "").trim().toLowerCase();
+  const coords = item.feature.geometry.coordinates;
+  return `${last}|${first}|${coords[0]}|${coords[1]}`;
+}
+
+function distributeDistrictAssignmentTargets(totalPeople, companionshipCount) {
+  return distributeTotal(totalPeople, companionshipCount);
+}
+    
 function resetCompanionshipSummary() {
   if (companionshipSummary) companionshipSummary.innerHTML = "";
 }
+function buildCompanionshipAssignmentRecords(companionships) {
+  return companionships.map((comp, index) => {
+    const midpoint = getCompanionshipMidpoint(comp);
+    return {
+      ...comp,
+      companionshipIndex: index,
+      companionshipKey: getCompanionshipKey(comp),
+      midpoint,
+      assignedPeople: [],
+      targetCount: 0
+    };
+  });
+}
+function buildHomeCompanionshipLookup(companionships) {
+  const lookup = new Map();
 
+  companionships.forEach(comp => {
+    const compKey = getCompanionshipKey(comp);
+    comp.members.forEach(member => {
+      lookup.set(getPersonKey(member), compKey);
+    });
+  });
+
+  return lookup;
+}   
+
+function getDistanceMetersToCompanionshipMidpoint(person, compRecord) {
+  try {
+    const midpointPoint = turf.point(compRecord.midpoint);
+    return turf.distance(person.feature, midpointPoint, { units: "kilometers" }) * 1000;
+  } catch (err) {
+    return Infinity;
+  }
+}
+
+function getMinDistanceToAnyCompanion(person, compRecord) {
+  let best = Infinity;
+
+  for (const member of compRecord.members) {
+    const d = getDistanceMetersBetweenMembers(person, member);
+    if (d < best) best = d;
+  }
+
+  return best;
+}
+
+function buildAssignmentCandidatesForDistrict(districtMembers, compRecords, homeLookup) {
+  const candidatesByPerson = new Map();
+
+  for (const person of districtMembers) {
+    const personKey = getPersonKey(person);
+    const homeCompKey = homeLookup.get(personKey) || null;
+
+    const candidates = compRecords
+      .filter(comp => {
+        // cannot assign someone to their own companionship
+        if (homeCompKey && comp.companionshipKey === homeCompKey) return false;
+        return true;
+      })
+      .map(comp => ({
+        companionshipKey: comp.companionshipKey,
+        midpointDistance: getDistanceMetersToCompanionshipMidpoint(person, comp),
+        minCompanionDistance: getMinDistanceToAnyCompanion(person, comp)
+      }))
+      .sort((a, b) => {
+        if (a.midpointDistance !== b.midpointDistance) {
+          return a.midpointDistance - b.midpointDistance;
+        }
+        if (a.minCompanionDistance !== b.minCompanionDistance) {
+          return a.minCompanionDistance - b.minCompanionDistance;
+        }
+        return a.companionshipKey.localeCompare(b.companionshipKey);
+      });
+
+    candidatesByPerson.set(personKey, candidates);
+  }
+
+  return candidatesByPerson;
+}
+function assignDistrictMembersToCompanionships(district, districtCompanionships) {
+  const districtMembers = district.members.slice();
+  const compRecords = buildCompanionshipAssignmentRecords(districtCompanionships);
+  const targets = distributeDistrictAssignmentTargets(districtMembers.length, compRecords.length);
+
+  compRecords.forEach((comp, i) => {
+    comp.targetCount = targets[i] || 0;
+  });
+
+  const homeLookup = buildHomeCompanionshipLookup(compRecords);
+  const candidatesByPerson = buildAssignmentCandidatesForDistrict(districtMembers, compRecords, homeLookup);
+
+  const personRecords = districtMembers.map(person => {
+    const personKey = getPersonKey(person);
+    const homeCompKey = homeLookup.get(personKey) || null;
+    const candidates = candidatesByPerson.get(personKey) || [];
+    return {
+      person,
+      personKey,
+      homeCompKey,
+      candidates
+    };
+  });
+
+  // Harder people first = fewer choices first, then closer first
+  personRecords.sort((a, b) => {
+    if (a.candidates.length !== b.candidates.length) {
+      return a.candidates.length - b.candidates.length;
+    }
+    const aBest = a.candidates[0]?.midpointDistance ?? Infinity;
+    const bBest = b.candidates[0]?.midpointDistance ?? Infinity;
+    if (aBest !== bBest) return aBest - bBest;
+    return a.personKey.localeCompare(b.personKey);
+  });
+
+  const compByKey = new Map(compRecords.map(c => [c.companionshipKey, c]));
+  const assignedPersonKeys = new Set();
+
+  // tracks one-way companionship teaching relationships
+  // targetComp teaches homeComp
+  const directedTeachPairs = new Set();
+
+  function canAssign(record, comp, enforceReciprocalRule = true) {
+    if (assignedPersonKeys.has(record.personKey)) return false;
+    if (comp.assignedPeople.length >= comp.targetCount) return false;
+    if (record.homeCompKey && comp.companionshipKey === record.homeCompKey) return false;
+
+    if (enforceReciprocalRule && record.homeCompKey) {
+      const reverseKey = `${record.homeCompKey}=>${comp.companionshipKey}`;
+      if (directedTeachPairs.has(reverseKey)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  function commitAssignment(record, comp) {
+    comp.assignedPeople.push(record.person);
+    assignedPersonKeys.add(record.personKey);
+
+    if (record.homeCompKey) {
+      directedTeachPairs.add(`${comp.companionshipKey}=>${record.homeCompKey}`);
+    }
+  }
+
+  // Pass 1: strict
+  for (const record of personRecords) {
+    for (const candidate of record.candidates) {
+      const comp = compByKey.get(candidate.companionshipKey);
+      if (!comp) continue;
+      if (!canAssign(record, comp, true)) continue;
+
+      commitAssignment(record, comp);
+      break;
+    }
+  }
+
+  // Pass 2: allow reciprocal if necessary, but still keep target counts
+  for (const record of personRecords) {
+    if (assignedPersonKeys.has(record.personKey)) continue;
+
+    for (const candidate of record.candidates) {
+      const comp = compByKey.get(candidate.companionshipKey);
+      if (!comp) continue;
+      if (!canAssign(record, comp, false)) continue;
+
+      commitAssignment(record, comp);
+      break;
+    }
+  }
+
+  // Pass 3: overflow fallback if some target counts were too restrictive
+  for (const record of personRecords) {
+    if (assignedPersonKeys.has(record.personKey)) continue;
+
+    for (const candidate of record.candidates) {
+      const comp = compByKey.get(candidate.companionshipKey);
+      if (!comp) continue;
+
+      if (record.homeCompKey && comp.companionshipKey === record.homeCompKey) continue;
+
+      commitAssignment(record, comp);
+      break;
+    }
+  }
+
+  return {
+    districtId: district.id,
+    companionships: compRecords,
+    unassignedCount: personRecords.length - assignedPersonKeys.size
+  };
+}
+function buildAllDistrictAssignments(pointDistricts, companionships) {
+  const byDistrictCompanionships = new Map();
+
+  companionships.forEach(comp => {
+    if (!byDistrictCompanionships.has(comp.districtId)) {
+      byDistrictCompanionships.set(comp.districtId, []);
+    }
+    byDistrictCompanionships.get(comp.districtId).push(comp);
+  });
+
+  const results = [];
+
+  for (const district of pointDistricts) {
+    const districtCompanionships = byDistrictCompanionships.get(district.id) || [];
+    if (!districtCompanionships.length) continue;
+
+    const districtResult = assignDistrictMembersToCompanionships(
+      district,
+      districtCompanionships
+    );
+
+    results.push(districtResult);
+  }
+
+  return results;
+}    
+function drawAssignmentResults(districtAssignmentResults) {
+  removeAssignmentLayers();
+
+  const midpointFeatures = [];
+  const lineFeatures = [];
+
+  districtAssignmentResults.forEach(districtResult => {
+    districtResult.companionships.forEach(comp => {
+      const districtId = comp.districtId;
+      const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+
+      if (comp.midpoint) {
+        midpointFeatures.push({
+          type: "Feature",
+          geometry: {
+            type: "Point",
+            coordinates: comp.midpoint
+          },
+          properties: {
+            district_id: districtId,
+            companionship_key: comp.companionshipKey,
+            color
+          }
+        });
+      }
+
+      comp.assignedPeople.forEach(person => {
+        lineFeatures.push({
+          type: "Feature",
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              comp.midpoint,
+              person.feature.geometry.coordinates
+            ]
+          },
+          properties: {
+            district_id: districtId,
+            companionship_key: comp.companionshipKey,
+            color
+          }
+        });
+      });
+    });
+  });
+
+  companionshipMidpointLayer = L.geoJSON(
+    { type: "FeatureCollection", features: midpointFeatures },
+    {
+      pointToLayer: function(feature, latlng) {
+        return L.circleMarker(latlng, {
+          radius: 5,
+          color: "#111827",
+          weight: 1.5,
+          fillColor: feature.properties.color || "#111827",
+          fillOpacity: 1,
+          opacity: 1
+        });
+      }
+    }
+  ).addTo(map);
+
+  assignmentLineLayer = L.geoJSON(
+    { type: "FeatureCollection", features: lineFeatures },
+    {
+      style: function(feature) {
+        return {
+          color: feature.properties.color || "#111827",
+          weight: 2,
+          opacity: 0.7,
+          dashArray: "6,4"
+        };
+      }
+    }
+  ).addTo(map);
+
+  if (assignmentLineLayer.bringToFront) assignmentLineLayer.bringToFront();
+  if (companionshipMidpointLayer.bringToFront) companionshipMidpointLayer.bringToFront();
+  if (districtPointLayer && districtPointLayer.bringToFront) districtPointLayer.bringToFront();
+}
+    
+function renderAssignmentSummary(districtAssignmentResults) {
+  resetAssignmentSummary();
+
+  const intro = document.createElement("div");
+  intro.className = "district-row";
+  intro.innerHTML = `<strong>Step 9 complete</strong><br>
+    Ministering assignments were created district by district using companionship midpoints.
+    Self-companionship assignments were blocked, and reciprocal companionship exchange was avoided where possible.`;
+  assignmentSummary.appendChild(intro);
+
+  districtAssignmentResults.forEach(result => {
+    const totalAssigned = result.companionships.reduce((sum, c) => sum + c.assignedPeople.length, 0);
+
+    const row = document.createElement("div");
+    row.className = "district-row";
+    row.innerHTML = `
+      <strong>District ${result.districtId + 1}</strong><br>
+      Companionships: ${result.companionships.length}<br>
+      Total assignments placed: ${totalAssigned}<br>
+      Unassigned remaining: ${result.unassignedCount}
+    `;
+    assignmentSummary.appendChild(row);
+  });
+}
+    
 function removeCompanionshipLayer() {
   if (companionshipLineLayer) {
     map.removeLayer(companionshipLineLayer);
@@ -822,24 +1210,73 @@ function runStep8CreateCompanionships() {
     try {
       const companionships = buildAllCompanionships(currentPointDistricts);
       currentCompanionships = companionships;
-
+      currentAssignments = null;
       drawCompanionshipLines(companionships);
       renderCompanionshipSummary(companionships);
-
+      removeAssignmentLayers();
       hideStepSpinner();
-
+      resetAssignmentSummary();
+      if (assignmentStatus) {
+  setStatus(assignmentStatus, "Create companionships first, then create ministering assignments.");
+}
       setStatus(
         companionshipStatus,
         `Companionship step complete. Created ${companionships.length} companionship group(s).`,
         "good"
+        
+      );
+    } catch (error) {
+      console.error(error);
+      hideStepSpinner();
+      setStatus(assignmentStatus, "Companionships created. You can now create ministering assignments.", "good");
+      setStatus(
+        companionshipStatus,
+        `Companionship creation failed: ${error?.message || error}`,
+        "error"
+      );
+    }
+  }, 40);
+}
+
+function runStep9CreateAssignments() {
+  if (!currentPointDistricts || !currentCompanionships || !currentCompanionships.length) {
+    setStatus(assignmentStatus, "Create companionships first.", "warn");
+    return;
+  }
+
+  setStatus(assignmentStatus, "Creating ministering assignments by companionship midpoint...", "warn");
+  showStepSpinner("Creating assignments...");
+
+  setTimeout(() => {
+    try {
+      const districtAssignmentResults = buildAllDistrictAssignments(
+        currentPointDistricts,
+        currentCompanionships
+      );
+
+      currentAssignments = districtAssignmentResults;
+
+      drawAssignmentResults(districtAssignmentResults);
+      renderAssignmentSummary(districtAssignmentResults);
+
+      const totalUnassigned = districtAssignmentResults.reduce((sum, r) => sum + r.unassignedCount, 0);
+
+      hideStepSpinner();
+
+      setStatus(
+        assignmentStatus,
+        totalUnassigned === 0
+          ? "Assignment step complete. Everyone was assigned to a companionship."
+          : `Assignment step complete with ${totalUnassigned} unassigned person(s) remaining.`,
+        totalUnassigned === 0 ? "good" : "warn"
       );
     } catch (error) {
       console.error(error);
       hideStepSpinner();
 
       setStatus(
-        companionshipStatus,
-        `Companionship creation failed: ${error?.message || error}`,
+        assignmentStatus,
+        `Assignment creation failed: ${error?.message || error}`,
         "error"
       );
     }
@@ -3110,7 +3547,9 @@ function renderStep4Summary(finalResult) {
       removeFilteredPreviewLayer();
       resetDistrictSummary();
       resetGerrySummary();
+      resetAssignmentSummary();
       removeCompanionshipLayer();
+      removeAssignmentLayers();
       currentFiltered = [];
       currentStats = null;
       currentDistrictTargets = null;
@@ -3119,6 +3558,7 @@ function renderStep4Summary(finalResult) {
       currentFinalDistrictPolygons = null;
       currentClaimResult = null;
       currentCompanionships = null;
+      currentAssignments = null;
 regerrymanderBtn.disabled = true;
 gerrymanderBtn.disabled = true;
 finalizePolygonsBtn.disabled = true;
@@ -3128,6 +3568,9 @@ fillBtn.disabled = true;
 uploadBtn.disabled = true;
 continueBtn.disabled = true;
 resetCompanionshipSummary();
+if (assignmentStatus) {
+  setStatus(assignmentStatus, "Create companionships first, then create ministering assignments.");
+}  
 if (companionshipStatus) {
   setStatus(companionshipStatus, "Click Create Companionships to connect companionships within each district.");
 }
@@ -3971,15 +4414,20 @@ async function runStep7() {
       currentFinalDistrictPolygons = null;
       currentClaimResult = null;
       currentCompanionships = null;
+      currentAssignments = null;
       clearMetricCards();
       resetDistrictSummary();
       resetGerrySummary();
-
+      removeAssignmentLayers();
       removeDistrictLayers();
       removeFilteredPreviewLayer();
       hideStepSpinner();
       removeCompanionshipLayer();
       resetCompanionshipSummary();
+      resetAssignmentSummary();
+if (assignmentStatus) {
+  setStatus(assignmentStatus, "Create companionships first, then create ministering assignments.");
+}
 if (companionshipStatus) {
   setStatus(companionshipStatus, "Click Create Companionships to connect companionships within each district.");
 }
@@ -4131,6 +4579,9 @@ if (createCompanionshipsBtn) {
 }
     if (backToDistrictingBtn) {
   backToDistrictingBtn.addEventListener("click", goBackToDistricting);
+}  
+if (createAssignmentsBtn) {
+  createAssignmentsBtn.addEventListener("click", runStep9CreateAssignments);
 }
     initMap();
   </script>
