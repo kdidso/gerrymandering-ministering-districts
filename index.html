@@ -405,11 +405,17 @@
   </div>
 
   <div class="row" style="margin-top:10px;">
-    <button id="backToDistrictingBtn" class="secondary">Back to Districting</button>
+    <button id="createCompanionshipsBtn" class="secondary" type="button">Create Companionships</button>
+    <button id="backToDistrictingBtn" class="secondary" type="button">Back to Districting</button>
   </div>
+  <div id="companionshipStatus" class="status">
+    Click <strong>Create Companionships</strong> to connect companionships within each district.
+  </div>
+  
+  <div class="district-summary" id="companionshipSummary"></div>
 
   <div class="small-note">
-    This is the new workflow panel. The Step 8 tools can be added here next.
+    This step creates companionships only from people with Assigned_to_minister = yes, within the same district, using nearest-neighbor proximity.
   </div>
 </div>
     </aside>
@@ -456,7 +462,8 @@
     let adjustedPolygonLayer = null;
     let finalPolygonLayer = null;
     let claimedCellLayer = null;
-
+    let companionshipLineLayer = null;
+    
     let currentFiltered = [];
     let currentStats = null;
     let currentDistrictTargets = null;
@@ -464,7 +471,7 @@
     let currentDistrictPolygons = null;
     let currentFinalDistrictPolygons = null;
     let currentClaimResult = null;
-
+    let currentCompanionships = null;
     let cellsWorking = [];
     let cellById = new Map();
     let cellFeatureById = new Map();
@@ -518,6 +525,326 @@
     const step2Card = document.getElementById("step2Card");
     const step3to7Card = document.getElementById("step3to7Card");
     const backToDistrictingBtn = document.getElementById("backToDistrictingBtn");
+    const createCompanionshipsBtn = document.getElementById("createCompanionshipsBtn");
+    const companionshipStatus = document.getElementById("companionshipStatus");
+    const companionshipSummary = document.getElementById("companionshipSummary");
+
+function resetCompanionshipSummary() {
+  if (companionshipSummary) companionshipSummary.innerHTML = "";
+}
+
+function removeCompanionshipLayer() {
+  if (companionshipLineLayer) {
+    map.removeLayer(companionshipLineLayer);
+    companionshipLineLayer = null;
+  }
+}
+
+function getMemberLastName(item) {
+  return String(
+    item?.feature?.properties?.Last_Name ??
+    item?.feature?.properties?.last_name ??
+    ""
+  ).trim().toLowerCase();
+}
+
+function getMemberFirstName(item) {
+  return String(
+    item?.feature?.properties?.First_Name ??
+    item?.feature?.properties?.first_name ??
+    ""
+  ).trim().toLowerCase();
+}
+
+function compareItemsAlphabetically(a, b) {
+  const lastCompare = getMemberLastName(a).localeCompare(getMemberLastName(b));
+  if (lastCompare !== 0) return lastCompare;
+
+  const firstCompare = getMemberFirstName(a).localeCompare(getMemberFirstName(b));
+  if (firstCompare !== 0) return firstCompare;
+
+  const aCoords = a.feature.geometry.coordinates;
+  const bCoords = b.feature.geometry.coordinates;
+
+  if (aCoords[1] !== bCoords[1]) return aCoords[1] - bCoords[1];
+  return aCoords[0] - bCoords[0];
+}
+
+function getDistanceMetersBetweenMembers(a, b) {
+  try {
+    return turf.distance(a.feature, b.feature, { units: "kilometers" }) * 1000;
+  } catch (err) {
+    return Infinity;
+  }
+}
+
+function buildDistrictCompanionships(district) {
+  const eligible = district.members
+    .filter(item => item.group === 1)
+    .slice()
+    .sort(compareItemsAlphabetically);
+
+  const companionships = [];
+
+  if (eligible.length < 2) {
+    if (eligible.length === 1) {
+      companionships.push({
+        districtId: district.id,
+        members: [eligible[0]],
+        isTrio: false
+      });
+    }
+    return companionships;
+  }
+
+  const remaining = eligible.slice();
+
+  while (remaining.length > 3) {
+    let bestI = -1;
+    let bestJ = -1;
+    let bestDistance = Infinity;
+    let bestTieKey = "";
+
+    for (let i = 0; i < remaining.length; i++) {
+      for (let j = i + 1; j < remaining.length; j++) {
+        const a = remaining[i];
+        const b = remaining[j];
+        const dist = getDistanceMetersBetweenMembers(a, b);
+
+        const sortedPair = [a, b].slice().sort(compareItemsAlphabetically);
+        const tieKey = `${getMemberLastName(sortedPair[0])}|${getMemberFirstName(sortedPair[0])}|${getMemberLastName(sortedPair[1])}|${getMemberFirstName(sortedPair[1])}`;
+
+        if (
+          dist < bestDistance ||
+          (dist === bestDistance && tieKey < bestTieKey)
+        ) {
+          bestDistance = dist;
+          bestI = i;
+          bestJ = j;
+          bestTieKey = tieKey;
+        }
+      }
+    }
+
+    const pair = [remaining[bestI], remaining[bestJ]].sort(compareItemsAlphabetically);
+
+    companionships.push({
+      districtId: district.id,
+      members: pair,
+      isTrio: false
+    });
+
+    remaining.splice(bestJ, 1);
+    remaining.splice(bestI, 1);
+  }
+
+  if (remaining.length === 3) {
+    companionships.push({
+      districtId: district.id,
+      members: remaining.slice().sort(compareItemsAlphabetically),
+      isTrio: true
+    });
+  } else if (remaining.length === 2) {
+    companionships.push({
+      districtId: district.id,
+      members: remaining.slice().sort(compareItemsAlphabetically),
+      isTrio: false
+    });
+  } else if (remaining.length === 1) {
+    companionships.push({
+      districtId: district.id,
+      members: [remaining[0]],
+      isTrio: false
+    });
+  }
+
+  return companionships;
+}
+
+function buildAllCompanionships(pointDistricts) {
+  const all = [];
+
+  for (const district of pointDistricts) {
+    const districtCompanionships = buildDistrictCompanionships(district);
+
+    for (const comp of districtCompanionships) {
+      all.push(comp);
+    }
+  }
+
+  return all;
+}
+
+function buildCompanionshipLineFeatures(companionships) {
+  const features = [];
+
+  companionships.forEach((comp, index) => {
+    const districtId = comp.districtId;
+    const color = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
+    const members = comp.members.slice().sort(compareItemsAlphabetically);
+
+    if (members.length === 2) {
+      const coords = members.map(m => m.feature.geometry.coordinates);
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: coords
+        },
+        properties: {
+          district_id: districtId,
+          companionship_index: index,
+          companionship_size: 2,
+          line_color: color
+        }
+      });
+    } else if (members.length === 3) {
+      const anchor = members[0];
+      const second = members[1];
+      const third = members[2];
+
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            anchor.feature.geometry.coordinates,
+            second.feature.geometry.coordinates
+          ]
+        },
+        properties: {
+          district_id: districtId,
+          companionship_index: index,
+          companionship_size: 3,
+          line_color: color
+        }
+      });
+
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            anchor.feature.geometry.coordinates,
+            third.feature.geometry.coordinates
+          ]
+        },
+        properties: {
+          district_id: districtId,
+          companionship_index: index,
+          companionship_size: 3,
+          line_color: color
+        }
+      });
+    }
+  });
+
+  return {
+    type: "FeatureCollection",
+    features
+  };
+}
+function drawCompanionshipLines(companionships) {
+  removeCompanionshipLayer();
+
+  const fc = buildCompanionshipLineFeatures(companionships);
+
+  companionshipLineLayer = L.geoJSON(fc, {
+    style: function(feature) {
+      return {
+        color: feature.properties.line_color || "#111827",
+        weight: 3,
+        opacity: 0.9
+      };
+    },
+    onEachFeature: function(feature, layer) {
+      const districtNumber = Number(feature.properties.district_id) + 1;
+      const size = feature.properties.companionship_size;
+      layer.bindPopup(
+        `<strong>District ${districtNumber}</strong><br>Companionship size: ${size}`
+      );
+    }
+  }).addTo(map);
+
+  if (companionshipLineLayer.bringToFront) companionshipLineLayer.bringToFront();
+  if (districtPointLayer && districtPointLayer.bringToFront) districtPointLayer.bringToFront();
+}
+
+function renderCompanionshipSummary(companionships) {
+  resetCompanionshipSummary();
+
+  const intro = document.createElement("div");
+  intro.className = "district-row";
+  intro.innerHTML = `<strong>Step 8 complete</strong><br>
+    Companionships were created within each district using only members with Assigned_to_minister = yes.
+    Pairing was based on nearest proximity, with alphabetical last-name tie breaking.
+    Districts with an odd count may contain one trio.`;
+  companionshipSummary.appendChild(intro);
+
+  const byDistrict = new Map();
+
+  companionships.forEach(comp => {
+    if (!byDistrict.has(comp.districtId)) byDistrict.set(comp.districtId, []);
+    byDistrict.get(comp.districtId).push(comp);
+  });
+
+  const districtIds = [...byDistrict.keys()].sort((a, b) => a - b);
+
+  districtIds.forEach(districtId => {
+    const comps = byDistrict.get(districtId) || [];
+    const pairCount = comps.filter(c => c.members.length === 2).length;
+    const trioCount = comps.filter(c => c.members.length === 3).length;
+    const singleCount = comps.filter(c => c.members.length === 1).length;
+
+    const row = document.createElement("div");
+    row.className = "district-row";
+    row.innerHTML = `
+      <strong>District ${districtId + 1}</strong><br>
+      Companionships created: ${comps.length}<br>
+      Pairs: ${pairCount}<br>
+      Trios: ${trioCount}<br>
+      Singles: ${singleCount}
+    `;
+    companionshipSummary.appendChild(row);
+  });
+}
+
+function runStep8CreateCompanionships() {
+  if (!currentPointDistricts || !currentClaimResult) {
+    setStatus(companionshipStatus, "Complete districting first before creating companionships.", "warn");
+    return;
+  }
+
+  setStatus(companionshipStatus, "Creating companionships by district proximity...", "warn");
+  showStepSpinner("Creating companionships...");
+
+  setTimeout(() => {
+    try {
+      const companionships = buildAllCompanionships(currentPointDistricts);
+      currentCompanionships = companionships;
+
+      drawCompanionshipLines(companionships);
+      renderCompanionshipSummary(companionships);
+
+      hideStepSpinner();
+
+      setStatus(
+        companionshipStatus,
+        `Companionship step complete. Created ${companionships.length} companionship group(s).`,
+        "good"
+      );
+    } catch (error) {
+      console.error(error);
+      hideStepSpinner();
+
+      setStatus(
+        companionshipStatus,
+        `Companionship creation failed: ${error?.message || error}`,
+        "error"
+      );
+    }
+  }, 40);
+}
 
 function showDistrictingWorkflow() {
   if (dataStatusCard) dataStatusCard.style.display = "";
@@ -2783,7 +3110,7 @@ function renderStep4Summary(finalResult) {
       removeFilteredPreviewLayer();
       resetDistrictSummary();
       resetGerrySummary();
-
+      removeCompanionshipLayer();
       currentFiltered = [];
       currentStats = null;
       currentDistrictTargets = null;
@@ -2791,7 +3118,7 @@ function renderStep4Summary(finalResult) {
       currentDistrictPolygons = null;
       currentFinalDistrictPolygons = null;
       currentClaimResult = null;
-
+      currentCompanionships = null;
 regerrymanderBtn.disabled = true;
 gerrymanderBtn.disabled = true;
 finalizePolygonsBtn.disabled = true;
@@ -2800,6 +3127,10 @@ expandBtn.disabled = true;
 fillBtn.disabled = true;
 uploadBtn.disabled = true;
 continueBtn.disabled = true;
+resetCompanionshipSummary();
+if (companionshipStatus) {
+  setStatus(companionshipStatus, "Click Create Companionships to connect companionships within each district.");
+}
 if (step8Card) step8Card.style.display = "none";
       setStatus(gerryStatus, "Calculate targets first.");
 
@@ -3639,7 +3970,7 @@ async function runStep7() {
       currentDistrictPolygons = null;
       currentFinalDistrictPolygons = null;
       currentClaimResult = null;
-
+      currentCompanionships = null;
       clearMetricCards();
       resetDistrictSummary();
       resetGerrySummary();
@@ -3647,6 +3978,11 @@ async function runStep7() {
       removeDistrictLayers();
       removeFilteredPreviewLayer();
       hideStepSpinner();
+      removeCompanionshipLayer();
+      resetCompanionshipSummary();
+if (companionshipStatus) {
+  setStatus(companionshipStatus, "Click Create Companionships to connect companionships within each district.");
+}
       if (allMembersLayer) {
         allMembersLayer.setStyle({
           radius: 5,
@@ -3790,6 +4126,9 @@ chkMetadataLoaded.checked = false;
     toggleCellsLayer.addEventListener("change", updateCellsLayerVisibility);
     uploadBtn.addEventListener("click", uploadDistrictFiles);
     continueBtn.addEventListener("click", continueToNextWorkflow);
+if (createCompanionshipsBtn) {
+  createCompanionshipsBtn.addEventListener("click", runStep8CreateCompanionships);
+}
     if (backToDistrictingBtn) {
   backToDistrictingBtn.addEventListener("click", goBackToDistricting);
 }
