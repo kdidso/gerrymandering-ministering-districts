@@ -650,14 +650,16 @@
     let currentFinalDistrictPolygons = null;
     let currentClaimResult = null;
     let currentStep5ClaimResult = null;
+    let currentStep6RunCount = 0;
     let currentCompanionships = null;
     let cellsWorking = [];
     let cellById = new Map();
     let cellFeatureById = new Map();
     let step3ProgressInterval = null;
     let step3ProgressStartTime = null;
+    
+    
     const STEP3_ESTIMATED_MS = 45000;
-
     const chkWardLoaded = document.getElementById("chkWardLoaded");
     const chkMembersLoaded = document.getElementById("chkMembersLoaded");
     const chkCellsLoaded = document.getElementById("chkCellsLoaded");
@@ -3936,6 +3938,7 @@ function renderStep4Summary(finalResult) {
       currentFinalDistrictPolygons = null;
       currentClaimResult = null;
       currentStep5ClaimResult = null;
+      currentStep6RunCount = 0;
       currentCompanionships = null;
       currentAssignments = null;
 rerunStep6Btn.disabled = true;
@@ -4277,6 +4280,7 @@ function runStep5() {
 
       currentClaimResult = claimResult;
       currentStep5ClaimResult = cloneClaimResult(claimResult);
+      currentStep6RunCount = 0;
       drawClaimedCells(claimResult);
       renderClaimSummary(claimResult);
 
@@ -4352,8 +4356,9 @@ function getDistrictExpansionNeed(pointDistricts, owner) {
   return need;
 }
 
-function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
+function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12, maxNewClaims = Infinity) {
   const owner = new Map(claimResult.owner);
+  const startingClaimCount = owner.size;
 
   let changed = true;
   let round = 0;
@@ -4361,6 +4366,9 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
   while (changed && round < maxRounds) {
     changed = false;
     round++;
+
+    const currentAdded = owner.size - startingClaimCount;
+    if (currentAdded >= maxNewClaims) break;
 
     const expansionNeed = getDistrictExpansionNeed(pointDistricts, owner);
     const proposals = new Map();
@@ -4375,27 +4383,14 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
       if (!touchingDistricts.length) continue;
 
       const scoredCandidates = touchingDistricts.map(districtId => {
-        let sharedBorder = 0;
-
-        for (const neighborIdRaw of cell.neighbors) {
-          const neighborId = String(neighborIdRaw);
-          if (owner.get(neighborId) === districtId) {
-            sharedBorder++;
-          }
-        }
-
+        const sharedBorder = getSharedBorderCountForDistrict(cellId, districtId, owner);
         const need = expansionNeed.get(districtId) || 0;
 
-        // Much softer balance so multiple districts can compete
         const baseScore = (sharedBorder * 4) + (need * 1.5);
-
-        // Add random jitter so reruns actually differ
-        const randomJitter = Math.random() * 6;
+        const randomJitter = Math.random() * 8;
 
         return {
           districtId,
-          need,
-          sharedBorder,
           score: baseScore + randomJitter
         };
       });
@@ -4403,20 +4398,21 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12) {
       scoredCandidates.sort((a, b) => b.score - a.score);
 
       const bestScore = scoredCandidates[0].score;
-
-      // Allow a wider band of near-best candidates
-      const nearBest = scoredCandidates.filter(c => c.score >= bestScore - 4);
-
-      const chosen =
-        nearBest[Math.floor(Math.random() * nearBest.length)];
+      const nearBest = scoredCandidates.filter(c => c.score >= bestScore - 5);
+      const chosen = nearBest[Math.floor(Math.random() * nearBest.length)];
 
       proposals.set(cellId, chosen.districtId);
     }
 
     if (!proposals.size) break;
 
+    const remainingBudget = maxNewClaims - (owner.size - startingClaimCount);
+    const limitedEntries = [...proposals.entries()].slice(0, Math.max(0, remainingBudget));
+
+    if (!limitedEntries.length) break;
+
     const tentativeOwner = new Map(owner);
-    for (const [cellId, districtId] of proposals.entries()) {
+    for (const [cellId, districtId] of limitedEntries) {
       tentativeOwner.set(String(cellId), districtId);
     }
 
@@ -4482,7 +4478,22 @@ function runStep6() {
     return;
   }
 
-  setStatus(gerryStatus, "Expanding districts safely into unclaimed cells from the Step 5 baseline...", "warn");
+  currentStep6RunCount += 1;
+
+  const baseClaimCount = currentStep5ClaimResult.owner.size;
+  const unclaimedCount = cellsWorking.length - baseClaimCount;
+
+  // Pick a different safe expansion size each rerun
+  const minBudget = Math.max(10, Math.floor(unclaimedCount * 0.15));
+  const maxBudget = Math.max(minBudget, Math.floor(unclaimedCount * 0.65));
+  const randomBudget = Math.floor(Math.random() * (maxBudget - minBudget + 1)) + minBudget;
+
+  setStatus(
+    gerryStatus,
+    `Expanding districts safely from the Step 5 baseline. Re-run ${currentStep6RunCount}. Expansion budget: up to ${randomBudget} new cells.`,
+    "warn"
+  );
+
   showStepSpinner("Running Step 6...");
 
   setTimeout(() => {
@@ -4490,7 +4501,8 @@ function runStep6() {
       const expandedResult = expandIntoUnclaimedCells(
         cloneClaimResult(currentStep5ClaimResult),
         currentPointDistricts,
-        8
+        12,
+        randomBudget
       );
 
       currentClaimResult = expandedResult;
@@ -4517,9 +4529,11 @@ function runStep6() {
 
       hideStepSpinner();
 
+      const addedFromStep5 = expandedResult.owner.size - baseClaimCount;
+
       setStatus(
         gerryStatus,
-        `Step 6 complete. Expanded safely to ${expandedResult.claimedFeatures.length} claimed cells from the Step 5 baseline. You can re-run Step 6 for a different safe expansion or continue to Step 7.`,
+        `Step 6 complete. Re-run ${currentStep6RunCount} safely added ${addedFromStep5} cells from the Step 5 baseline. You can re-run Step 6 again for a different safe expansion or continue to Step 7.`,
         "good"
       );
     } catch (error) {
