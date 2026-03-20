@@ -2479,131 +2479,6 @@ async function saveToBackend(payload, filename) {
     return Infinity;
   }
 }
-
-function buildProximityClusters(items, maxMeters = 55) {
-  const visited = new Set();
-  const clusters = [];
-
-  for (let i = 0; i < items.length; i++) {
-    if (visited.has(i)) continue;
-
-    const queue = [i];
-    const componentIndexes = [];
-    visited.add(i);
-
-    let qIndex = 0;
-    while (qIndex < queue.length) {
-      const currentIndex = queue[qIndex++];
-      componentIndexes.push(currentIndex);
-
-      const currentItem = items[currentIndex];
-
-      for (let j = 0; j < items.length; j++) {
-        if (visited.has(j)) continue;
-
-        const testItem = items[j];
-
-        const sameCell =
-          currentItem.cellId != null &&
-          testItem.cellId != null &&
-          String(currentItem.cellId) === String(testItem.cellId);
-
-        let closeEnough = false;
-        if (!sameCell) {
-          const dist = distanceMetersBetweenItems(currentItem, testItem);
-          closeEnough = dist <= maxMeters;
-        }
-
-        if (sameCell || closeEnough) {
-          visited.add(j);
-          queue.push(j);
-        }
-      }
-    }
-
-    clusters.push(componentIndexes.map(idx => items[idx]));
-  }
-
-  return clusters;
-}
-
-function buildClustersForGroup(filteredItems, groupValue) {
-  const groupItems = filteredItems.filter(item => item.group === groupValue);
-
-  const rawClusters = buildProximityClusters(groupItems, 55);
-
-  const clusters = rawClusters.map((items, idx) => {
-    let sumLng = 0;
-    let sumLat = 0;
-
-    for (const item of items) {
-      const [lng, lat] = item.feature.geometry.coordinates;
-      sumLng += lng;
-      sumLat += lat;
-    }
-
-    return {
-      cellId: items[0]?.cellId ? String(items[0].cellId) : `cluster_${groupValue}_${idx}`,
-      group: groupValue,
-      items,
-      count: items.length,
-      sortLng: sumLng / items.length,
-      sortLat: sumLat / items.length
-    };
-  });
-
-  clusters.sort((a, b) => {
-    if (a.sortLat !== b.sortLat) return a.sortLat - b.sortLat;
-    return a.sortLng - b.sortLng;
-  });
-
-  return clusters;
-}
-
-    function getRemainingClusterPointCount(clusters, startIndex) {
-      let total = 0;
-      for (let i = startIndex; i < clusters.length; i++) {
-        total += clusters[i].count;
-      }
-      return total;
-    }
-
-    function takeClustersByTarget(clusters, startIndex, targetCount) {
-      const takenClusters = [];
-      let takenCount = 0;
-      let idx = startIndex;
-
-      if (idx >= clusters.length) {
-        return { takenClusters, takenCount, nextIndex: idx };
-      }
-
-      while (idx < clusters.length && takenCount < targetCount) {
-        takenClusters.push(clusters[idx]);
-        takenCount += clusters[idx].count;
-        idx++;
-      }
-
-      return {
-        takenClusters,
-        takenCount,
-        nextIndex: idx
-      };
-    }
-
-    function createEmptyDistrictState(id, xTarget, yTarget) {
-      return {
-        id,
-        xTarget,
-        yTarget,
-        sTarget: xTarget + yTarget,
-        members: [],
-        group1: 0,
-        group2: 0,
-        total: 0,
-        centroidLng: null,
-        centroidLat: null
-      };
-    }
 function compareItemsByLatLng(a, b) {
   const aCoords = a.feature.geometry.coordinates;
   const bCoords = b.feature.geometry.coordinates;
@@ -2816,77 +2691,7 @@ function assignDistrictsByOrderedGroups(filteredItems, districtCount) {
 
   return districts;
 }
-    function addClusterToDistrict(district, cluster) {
-      for (const item of cluster.items) {
-        item._assignedDistrict = district.id;
-        district.members.push(item);
-        if (item.group === 1) district.group1++;
-        if (item.group === 2) district.group2++;
-        district.total++;
-      }
-    }
 
-
-  const group1Items = itemsCopy
-    .filter(item => item.group === 1)
-    .sort(compareItemsByLatLng);
-
-  const group2Items = itemsCopy
-    .filter(item => item.group === 2)
-    .sort(compareItemsByLatLng);
-
-  const group1Targets = distributeTotal(group1Items.length, districtCount);
-  const group2Targets = distributeTotal(group2Items.length, districtCount);
-
-  let g1Index = 0;
-  let g2Index = 0;
-
-  const districts = [];
-
-  for (let districtId = 0; districtId < districtCount; districtId++) {
-    const district = createEmptyDistrictState(
-      districtId,
-      group1Targets[districtId],
-      group2Targets[districtId]
-    );
-
-    const g1Take = takeOrderedItemsWithProximitySpillover(
-      group1Items,
-      g1Index,
-      group1Targets[districtId],
-      district.members,
-      55
-    );
-    for (const item of g1Take.items) {
-      item._assignedDistrict = district.id;
-      district.members.push(item);
-      district.group1++;
-      district.total++;
-    }
-    g1Index = g1Take.nextIndex;
-
-    const g2Take = takeOrderedItemsWithProximitySpillover(
-      group2Items,
-      g2Index,
-      group2Targets[districtId],
-      district.members,
-      55
-    );
-    for (const item of g2Take.items) {
-      item._assignedDistrict = district.id;
-      district.members.push(item);
-      district.group2++;
-      district.total++;
-    }
-    g2Index = g2Take.nextIndex;
-
-    computeDistrictCentroid(district);
-    districts.push(district);
-  }
-
-  return districts;
-}
-    
 
     function buildDistrictPointFeatureCollection(pointDistricts, districtId) {
       const features = [];
@@ -4361,7 +4166,7 @@ function runStep3() {
       renderStep3Summary(pointDistricts, polygonResult);
       perfEnd("STEP 3 draw");
 
-      regerrymanderBtn.disabled = false;
+      rerunStep6Btn.disabled = false;
       gerrymanderBtn.disabled = true;
       finalizePolygonsBtn.disabled = false;
       claimCellsBtn.disabled = true;
@@ -4396,6 +4201,25 @@ function runStep3() {
   }, 40);
 }
 
+  
+function cloneClaimResult(claimResult) {
+  if (!claimResult) return null;
+
+  return {
+    owner: new Map(claimResult.owner ? [...claimResult.owner.entries()] : []),
+    claimedFeatures: (claimResult.claimedFeatures || []).map(cloneFeature),
+    countByDistrict: new Map(
+      claimResult.countByDistrict ? [...claimResult.countByDistrict.entries()] : []
+    )
+  };
+}
+
+function runStep4() {
+  if (!currentPointDistricts || !currentDistrictPolygons) {
+    setStatus(gerryStatus, "Run Step 3 first.", "warn");
+    return;
+  }
+
   setStatus(gerryStatus, "Finalizing district polygons and removing overlaps...", "warn");
   showStepSpinner("Running Step 4...");
 
@@ -4404,10 +4228,15 @@ function runStep3() {
       perfStart("STEP 4 TOTAL");
 
       perfStart("STEP 4 finalizeDistrictPolygons");
-      const finalResult = finalizeDistrictPolygons(currentDistrictPolygons, currentPointDistricts);
+      const finalResult = finalizeDistrictPolygons(
+        currentDistrictPolygons,
+        currentPointDistricts
+      );
       perfEnd("STEP 4 finalizeDistrictPolygons");
 
-      const finalCount = finalResult.rows.filter(r => r.finalCellIds && r.finalCellIds.size).length;
+      const finalCount = finalResult.rows.filter(
+        r => r.finalCellIds && r.finalCellIds.size
+      ).length;
 
       currentFinalDistrictPolygons = finalResult;
       currentClaimResult = null;
@@ -4448,18 +4277,6 @@ function runStep3() {
       );
     }
   }, 40);
-}
-
-function cloneClaimResult(claimResult) {
-  if (!claimResult) return null;
-
-  return {
-    owner: new Map(claimResult.owner ? [...claimResult.owner.entries()] : []),
-    claimedFeatures: (claimResult.claimedFeatures || []).map(cloneFeature),
-    countByDistrict: new Map(
-      claimResult.countByDistrict ? [...claimResult.countByDistrict.entries()] : []
-    )
-  };
 }
 
 function runStep5() {
