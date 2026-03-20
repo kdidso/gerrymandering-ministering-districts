@@ -4333,36 +4333,7 @@ async function ensureCellSupportDataLoaded() {
   chkMetadataLoaded.checked = true;
 }
     
-function runStep3() {
-  if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
-    setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
-    return;
-  }
 
-  setStatus(gerryStatus, "Assigning ordered district groups and building district polygons...", "warn");
-  showStepSpinner("Running Step 3...");
-  showStepProgress(10, "Starting Step 3...");
-
-  setTimeout(async () => {
-    try {
-      removeDistrictLayers();
-
-      showStepProgress(25, "Loading cell support data...");
-      await ensureCellSupportDataLoaded();
-
-      perfStart("STEP 3 TOTAL");
-
-      showStepProgress(45, "Assigning districts...");
-      perfStart("STEP 3 assignDistrictsByOrderedGroups");
-      let pointDistricts = assignDistrictsByOrderedGroups(
-      currentFiltered,
-      currentDistrictTargets.districtCount
-);
-
-let pointDistricts = assignDistrictsByOrderedGroups(
-  currentFiltered,
-  currentDistrictTargets.districtCount
-);
 
 function runStep3() {
   if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
@@ -4460,7 +4431,6 @@ function runStep3() {
     }
   }, 40);
 }
-
 function runStep4() {
   if (!currentPointDistricts || !currentDistrictPolygons) {
     setStatus(gerryStatus, "Run Step 3 first.", "warn");
