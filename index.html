@@ -2755,6 +2755,114 @@ function assignDistrictsByOrderedGroups(filteredItems, districtCount) {
   return districts;
 }
 
+function flattenDistrictMembers(pointDistricts) {
+  const all = [];
+
+  for (const district of pointDistricts) {
+    for (const item of district.members) {
+      all.push({
+        item,
+        districtId: district.id
+      });
+    }
+  }
+
+  return all;
+}
+
+function getAssignedDistrictIdForItem(item) {
+  return item?._assignedDistrict ?? null;
+}
+
+function setAssignedDistrictIdForItem(item, districtId) {
+  item._assignedDistrict = districtId;
+}
+
+function rebuildDistrictsFromAssignedIds(pointDistricts) {
+  const districtMap = new Map();
+
+  for (const district of pointDistricts) {
+    districtMap.set(district.id, {
+      ...district,
+      members: [],
+      group1: 0,
+      group2: 0,
+      total: 0,
+      centroidLng: null,
+      centroidLat: null
+    });
+  }
+
+  for (const district of pointDistricts) {
+    for (const item of district.members) {
+      const assignedDistrictId = getAssignedDistrictIdForItem(item);
+      if (assignedDistrictId == null || !districtMap.has(assignedDistrictId)) continue;
+
+      const targetDistrict = districtMap.get(assignedDistrictId);
+      targetDistrict.members.push(item);
+
+      if (item.group === 1) targetDistrict.group1++;
+      if (item.group === 2) targetDistrict.group2++;
+      targetDistrict.total++;
+    }
+  }
+
+  const rebuilt = [...districtMap.values()].sort((a, b) => a.id - b.id);
+
+  for (const district of rebuilt) {
+    computeDistrictCentroid(district);
+  }
+
+  return rebuilt;
+}
+
+function enforceAnyNearbyPeopleStayInSameDistrict(pointDistricts, maxMeters = 55) {
+  const flattened = flattenDistrictMembers(pointDistricts);
+
+  if (!flattened.length) return pointDistricts;
+
+  let changed = true;
+  let pass = 0;
+  const maxPasses = flattened.length;
+
+  while (changed && pass < maxPasses) {
+    changed = false;
+    pass++;
+
+    for (let i = 0; i < flattened.length; i++) {
+      for (let j = i + 1; j < flattened.length; j++) {
+        const a = flattened[i].item;
+        const b = flattened[j].item;
+
+        const districtA = getAssignedDistrictIdForItem(a);
+        const districtB = getAssignedDistrictIdForItem(b);
+
+        if (districtA == null || districtB == null) continue;
+        if (districtA === districtB) continue;
+
+        const near = areItemsWithinMeters(a, b, maxMeters);
+        if (!near) continue;
+
+        // Keep the earlier / lower district id as the winner
+        const winningDistrictId = Math.min(districtA, districtB);
+        const losingDistrictId = Math.max(districtA, districtB);
+
+        for (const row of flattened) {
+          const assigned = getAssignedDistrictIdForItem(row.item);
+          if (assigned === losingDistrictId) {
+            setAssignedDistrictIdForItem(row.item, winningDistrictId);
+          }
+        }
+
+        changed = true;
+      }
+    }
+  }
+
+  return rebuildDistrictsFromAssignedIds(pointDistricts);
+}
+    
+
     function buildDistrictPointFeatureCollection(pointDistricts, districtId) {
       const features = [];
 
@@ -3912,7 +4020,7 @@ function drawClaimedCells(claimResult) {
   const intro = document.createElement("div");
   intro.className = "district-row";
   intro.innerHTML = `<strong>Step 3 complete</strong><br>
-    Districts were assigned by ordered latitude/longitude batches within each group while keeping same-cell points and also keeping same-group points within 55 meters together.
+    Districts were assigned by ordered latitude/longitude batches within each group. After assignment, a reconciliation pass forced any filtered people within 55 meters of each other into the same district.
     A starting hull was created for each district, then a cell-based mask was built from that hull.
     Where foreign district points were trapped inside that mask, escape corridors were carved by removing cells.
     The Step 3 result is therefore a kept-cell mask, not the final overlap-resolved district boundary yet.`;
@@ -4197,10 +4305,12 @@ function runStep3() {
 
       showStepProgress(45, "Assigning districts...");
       perfStart("STEP 3 assignDistrictsByOrderedGroups");
-      const pointDistricts = assignDistrictsByOrderedGroups(
-        currentFiltered,
-        currentDistrictTargets.districtCount
-      );
+      let pointDistricts = assignDistrictsByOrderedGroups(
+      currentFiltered,
+      currentDistrictTargets.districtCount
+);
+
+pointDistricts = enforceAnyNearbyPeopleStayInSameDistrict(pointDistricts, 55);
       perfEnd("STEP 3 assignDistrictsByOrderedGroups");
 
       if (!pointDistricts || !pointDistricts.length) {
