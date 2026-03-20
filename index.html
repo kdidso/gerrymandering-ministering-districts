@@ -972,7 +972,7 @@ function getNearestMaskCellForDistrictClick(finalResult, districtId, latlng) {
   return bestCellId;
 }  
 
-  function getNearestUnclaimedCellToClick(owner, latlng, maxDistanceMeters = 300) {
+function getNearestUnclaimedCellToClick(owner, latlng) {
   const clickPoint = turf.point([latlng.lng, latlng.lat]);
 
   let bestCellId = null;
@@ -997,9 +997,8 @@ function getNearestMaskCellForDistrictClick(finalResult, districtId, latlng) {
     }
   }
 
-  if (bestDistance > maxDistanceMeters) return null;
   return bestCellId;
-}  
+}
 
 function buildForbiddenCellsForDirectedMaskExpansion(finalResult, pointDistricts, targetDistrictId) {
   const forbidden = new Set();
@@ -5164,16 +5163,16 @@ function handleMaskExpansionMapClick(e) {
 
   try {
     const owner = getCurrentFinalOwnerEstimate(currentFinalDistrictPolygons);
-    const targetCellId = getNearestUnclaimedCellToClick(owner, e.latlng, 300);
+    const targetCellId = getNearestUnclaimedCellToClick(owner, e.latlng);
 
-    if (!targetCellId) {
-      setStatus(
-        gerryStatus,
-        "That click was not close enough to an unclaimed area. Click closer to an unclaimed destination.",
-        "warn"
-      );
-      return;
-    }
+if (!targetCellId) {
+  setStatus(
+    gerryStatus,
+    "No unclaimed destination cells are available for expansion.",
+    "warn"
+  );
+  return;
+}
 
     const pathCellIds = findDirectedMaskExpansionPath(
       currentFinalDistrictPolygons,
