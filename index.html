@@ -4373,35 +4373,40 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12, m
     const expansionNeed = getDistrictExpansionNeed(pointDistricts, owner);
     const proposals = new Map();
 
-    const shuffledCells = cellsWorking.slice().sort(() => Math.random() - 0.5);
-
-    for (const cell of shuffledCells) {
+    for (const cell of cellsWorking) {
       const cellId = String(cell.id);
       if (owner.has(cellId)) continue;
 
       const touchingDistricts = [...getTouchingDistrictIdsForCell(cellId, owner)];
       if (!touchingDistricts.length) continue;
 
-      const scoredCandidates = touchingDistricts.map(districtId => {
-        const sharedBorder = getSharedBorderCountForDistrict(cellId, districtId, owner);
+      let bestDistrict = null;
+      let bestScore = -Infinity;
+
+      for (const districtId of touchingDistricts) {
+        let sharedBorder = 0;
+
+        for (const neighborIdRaw of cell.neighbors) {
+          const neighborId = String(neighborIdRaw);
+          if (owner.get(neighborId) === districtId) {
+            sharedBorder++;
+          }
+        }
+
         const need = expansionNeed.get(districtId) || 0;
 
-        const baseScore = (sharedBorder * 4) + (need * 1.5);
-        const randomJitter = Math.random() * 8;
+        // Restore strict weighting
+        const score = (need * 100) + sharedBorder;
 
-        return {
-          districtId,
-          score: baseScore + randomJitter
-        };
-      });
+        if (score > bestScore) {
+          bestScore = score;
+          bestDistrict = districtId;
+        }
+      }
 
-      scoredCandidates.sort((a, b) => b.score - a.score);
-
-      const bestScore = scoredCandidates[0].score;
-      const nearBest = scoredCandidates.filter(c => c.score >= bestScore - 5);
-      const chosen = nearBest[Math.floor(Math.random() * nearBest.length)];
-
-      proposals.set(cellId, chosen.districtId);
+      if (bestDistrict != null) {
+        proposals.set(cellId, bestDistrict);
+      }
     }
 
     if (!proposals.size) break;
