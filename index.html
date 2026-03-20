@@ -658,6 +658,7 @@
     let maskExpandMode = false;
     let selectedMaskExpandDistrictId = null;
     let selectedMaskExpandSourceCellId = null;
+    let manualExpansionCellsByDistrict = new Map();
     
     const chkWardLoaded = document.getElementById("chkWardLoaded");
     const chkMembersLoaded = document.getElementById("chkMembersLoaded");
@@ -2001,11 +2002,20 @@ function getProtectedCellIdsByDistrict(pointDistricts) {
 
   for (const district of pointDistricts) {
     const ids = new Set();
+
     for (const item of district.members) {
       if (item.cellId != null) {
         ids.add(String(item.cellId));
       }
     }
+
+    const manualSet = manualExpansionCellsByDistrict.get(district.id);
+    if (manualSet) {
+      for (const id of manualSet) {
+        ids.add(String(id));
+      }
+    }
+
     result.set(district.id, ids);
   }
 
@@ -4093,6 +4103,7 @@ function renderStep4Summary(finalResult) {
       currentAssignments = null;
       selectedMaskExpandDistrictId = null;
       selectedMaskExpandSourceCellId = null;
+      manualExpansionCellsByDistrict = new Map();
 rerunStep6Btn.disabled = true;
 gerrymanderBtn.disabled = true;
 finalizePolygonsBtn.disabled = true;
@@ -4589,6 +4600,14 @@ function handleMaskExpansionMapClick(e) {
       selectedMaskExpandDistrictId,
       pathCellIds
     );
+if (!manualExpansionCellsByDistrict.has(expansionResult.districtId)) {
+  manualExpansionCellsByDistrict.set(expansionResult.districtId, new Set());
+}
+
+const manualSet = manualExpansionCellsByDistrict.get(expansionResult.districtId);
+for (const cellId of expansionResult.addedCellIds) {
+  manualSet.add(String(cellId));
+}
 
     drawStep4Polygons(currentFinalDistrictPolygons);
     renderStep4Summary(currentFinalDistrictPolygons);
@@ -4731,6 +4750,7 @@ function runStep4() {
       const finalCount = finalResult.rows.filter(r => r.finalCellIds && r.finalCellIds.size).length;
 
       currentFinalDistrictPolygons = finalResult;
+      manualExpansionCellsByDistrict = new Map();
       currentClaimResult = null;
       selectedMaskExpandDistrictId = null;
       selectedMaskExpandSourceCellId = null;
@@ -5447,6 +5467,7 @@ setStatus(
       currentStep5ClaimResult = null;
       currentCompanionships = null;
       currentAssignments = null;
+      manualExpansionCellsByDistrict = new Map();
       clearMetricCards();
       resetDistrictSummary();
       resetGerrySummary();
