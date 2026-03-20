@@ -2755,21 +2755,6 @@ function assignDistrictsByOrderedGroups(filteredItems, districtCount) {
   return districts;
 }
 
-function flattenDistrictMembers(pointDistricts) {
-  const all = [];
-
-  for (const district of pointDistricts) {
-    for (const item of district.members) {
-      all.push({
-        item,
-        districtId: district.id
-      });
-    }
-  }
-
-  return all;
-}
-
 function getAssignedDistrictIdForItem(item) {
   return item?._assignedDistrict ?? null;
 }
@@ -2816,46 +2801,110 @@ function rebuildDistrictsFromAssignedIds(pointDistricts) {
   return rebuilt;
 }
 
-function enforceAnyNearbyPeopleStayInSameDistrict(pointDistricts, maxMeters = 55) {
-  const flattened = flattenDistrictMembers(pointDistricts);
+function flattenDistrictItems(pointDistricts) {
+  const all = [];
 
-  if (!flattened.length) return pointDistricts;
+  for (const district of pointDistricts) {
+    for (const item of district.members) {
+      all.push(item);
+    }
+  }
 
-  let changed = true;
-  let pass = 0;
-  const maxPasses = flattened.length;
+  return all;
+}
 
-  while (changed && pass < maxPasses) {
-    changed = false;
-    pass++;
+function buildNearbyComponents(items, maxMeters = 55) {
+  const components = [];
+  const visited = new Set();
 
-    for (let i = 0; i < flattened.length; i++) {
-      for (let j = i + 1; j < flattened.length; j++) {
-        const a = flattened[i].item;
-        const b = flattened[j].item;
+  for (let i = 0; i < items.length; i++) {
+    if (visited.has(i)) continue;
 
-        const districtA = getAssignedDistrictIdForItem(a);
-        const districtB = getAssignedDistrictIdForItem(b);
+    const queue = [i];
+    const component = [];
+    visited.add(i);
 
-        if (districtA == null || districtB == null) continue;
-        if (districtA === districtB) continue;
+    let qIndex = 0;
+    while (qIndex < queue.length) {
+      const currentIndex = queue[qIndex++];
+      const currentItem = items[currentIndex];
+      component.push(currentItem);
 
-        const near = areItemsWithinMeters(a, b, maxMeters);
-        if (!near) continue;
+      for (let j = 0; j < items.length; j++) {
+        if (visited.has(j)) continue;
 
-        // Keep the earlier / lower district id as the winner
-        const winningDistrictId = Math.min(districtA, districtB);
-        const losingDistrictId = Math.max(districtA, districtB);
+        const testItem = items[j];
 
-        for (const row of flattened) {
-          const assigned = getAssignedDistrictIdForItem(row.item);
-          if (assigned === losingDistrictId) {
-            setAssignedDistrictIdForItem(row.item, winningDistrictId);
-          }
+        const sameCell =
+          currentItem.cellId != null &&
+          testItem.cellId != null &&
+          String(currentItem.cellId) === String(testItem.cellId);
+
+        const nearEnough = sameCell || areItemsWithinMeters(currentItem, testItem, maxMeters);
+
+        if (nearEnough) {
+          visited.add(j);
+          queue.push(j);
         }
-
-        changed = true;
       }
+    }
+
+    components.push(component);
+  }
+
+  return components;
+}
+
+function chooseBestDistrictForNearbyComponent(component, pointDistricts) {
+  const counts = new Map();
+
+  for (const item of component) {
+    const districtId = getAssignedDistrictIdForItem(item);
+    if (districtId == null) continue;
+    counts.set(districtId, (counts.get(districtId) || 0) + 1);
+  }
+
+  let bestDistrictId = null;
+  let bestCount = -1;
+
+  for (const district of pointDistricts) {
+    const districtId = district.id;
+    const count = counts.get(districtId) || 0;
+
+    if (
+      count > bestCount ||
+      (count === bestCount && (bestDistrictId == null || districtId < bestDistrictId))
+    ) {
+      bestDistrictId = districtId;
+      bestCount = count;
+    }
+  }
+
+  return bestDistrictId;
+}
+
+function enforceAnyNearbyPeopleStayInSameDistrict(pointDistricts, maxMeters = 55) {
+  const allItems = flattenDistrictItems(pointDistricts);
+  if (!allItems.length) return pointDistricts;
+
+  const components = buildNearbyComponents(allItems, maxMeters);
+
+  for (const component of components) {
+    const districtIds = new Set();
+
+    for (const item of component) {
+      const districtId = getAssignedDistrictIdForItem(item);
+      if (districtId != null) {
+        districtIds.add(districtId);
+      }
+    }
+
+    if (districtIds.size <= 1) continue;
+
+    const winnerDistrictId = chooseBestDistrictForNearbyComponent(component, pointDistricts);
+
+    for (const item of component) {
+      setAssignedDistrictIdForItem(item, winnerDistrictId);
     }
   }
 
@@ -4310,7 +4359,48 @@ function runStep3() {
       currentDistrictTargets.districtCount
 );
 
-pointDistricts = enforceAnyNearbyPeopleStayInSameDistrict(pointDistricts, 55);
+let pointDistricts = assignDistrictsByOrderedGroups(
+  currentFiltered,
+  currentDistrictTargets.districtCount
+);
+
+function runStep3() {
+  if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
+    setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
+    return;
+  }
+
+  setStatus(gerryStatus, "Assigning ordered district groups and building district polygons...", "warn");
+  showStepSpinner("Running Step 3...");
+  showStepProgress(10, "Starting Step 3...");
+
+  setTimeout(async () => {
+    try {
+      removeDistrictLayers();
+
+      showStepProgress(25, "Loading cell support data...");
+      await ensureCellSupportDataLoaded();
+
+      perfStart("STEP 3 TOTAL");
+
+      showStepProgress(45, "Assigning districts...");
+      perfStart("STEP 3 assignDistrictsByOrderedGroups");
+
+      let pointDistricts = assignDistrictsByOrderedGroups(
+        currentFiltered,
+        currentDistrictTargets.districtCount
+      );
+
+      pointDistricts = enforceAnyNearbyPeopleStayInSameDistrict(pointDistricts, 55);
+
+      const emptyDistricts = pointDistricts.filter(d => d.members.length === 0);
+      if (emptyDistricts.length) {
+        console.warn(
+          "Empty districts after 55m reconciliation:",
+          emptyDistricts.map(d => d.id + 1)
+        );
+      }
+
       perfEnd("STEP 3 assignDistrictsByOrderedGroups");
 
       if (!pointDistricts || !pointDistricts.length) {
