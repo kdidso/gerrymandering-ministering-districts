@@ -5161,82 +5161,86 @@ function handleMaskExpansionMapClick(e) {
     return;
   }
 
-  try {
-    const owner = getCurrentFinalOwnerEstimate(currentFinalDistrictPolygons);
-    const targetCellId = getNearestUnclaimedCellToClick(owner, e.latlng);
+  const owner = getCurrentFinalOwnerEstimate(currentFinalDistrictPolygons);
+  const targetCellId = getNearestUnclaimedCellToClick(owner, e.latlng);
 
-if (!targetCellId) {
+  if (!targetCellId) {
+    setStatus(
+      gerryStatus,
+      "No unclaimed destination cells are available for expansion.",
+      "warn"
+    );
+    return;
+  }
+
   setStatus(
     gerryStatus,
-    "No unclaimed destination cells are available for expansion.",
-    "warn"
+    "Path being created... please wait for completion.",
+    "good"
   );
-  return;
-}
-setStatus(
-  gerryStatus,
-  "Path being created... please wait for completion.",
-  "success"
-);
 
-setTimeout(() => {
-  // your existing path-building + expansion logic here
-}, 0);
+  setTimeout(() => {
+    try {
+      const beforeRow = currentFinalDistrictPolygons.rows.find(
+        r => r.districtId === selectedMaskExpandDistrictId
+      );
+      const beforeCount = beforeRow ? beforeRow.finalCellIds.size : 0;
 
-    const pathCellIds = findDirectedMaskExpansionPath(
-      currentFinalDistrictPolygons,
-      currentPointDistricts,
-      selectedMaskExpandDistrictId,
-      selectedMaskExpandSourceCellId,
-      targetCellId
-    );
+      const pathCellIds = findDirectedMaskExpansionPath(
+        currentFinalDistrictPolygons,
+        currentPointDistricts,
+        selectedMaskExpandDistrictId,
+        selectedMaskExpandSourceCellId,
+        targetCellId
+      );
 
-    if (!pathCellIds || !pathCellIds.length) {
+      if (!pathCellIds || !pathCellIds.length) {
+        setStatus(
+          gerryStatus,
+          `Could not find a safe unclaimed path for District ${selectedMaskExpandDistrictId + 1} to that destination.`,
+          "warn"
+        );
+        return;
+      }
+
+      const expandedDistrictId = selectedMaskExpandDistrictId;
+      const expandedDistrictNumber = expandedDistrictId + 1;
+
+      const updatedResult = applyDirectedMaskExpansion(
+        currentFinalDistrictPolygons,
+        currentPointDistricts,
+        expandedDistrictId,
+        pathCellIds
+      );
+
+      const afterRow = updatedResult.rows.find(r => r.districtId === expandedDistrictId);
+      const afterCount = afterRow ? afterRow.finalCellIds.size : 0;
+      const gained = afterCount - beforeCount;
+
+      currentFinalDistrictPolygons = updatedResult;
+
+      drawStep4Polygons(currentFinalDistrictPolygons);
+      renderStep4Summary(currentFinalDistrictPolygons);
+
+      selectedMaskExpandDistrictId = null;
+      selectedMaskExpandSourceCellId = null;
+
       setStatus(
         gerryStatus,
-        `Could not find a safe unclaimed path for District ${selectedMaskExpandDistrictId + 1} to that destination.`,
-        "warn"
+        gained > 0
+          ? `District ${expandedDistrictNumber} expanded successfully by ${gained} cell(s). Mask expansion is still on — select another edge and click another destination if you want to keep expanding.`
+          : `District ${expandedDistrictNumber} processed the selected path. Mask expansion is still on — select another edge and click another destination if you want to keep expanding.`,
+        "good"
       );
-      return;
+    } catch (error) {
+      console.error(error);
+      setStatus(
+        gerryStatus,
+        `Mask expansion failed: ${error?.message || error}`,
+        "error"
+      );
     }
-
-    currentFinalDistrictPolygons = applyDirectedMaskExpansion(
-      currentFinalDistrictPolygons,
-      currentPointDistricts,
-      selectedMaskExpandDistrictId,
-      pathCellIds
-    );
-
-    if (!manualExpansionCellsByDistrict.has(selectedMaskExpandDistrictId)) {
-      manualExpansionCellsByDistrict.set(selectedMaskExpandDistrictId, new Set());
-    }
-
-    const manualSet = manualExpansionCellsByDistrict.get(selectedMaskExpandDistrictId);
-    for (const cellId of pathCellIds) {
-      manualSet.add(String(cellId));
-    }
-
-    drawStep4Polygons(currentFinalDistrictPolygons);
-    renderStep4Summary(currentFinalDistrictPolygons);
-
-    const expandedDistrictNumber = selectedMaskExpandDistrictId + 1;
-
-    selectedMaskExpandDistrictId = null;
-    selectedMaskExpandSourceCellId = null;
-
-    setStatus(
-      gerryStatus,
-      `District ${expandedDistrictNumber} was expanded toward the selected destination. Mask expansion is still on — select another edge and click another unclaimed destination if you want to keep expanding.`,
-      "good"
-    );
-  } catch (error) {
-    console.error(error);
-    setStatus(
-      gerryStatus,
-      `Mask expansion failed: ${error?.message || error}`,
-      "error"
-    );
-  }
+  }, 10);
 }
     
 function runStep3() {
