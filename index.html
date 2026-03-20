@@ -4373,6 +4373,7 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12, m
     const expansionNeed = getDistrictExpansionNeed(pointDistricts, owner);
     const proposals = new Map();
 
+    // strict: fixed processing order
     for (const cell of cellsWorking) {
       const cellId = String(cell.id);
       if (owner.has(cellId)) continue;
@@ -4395,10 +4396,14 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12, m
 
         const need = expansionNeed.get(districtId) || 0;
 
-        // Restore strict weighting
+        // strict: restore original strong weighting
         const score = (need * 100) + sharedBorder;
 
-        if (score > bestScore) {
+        // strict: deterministic tie-breaking
+        if (
+          score > bestScore ||
+          (score === bestScore && (bestDistrict == null || districtId < bestDistrict))
+        ) {
           bestScore = score;
           bestDistrict = districtId;
         }
@@ -4412,8 +4417,10 @@ function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12, m
     if (!proposals.size) break;
 
     const remainingBudget = maxNewClaims - (owner.size - startingClaimCount);
-    const limitedEntries = [...proposals.entries()].slice(0, Math.max(0, remainingBudget));
+    if (remainingBudget <= 0) break;
 
+    // strict: preserve proposal order
+    const limitedEntries = [...proposals.entries()].slice(0, remainingBudget);
     if (!limitedEntries.length) break;
 
     const tentativeOwner = new Map(owner);
