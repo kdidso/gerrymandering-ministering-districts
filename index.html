@@ -678,7 +678,6 @@
     const gerrymanderBtn = document.getElementById("gerrymanderBtn");
     const finalizePolygonsBtn = document.getElementById("finalizePolygonsBtn");
     const maskExpandBtn = document.getElementById("maskExpandBtn");
-    const maskExpandSize = document.getElementById("maskExpandSize");
     const claimCellsBtn = document.getElementById("claimCellsBtn");
     const expandBtn = document.getElementById("expandBtn");
     const rerunStep6Btn = document.getElementById("rerunStep6Btn");
@@ -4600,14 +4599,15 @@ function handleMaskExpansionMapClick(e) {
       selectedMaskExpandDistrictId,
       pathCellIds
     );
-if (!manualExpansionCellsByDistrict.has(expansionResult.districtId)) {
-  manualExpansionCellsByDistrict.set(expansionResult.districtId, new Set());
-}
 
-const manualSet = manualExpansionCellsByDistrict.get(expansionResult.districtId);
-for (const cellId of expansionResult.addedCellIds) {
-  manualSet.add(String(cellId));
-}
+    if (!manualExpansionCellsByDistrict.has(selectedMaskExpandDistrictId)) {
+      manualExpansionCellsByDistrict.set(selectedMaskExpandDistrictId, new Set());
+    }
+
+    const manualSet = manualExpansionCellsByDistrict.get(selectedMaskExpandDistrictId);
+    for (const cellId of pathCellIds) {
+      manualSet.add(String(cellId));
+    }
 
     drawStep4Polygons(currentFinalDistrictPolygons);
     renderStep4Summary(currentFinalDistrictPolygons);
