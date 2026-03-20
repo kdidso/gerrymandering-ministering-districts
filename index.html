@@ -5173,6 +5173,15 @@ if (!targetCellId) {
   );
   return;
 }
+setStatus(
+  gerryStatus,
+  "Path being created... please wait for completion.",
+  "success"
+);
+
+setTimeout(() => {
+  // your existing path-building + expansion logic here
+}, 0);
 
     const pathCellIds = findDirectedMaskExpansionPath(
       currentFinalDistrictPolygons,
