@@ -2615,65 +2615,145 @@ function buildClustersForGroup(filteredItems, groupValue) {
       }
     }
 
-    function assignDistrictsByOrderedGroups(filteredItems, districtCount) {
-      const itemsCopy = filteredItems.map(item => ({
-        feature: cloneFeature(item.feature),
-        group: item.group,
-        cellId: item.cellId ? String(item.cellId) : null,
-        _assignedDistrict: null
-      }));
+function compareItemsByLatLng(a, b) {
+  const aCoords = a.feature.geometry.coordinates;
+  const bCoords = b.feature.geometry.coordinates;
 
-      const group1Clusters = buildClustersForGroup(itemsCopy, 1);
-      const group2Clusters = buildClustersForGroup(itemsCopy, 2);
+  const aLat = Number(aCoords[1]);
+  const bLat = Number(bCoords[1]);
+  if (aLat !== bLat) return aLat - bLat;
 
-      let g1Index = 0;
-      let g2Index = 0;
+  const aLng = Number(aCoords[0]);
+  const bLng = Number(bCoords[0]);
+  return aLng - bLng;
+}
 
-      const districts = [];
+function areItemsWithinMeters(itemA, itemB, maxMeters = 55) {
+  try {
+    return distanceMetersBetweenItems(itemA, itemB) <= maxMeters;
+  } catch (err) {
+    return false;
+  }
+}
 
-      for (let districtId = 0; districtId < districtCount; districtId++) {
-        const remainingDistricts = districtCount - districtId;
-
-        const remainingGroup1 = getRemainingClusterPointCount(group1Clusters, g1Index);
-        const remainingGroup2 = getRemainingClusterPointCount(group2Clusters, g2Index);
-
-        const targetGroup1 = remainingDistricts > 0 ? distributeTotal(remainingGroup1, remainingDistricts)[0] : 0;
-        const targetGroup2 = remainingDistricts > 0 ? distributeTotal(remainingGroup2, remainingDistricts)[0] : 0;
-
-        const district = createEmptyDistrictState(districtId, targetGroup1, targetGroup2);
-
-        const g1Take = districtId === districtCount - 1
-          ? {
-              takenClusters: group1Clusters.slice(g1Index),
-              takenCount: getRemainingClusterPointCount(group1Clusters, g1Index),
-              nextIndex: group1Clusters.length
-            }
-          : takeClustersByTarget(group1Clusters, g1Index, targetGroup1);
-
-        for (const cluster of g1Take.takenClusters) {
-          addClusterToDistrict(district, cluster);
-        }
-        g1Index = g1Take.nextIndex;
-
-        const g2Take = districtId === districtCount - 1
-          ? {
-              takenClusters: group2Clusters.slice(g2Index),
-              takenCount: getRemainingClusterPointCount(group2Clusters, g2Index),
-              nextIndex: group2Clusters.length
-            }
-          : takeClustersByTarget(group2Clusters, g2Index, targetGroup2);
-
-        for (const cluster of g2Take.takenClusters) {
-          addClusterToDistrict(district, cluster);
-        }
-        g2Index = g2Take.nextIndex;
-
-        computeDistrictCentroid(district);
-        districts.push(district);
-      }
-
-      return districts;
+function itemIsWithinMetersOfAny(item, selectedItems, maxMeters = 55) {
+  for (const selected of selectedItems) {
+    if (areItemsWithinMeters(item, selected, maxMeters)) {
+      return true;
     }
+  }
+  return false;
+}
+
+function takeOrderedItemsWithProximitySpillover(
+  orderedItems,
+  startIndex,
+  targetCount,
+  alreadySelectedForDistrict = [],
+  maxMeters = 55
+) {
+  const taken = [];
+  let idx = startIndex;
+
+  if (idx >= orderedItems.length || targetCount <= 0) {
+    return {
+      items: taken,
+      nextIndex: idx
+    };
+  }
+
+  // First: take the target count in order
+  while (idx < orderedItems.length && taken.length < targetCount) {
+    taken.push(orderedItems[idx]);
+    idx++;
+  }
+
+  // Then: allow slight ordered spillover if the next item is within 55m
+  // of anyone already selected for this district in this pass
+  while (idx < orderedItems.length) {
+    const nextItem = orderedItems[idx];
+    const comparePool = [...alreadySelectedForDistrict, ...taken];
+
+    if (!comparePool.length) break;
+    if (!itemIsWithinMetersOfAny(nextItem, comparePool, maxMeters)) break;
+
+    taken.push(nextItem);
+    idx++;
+  }
+
+  return {
+    items: taken,
+    nextIndex: idx
+  };
+}
+
+function assignDistrictsByOrderedGroups(filteredItems, districtCount) {
+  const itemsCopy = filteredItems.map(item => ({
+    feature: cloneFeature(item.feature),
+    group: item.group,
+    cellId: item.cellId ? String(item.cellId) : null,
+    _assignedDistrict: null
+  }));
+
+  const group1Items = itemsCopy
+    .filter(item => item.group === 1)
+    .sort(compareItemsByLatLng);
+
+  const group2Items = itemsCopy
+    .filter(item => item.group === 2)
+    .sort(compareItemsByLatLng);
+
+  const group1Targets = distributeTotal(group1Items.length, districtCount);
+  const group2Targets = distributeTotal(group2Items.length, districtCount);
+
+  let g1Index = 0;
+  let g2Index = 0;
+
+  const districts = [];
+
+  for (let districtId = 0; districtId < districtCount; districtId++) {
+    const district = createEmptyDistrictState(
+      districtId,
+      group1Targets[districtId],
+      group2Targets[districtId]
+    );
+
+    const g1Take = takeOrderedItemsWithProximitySpillover(
+      group1Items,
+      g1Index,
+      group1Targets[districtId],
+      district.members,
+      55
+    );
+    for (const item of g1Take.items) {
+      item._assignedDistrict = district.id;
+      district.members.push(item);
+      district.group1++;
+      district.total++;
+    }
+    g1Index = g1Take.nextIndex;
+
+    const g2Take = takeOrderedItemsWithProximitySpillover(
+      group2Items,
+      g2Index,
+      group2Targets[districtId],
+      district.members,
+      55
+    );
+    for (const item of g2Take.items) {
+      item._assignedDistrict = district.id;
+      district.members.push(item);
+      district.group2++;
+      district.total++;
+    }
+    g2Index = g2Take.nextIndex;
+
+    computeDistrictCentroid(district);
+    districts.push(district);
+  }
+
+  return districts;
+}
 
     function buildDistrictPointFeatureCollection(pointDistricts, districtId) {
       const features = [];
