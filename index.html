@@ -2432,29 +2432,24 @@ async function saveToBackend(payload, filename) {
       ).addTo(map);
     }
 
-    function removeDistrictLayers() {
-      if (districtPointLayer) {
-        map.removeLayer(districtPointLayer);
-        districtPointLayer = null;
-      }
-      if (rawHullLayer) {
-        map.removeLayer(rawHullLayer);
-        rawHullLayer = null;
-      }
-      if (adjustedPolygonLayer) {
-        map.removeLayer(adjustedPolygonLayer);
-        adjustedPolygonLayer = null;
-      }
-      if (finalPolygonLayer) {
-        map.removeLayer(finalPolygonLayer);
-        finalPolygonLayer = null;
-      }
-      if (claimedCellLayer) {
-        map.removeLayer(claimedCellLayer);
-        claimedCellLayer = null;
-      }
-    }
-
+function removeDistrictLayers() {
+  if (districtPointLayer) {
+    map.removeLayer(districtPointLayer);
+    districtPointLayer = null;
+  }
+  if (rawHullLayer) {
+    map.removeLayer(rawHullLayer);
+    rawHullLayer = null;
+  }
+  if (finalPolygonLayer) {
+    map.removeLayer(finalPolygonLayer);
+    finalPolygonLayer = null;
+  }
+  if (claimedCellLayer) {
+    map.removeLayer(claimedCellLayer);
+    claimedCellLayer = null;
+  }
+}
     function computeDistrictCentroid(district) {
       if (!district.members.length) {
         district.centroidLng = null;
