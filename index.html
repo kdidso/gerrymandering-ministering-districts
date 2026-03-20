@@ -526,13 +526,19 @@
   </p>
 
   <div class="row">
-    <button id="gerrymanderBtn" disabled>Run Step 3</button>
-    <button id="finalizePolygonsBtn" class="secondary" disabled>Run Step 4</button>
-    <button id="claimCellsBtn" class="secondary" disabled>Run Step 5</button>
-    <button id="expandBtn" class="secondary" disabled>Run Step 6</button>
-    <button id="rerunStep6Btn" class="secondary" disabled>Re-run Step 6</button>
-    <button id="fillBtn" class="secondary" disabled>Run Step 7</button>
-  </div>
+  <button id="gerrymanderBtn" disabled>Run Step 3</button>
+  <button id="finalizePolygonsBtn" class="secondary" disabled>Run Step 4</button>
+  <button id="maskExpandBtn" class="secondary" disabled>Mask Expansion: Off</button>
+  <select id="maskExpandSize" disabled>
+    <option value="small">Small</option>
+    <option value="medium" selected>Medium</option>
+    <option value="large">Large</option>
+  </select>
+  <button id="claimCellsBtn" class="secondary" disabled>Run Step 5</button>
+  <button id="expandBtn" class="secondary" disabled>Run Step 6</button>
+  <button id="rerunStep6Btn" class="secondary" disabled>Re-run Step 6</button>
+  <button id="fillBtn" class="secondary" disabled>Run Step 7</button>
+</div>
 
   <div class="row" style="margin-top:10px;">
     <button id="uploadBtn" class="secondary" disabled>Upload District Files</button>
@@ -635,7 +641,6 @@
     let cellsOutlineLayer = null;
     let districtPointLayer = null;
     let rawHullLayer = null;
-    let adjustedPolygonLayer = null;
     let finalPolygonLayer = null;
     let claimedCellLayer = null;
     let companionshipLineLayer = null;
@@ -655,11 +660,8 @@
     let cellsWorking = [];
     let cellById = new Map();
     let cellFeatureById = new Map();
-    let step3ProgressInterval = null;
-    let step3ProgressStartTime = null;
+    let maskExpandMode = false;
     
-    
-    const STEP3_ESTIMATED_MS = 45000;
     const chkWardLoaded = document.getElementById("chkWardLoaded");
     const chkMembersLoaded = document.getElementById("chkMembersLoaded");
     const chkCellsLoaded = document.getElementById("chkCellsLoaded");
@@ -677,6 +679,8 @@
     const calcDistrictBtn = document.getElementById("calcDistrictBtn");
     const gerrymanderBtn = document.getElementById("gerrymanderBtn");
     const finalizePolygonsBtn = document.getElementById("finalizePolygonsBtn");
+    const maskExpandBtn = document.getElementById("maskExpandBtn");
+    const maskExpandSize = document.getElementById("maskExpandSize");
     const claimCellsBtn = document.getElementById("claimCellsBtn");
     const expandBtn = document.getElementById("expandBtn");
     const rerunStep6Btn = document.getElementById("rerunStep6Btn");
@@ -716,6 +720,7 @@
     const exportStatus = document.getElementById("exportStatus");
     const closeBtn = document.getElementById("processingModalClose");
     const backdrop = document.querySelector(".processing-modal-backdrop");
+    
 function buildExcelRowsFromAssignments(districtAssignmentResults) {
   const rows = [];
   const merges = [];
@@ -2479,18 +2484,6 @@ async function saveToBackend(payload, filename) {
     return Infinity;
   }
 }
-function compareItemsByLatLng(a, b) {
-  const aCoords = a.feature.geometry.coordinates;
-  const bCoords = b.feature.geometry.coordinates;
-
-  const aLat = Number(aCoords[1]);
-  const bLat = Number(bCoords[1]);
-  if (aLat !== bLat) return aLat - bLat;
-
-  const aLng = Number(aCoords[0]);
-  const bLng = Number(bCoords[0]);
-  return aLng - bLng;
-}
 
 function buildProximityClusters(items, maxMeters = 55) {
   const visited = new Set();
@@ -2715,16 +2708,6 @@ function assignDistrictsByOrderedGroups(filteredItems, districtCount) {
       };
     }
 
-    function differenceSafe(featureA, featureB) {
-      if (!featureA || !featureB) return featureA;
-      try {
-        const diff = turf.difference(featureA, featureB);
-        return diff || null;
-      } catch (err) {
-        return featureA;
-      }
-    }
-
 function buildFallbackDistrictShapeFromPoints(fc, districtId) {
   if (!fc.features.length) return null;
 
@@ -2791,19 +2774,6 @@ function buildFallbackDistrictShapeFromPoints(fc, districtId) {
         if (item.cellId != null) ids.add(String(item.cellId));
       }
       return ids;
-    }
-
-    function getAllPointCellIdsForDistricts(pointDistricts) {
-      const result = new Map();
-      for (const district of pointDistricts) {
-        for (const item of district.members) {
-          const cellId = item.cellId ? String(item.cellId) : null;
-          if (!cellId) continue;
-          if (!result.has(cellId)) result.set(cellId, new Set());
-          result.get(cellId).add(district.id);
-        }
-      }
-      return result;
     }
 
     function getForeignPointsInsidePolygon(pointDistricts, districtId, polygon) {
@@ -3529,101 +3499,6 @@ const escapeResult = carveEscapeRoutesFromCellMask(
     rows: finalized
   };
 }
-function getCellsIntersectingPolygon(polygon) {
-  const ids = new Set();
-
-  for (const cell of cellsWorking) {
-    let intersects = false;
-
-    try {
-      const clipped = turf.intersect(cell.feature, polygon);
-      intersects = !!clipped;
-    } catch (err) {
-      intersects = false;
-    }
-
-    if (!intersects) {
-      try {
-        intersects = turf.booleanPointInPolygon(
-          turf.point([cell.centroidLng, cell.centroidLat]),
-          polygon
-        );
-      } catch (err) {
-        intersects = false;
-      }
-    }
-
-    if (intersects) {
-      ids.add(String(cell.id));
-    }
-  }
-
-  return ids;
-}
-
-function pointHasEscapeOutsidePolygon(pointFeature, polygon) {
-  try {
-    return !turf.booleanPointInPolygon(pointFeature, polygon);
-  } catch (err) {
-    return true;
-  }
-}
-
-function reconstructParentPath(parent, endId) {
-  const path = [String(endId)];
-  let current = String(endId);
-
-  while (parent.has(current)) {
-    current = parent.get(current);
-    path.push(current);
-  }
-
-  path.reverse();
-  return path;
-}
-
-function findEscapeCorridorCells(startCellId, allowedPolygonCellIds, ownPointCellIds) {
-  startCellId = String(startCellId);
-
-  if (!allowedPolygonCellIds.has(startCellId)) {
-    return null;
-  }
-
-  const queue = [startCellId];
-  const visited = new Set([startCellId]);
-  const parent = new Map();
-  let qIndex = 0;
-
-  while (qIndex < queue.length) {
-    const currentId = queue[qIndex++];
-    const currentCell = cellById.get(String(currentId));
-    if (!currentCell) continue;
-
-    for (const neighborIdRaw of currentCell.neighbors) {
-      const neighborId = String(neighborIdRaw);
-
-      // Found outside the polygon area = corridor complete
-      if (!allowedPolygonCellIds.has(neighborId)) {
-        const pathInside = reconstructParentPath(parent, currentId);
-
-        // do not carve through this district's own protected point cells
-        const invalid = pathInside.some(id => ownPointCellIds.has(String(id)));
-        if (!invalid) return pathInside;
-
-        continue;
-      }
-
-      if (visited.has(neighborId)) continue;
-      if (ownPointCellIds.has(neighborId)) continue;
-
-      visited.add(neighborId);
-      parent.set(neighborId, currentId);
-      queue.push(neighborId);
-    }
-  }
-
-  return null;
-}
 function buildClaimCellsFromFinalPolygons(finalResult, pointDistricts) {
   perfStart("buildClaimCellsFromFinalPolygons internal");
 
@@ -3967,6 +3842,10 @@ expandBtn.disabled = true;
 fillBtn.disabled = true;
 uploadBtn.disabled = true;
 continueBtn.disabled = true;
+maskExpandMode = false;
+maskExpandBtn.textContent = "Mask Expansion: Off";
+maskExpandBtn.disabled = true;
+maskExpandSize.disabled = true;
 resetCompanionshipSummary();
 if (assignmentStatus) {
   setStatus(assignmentStatus, "Create companionships first, then create ministering assignments.");
@@ -4075,6 +3954,10 @@ if (exportStatus) {
       claimCellsBtn.disabled = true;
       uploadBtn.disabled = true;
       continueBtn.disabled = true;
+      maskExpandMode = false;
+      maskExpandBtn.textContent = "Mask Expansion: Off";
+      maskExpandBtn.disabled = true;
+      maskExpandSize.disabled = true;
       if (step8Card) step8Card.style.display = "none";
       setStatus(
         districtStatus,
@@ -4115,7 +3998,347 @@ async function ensureCellSupportDataLoaded() {
 }
     
 
+function cloneFinalDistrictPolygonsResult(finalResult) {
+  if (!finalResult?.rows) return { rows: [] };
 
+  return {
+    rows: finalResult.rows.map(row => ({
+      ...row,
+      finalCellIds: new Set([...(row.finalCellIds || [])])
+    }))
+  };
+}
+
+function getMaskExpansionPatchSize(sizeValue) {
+  if (sizeValue === "small") return 12;
+  if (sizeValue === "large") return 80;
+  return 35; // medium
+}
+
+function getAllProtectedPointCellsByDistrict(pointDistricts) {
+  const result = new Map();
+
+  for (const district of pointDistricts) {
+    const ids = new Set();
+    for (const item of district.members) {
+      if (item.cellId != null) ids.add(String(item.cellId));
+    }
+    result.set(district.id, ids);
+  }
+
+  return result;
+}
+
+function getClosestDistrictRowToClick(finalResult, latlng) {
+  if (!finalResult?.rows?.length) return null;
+
+  const clickPoint = turf.point([latlng.lng, latlng.lat]);
+
+  let best = null;
+  let bestDistance = Infinity;
+
+  for (const row of finalResult.rows) {
+    if (!row.finalCellIds || !row.finalCellIds.size) continue;
+
+    for (const cellId of row.finalCellIds) {
+      const cell = cellById.get(String(cellId));
+      if (!cell) continue;
+
+      const centroidPoint = turf.point([cell.centroidLng, cell.centroidLat]);
+      let dist = Infinity;
+
+      try {
+        dist = turf.distance(clickPoint, centroidPoint, { units: "kilometers" }) * 1000;
+      } catch (err) {
+        dist = Infinity;
+      }
+
+      if (dist < bestDistance) {
+        bestDistance = dist;
+        best = {
+          districtId: row.districtId,
+          distanceMeters: dist
+        };
+      }
+    }
+  }
+
+  if (!best) return null;
+
+  // prevent accidental clicks far away from any district mask
+  if (best.distanceMeters > 250) return null;
+
+  return best;
+}
+
+function getSeedCellForDistrictExpansion(row, latlng) {
+  const clickPoint = turf.point([latlng.lng, latlng.lat]);
+
+  let bestCellId = null;
+  let bestDistance = Infinity;
+
+  for (const cellId of row.finalCellIds || []) {
+    const cell = cellById.get(String(cellId));
+    if (!cell) continue;
+
+    const centroidPoint = turf.point([cell.centroidLng, cell.centroidLat]);
+    let dist = Infinity;
+
+    try {
+      dist = turf.distance(clickPoint, centroidPoint, { units: "kilometers" }) * 1000;
+    } catch (err) {
+      dist = Infinity;
+    }
+
+    if (dist < bestDistance) {
+      bestDistance = dist;
+      bestCellId = String(cellId);
+    }
+  }
+
+  return bestCellId;
+}
+
+function buildForbiddenCellsForMaskExpansion(rows, targetDistrictId, protectedByDistrict) {
+  const forbidden = new Set();
+
+  for (const row of rows) {
+    const otherDistrictId = row.districtId;
+    if (otherDistrictId === targetDistrictId) continue;
+
+    const protectedSet = protectedByDistrict.get(otherDistrictId) || new Set();
+    for (const id of protectedSet) {
+      forbidden.add(String(id));
+    }
+
+    // older districts are stronger and cannot be expanded into
+    if (otherDistrictId < targetDistrictId) {
+      for (const id of row.finalCellIds || []) {
+        forbidden.add(String(id));
+      }
+    }
+  }
+
+  return forbidden;
+}
+
+function buildMaskExpansionPatch(finalResult, pointDistricts, targetDistrictId, latlng, patchSize) {
+  const rows = finalResult.rows;
+  const targetRow = rows.find(r => r.districtId === targetDistrictId);
+  if (!targetRow || !targetRow.finalCellIds?.size) return null;
+
+  const protectedByDistrict = getAllProtectedPointCellsByDistrict(pointDistricts);
+  const forbidden = buildForbiddenCellsForMaskExpansion(rows, targetDistrictId, protectedByDistrict);
+
+  const seedCellId = getSeedCellForDistrictExpansion(targetRow, latlng);
+  if (!seedCellId) return null;
+
+  const clickPoint = turf.point([latlng.lng, latlng.lat]);
+  const visited = new Set();
+  const queue = [];
+  const additions = new Set();
+
+  function pushCell(cellId) {
+    const cell = cellById.get(String(cellId));
+    if (!cell) return;
+
+    const centroidPoint = turf.point([cell.centroidLng, cell.centroidLat]);
+    let distanceToClick = Infinity;
+
+    try {
+      distanceToClick = turf.distance(clickPoint, centroidPoint, { units: "kilometers" }) * 1000;
+    } catch (err) {
+      distanceToClick = Infinity;
+    }
+
+    queue.push({
+      cellId: String(cellId),
+      distanceToClick
+    });
+
+    queue.sort((a, b) => a.distanceToClick - b.distanceToClick);
+  }
+
+  // start from neighbors around the clicked district cell
+  const seedCell = cellById.get(seedCellId);
+  if (!seedCell) return null;
+
+  visited.add(seedCellId);
+
+  for (const neighborIdRaw of seedCell.neighbors) {
+    const neighborId = String(neighborIdRaw);
+    if (visited.has(neighborId)) continue;
+    visited.add(neighborId);
+    pushCell(neighborId);
+  }
+
+  while (queue.length && additions.size < patchSize) {
+    const current = queue.shift();
+    const cellId = String(current.cellId);
+
+    if (targetRow.finalCellIds.has(cellId)) continue;
+    if (forbidden.has(cellId)) continue;
+
+    additions.add(cellId);
+
+    const cell = cellById.get(cellId);
+    if (!cell) continue;
+
+    for (const neighborIdRaw of cell.neighbors) {
+      const neighborId = String(neighborIdRaw);
+      if (visited.has(neighborId)) continue;
+      visited.add(neighborId);
+      pushCell(neighborId);
+    }
+  }
+
+  return {
+    districtId: targetDistrictId,
+    addedCellIds: additions
+  };
+}
+
+function rebuildExpandedMaskRows(finalResult, pointDistricts, expansionResult) {
+  const cloned = cloneFinalDistrictPolygonsResult(finalResult);
+  const rows = cloned.rows;
+
+  const targetRow = rows.find(r => r.districtId === expansionResult.districtId);
+  if (!targetRow) return cloned;
+
+  // add cells to target row
+  for (const id of expansionResult.addedCellIds) {
+    targetRow.finalCellIds.add(String(id));
+  }
+
+  // remove those cells from later districts only
+  for (const row of rows) {
+    if (row.districtId <= expansionResult.districtId) continue;
+    for (const id of expansionResult.addedCellIds) {
+      row.finalCellIds.delete(String(id));
+    }
+  }
+
+  // re-carve escape routes for target district
+  const targetDistrict = pointDistricts.find(d => d.id === expansionResult.districtId);
+  if (targetDistrict) {
+    const targetEscape = carveEscapeRoutesFromCellMask(
+      targetRow.finalCellIds,
+      targetDistrict,
+      pointDistricts,
+      targetDistrict.id,
+      12
+    );
+    targetRow.finalCellIds = targetEscape.finalCellIds;
+    targetRow.escapedForeignCount = targetEscape.escapedCount;
+    targetRow.unresolvedForeignCount = targetEscape.unresolvedCount;
+  }
+
+  // also re-carve for later districts that may have been clipped
+  for (const row of rows) {
+    if (row.districtId <= expansionResult.districtId) continue;
+
+    const district = pointDistricts.find(d => d.id === row.districtId);
+    if (!district) continue;
+
+    const escapeResult = carveEscapeRoutesFromCellMask(
+      row.finalCellIds,
+      district,
+      pointDistricts,
+      district.id,
+      12
+    );
+
+    row.finalCellIds = escapeResult.finalCellIds;
+    row.escapedForeignCount = escapeResult.escapedCount;
+    row.unresolvedForeignCount = escapeResult.unresolvedCount;
+  }
+
+  return cloned;
+}
+
+function toggleMaskExpansionMode() {
+  if (!currentFinalDistrictPolygons || !currentPointDistricts) {
+    setStatus(gerryStatus, "Run Step 4 first before using mask expansion.", "warn");
+    return;
+  }
+
+  maskExpandMode = !maskExpandMode;
+
+  if (maskExpandMode) {
+    maskExpandBtn.textContent = "Mask Expansion: On";
+    setStatus(
+      gerryStatus,
+      "Mask expansion is on. Click near a finalized district mask edge to expand that mask locally.",
+      "good"
+    );
+  } else {
+    maskExpandBtn.textContent = "Mask Expansion: Off";
+    setStatus(
+      gerryStatus,
+      "Mask expansion is off.",
+      "good"
+    );
+  }
+}
+
+function handleMaskExpansionMapClick(e) {
+  if (!maskExpandMode) return;
+  if (!currentFinalDistrictPolygons || !currentPointDistricts) return;
+
+  try {
+    const targetInfo = getClosestDistrictRowToClick(currentFinalDistrictPolygons, e.latlng);
+    if (!targetInfo) {
+      setStatus(
+        gerryStatus,
+        "No finalized district mask was close enough to that click. Click nearer to the mask edge you want to expand.",
+        "warn"
+      );
+      return;
+    }
+
+    const patchSize = getMaskExpansionPatchSize(maskExpandSize.value);
+    const expansionResult = buildMaskExpansionPatch(
+      currentFinalDistrictPolygons,
+      currentPointDistricts,
+      targetInfo.districtId,
+      e.latlng,
+      patchSize
+    );
+
+    if (!expansionResult || !expansionResult.addedCellIds.size) {
+      setStatus(
+        gerryStatus,
+        `Mask expansion found no safe cells to add for District ${targetInfo.districtId + 1} at that location.`,
+        "warn"
+      );
+      return;
+    }
+
+    currentFinalDistrictPolygons = rebuildExpandedMaskRows(
+      currentFinalDistrictPolygons,
+      currentPointDistricts,
+      expansionResult
+    );
+
+    drawStep4Polygons(currentFinalDistrictPolygons);
+    renderStep4Summary(currentFinalDistrictPolygons);
+
+    setStatus(
+      gerryStatus,
+      `Mask expansion added ${expansionResult.addedCellIds.size} cell(s) to District ${targetInfo.districtId + 1}. You can keep clicking to expand more masks, or continue to Step 5.`,
+      "good"
+    );
+  } catch (error) {
+    console.error(error);
+    setStatus(
+      gerryStatus,
+      `Mask expansion failed: ${error?.message || error}`,
+      "error"
+    );
+  }
+}
+
+    
 function runStep3() {
   if (!currentFiltered.length || !currentStats || !currentDistrictTargets) {
     setStatus(gerryStatus, "Run filter and calculate targets first.", "warn");
@@ -4166,7 +4389,7 @@ function runStep3() {
       renderStep3Summary(pointDistricts, polygonResult);
       perfEnd("STEP 3 draw");
 
-      rerunStep6Btn.disabled = false;
+      rerunStep6Btn.disabled = true;
       gerrymanderBtn.disabled = true;
       finalizePolygonsBtn.disabled = false;
       claimCellsBtn.disabled = true;
@@ -4228,18 +4451,15 @@ function runStep4() {
       perfStart("STEP 4 TOTAL");
 
       perfStart("STEP 4 finalizeDistrictPolygons");
-      const finalResult = finalizeDistrictPolygons(
-        currentDistrictPolygons,
-        currentPointDistricts
-      );
+      const finalResult = finalizeDistrictPolygons(currentDistrictPolygons, currentPointDistricts);
       perfEnd("STEP 4 finalizeDistrictPolygons");
 
-      const finalCount = finalResult.rows.filter(
-        r => r.finalCellIds && r.finalCellIds.size
-      ).length;
+      const finalCount = finalResult.rows.filter(r => r.finalCellIds && r.finalCellIds.size).length;
 
       currentFinalDistrictPolygons = finalResult;
       currentClaimResult = null;
+      maskExpandMode = false;
+      maskExpandBtn.textContent = "Mask Expansion: Off";
 
       if (claimedCellLayer) {
         map.removeLayer(claimedCellLayer);
@@ -4254,6 +4474,8 @@ function runStep4() {
       gerrymanderBtn.disabled = true;
       rerunStep6Btn.disabled = true;
       finalizePolygonsBtn.disabled = true;
+      maskExpandBtn.disabled = false;
+      maskExpandSize.disabled = false;
       claimCellsBtn.disabled = false;
       expandBtn.disabled = true;
       fillBtn.disabled = true;
@@ -4263,7 +4485,7 @@ function runStep4() {
 
       setStatus(
         gerryStatus,
-        `Step 4 complete. ${finalCount} finalized district masks were created after overlap removal and escape-route carving.`,
+        `Step 4 complete. ${finalCount} finalized district masks were created after overlap removal and escape-route carving. You can optionally use Mask Expansion before Step 5.`,
         "good"
       );
     } catch (error) {
@@ -4278,7 +4500,6 @@ function runStep4() {
     }
   }, 40);
 }
-
 function runStep5() {
   if (!currentPointDistricts || !currentFinalDistrictPolygons) {
     setStatus(gerryStatus, "Run Step 4 first.", "warn");
@@ -4309,6 +4530,10 @@ function runStep5() {
       currentStep6RunCount = 0;
       drawClaimedCells(claimResult);
       renderClaimSummary(claimResult);
+      maskExpandMode = false;
+      maskExpandBtn.textContent = "Mask Expansion: Off";
+      maskExpandBtn.disabled = true;
+      maskExpandSize.disabled = true;
 
       gerrymanderBtn.disabled = true;
       rerunStep6Btn.disabled = true;
@@ -4981,6 +5206,10 @@ if (exportStatus) {
       gerrymanderBtn.disabled = true;
       finalizePolygonsBtn.disabled = true;
       claimCellsBtn.disabled = true;
+      maskExpandMode = false;
+      maskExpandBtn.textContent = "Mask Expansion: Off";
+      maskExpandBtn.disabled = true;
+      maskExpandSize.disabled = true;
       expandBtn.disabled = true;
       fillBtn.disabled = true;
       uploadBtn.disabled = true;
@@ -5002,6 +5231,8 @@ function initMap() {
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap contributors"
   }).addTo(map);
+
+  map.on("click", handleMaskExpansionMapClick);
 
   loadAllData();
 }
@@ -5101,6 +5332,7 @@ chkMetadataLoaded.checked = false;
     rerunStep6Btn.addEventListener("click", runStep6);
     finalizePolygonsBtn.addEventListener("click", runStep4);
     claimCellsBtn.addEventListener("click", runStep5);
+    maskExpandBtn.addEventListener("click", toggleMaskExpansionMode);
     expandBtn.addEventListener("click", runStep6);
     fillBtn.addEventListener("click", runStep7);
     toggleCellsLayer.addEventListener("change", updateCellsLayerVisibility);
@@ -5118,8 +5350,6 @@ if (createAssignmentsBtn) {
 if (downloadExcelBtn) {
   downloadExcelBtn.addEventListener("click", downloadAssignmentsExcel);
 }  
-if (closeBtn) closeBtn.addEventListener("click", hideProcessingModal);
-if (backdrop) backdrop.addEventListener("click", hideProcessingModal);
     initMap();
   </script>
  <div id="processingModal" class="processing-modal hidden" aria-hidden="true">
