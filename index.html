@@ -908,14 +908,16 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
   if (!targetRow) return cloned;
 
   const additions = new Set(pathCellIds.map(String));
-  const bloom = buildSmallDestinationBloom(pathCellIds, districtId, finalResult, pointDistricts, 10);
+  const bloom = new Set();
 
   for (const id of bloom) additions.add(String(id));
 
+  // Add expanded cells to the chosen district
   for (const id of additions) {
     targetRow.finalCellIds.add(String(id));
   }
 
+  // Remove those cells from later districts only
   for (const row of cloned.rows) {
     if (row.districtId <= districtId) continue;
     for (const id of additions) {
@@ -923,6 +925,7 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
     }
   }
 
+  // Re-carve the expanded district's escape routes
   const targetDistrict = pointDistricts.find(d => d.id === districtId);
   if (targetDistrict) {
     const escapeResult = carveEscapeRoutesFromCellMask(
@@ -937,6 +940,7 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
     targetRow.unresolvedForeignCount = escapeResult.unresolvedCount;
   }
 
+  // Re-carve later districts, but do NOT reconnect them through the expansion
   for (const row of cloned.rows) {
     if (row.districtId <= districtId) continue;
 
@@ -956,7 +960,7 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
     row.unresolvedForeignCount = escapeResult.unresolvedCount;
   }
 
-  return enforceConnectedFinalMasks(cloned, pointDistricts);
+  return cloned;
 }
 function getComponentsFromCellIdSet(cellIdSet) {
   const allowed = new Set([...(cellIdSet || [])].map(String));
@@ -4561,9 +4565,18 @@ function getAllProtectedPointCellsByDistrict(pointDistricts) {
 
   for (const district of pointDistricts) {
     const ids = new Set();
+
     for (const item of district.members) {
       if (item.cellId != null) ids.add(String(item.cellId));
     }
+
+    const manualSet = manualExpansionCellsByDistrict.get(district.id);
+    if (manualSet) {
+      for (const id of manualSet) {
+        ids.add(String(id));
+      }
+    }
+
     result.set(district.id, ids);
   }
 
