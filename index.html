@@ -718,6 +718,39 @@
     const closeBtn = document.getElementById("processingModalClose");
     const backdrop = document.querySelector(".processing-modal-backdrop");
 
+    function getDistrictIdsWithDisconnectedProtectedComponents(finalResult, pointDistricts, minDistrictId = 0) {
+  const broken = new Set();
+  const protectedByDistrict = getProtectedCellIdsByDistrict(pointDistricts);
+
+  for (const district of pointDistricts) {
+    if (district.id < minDistrictId) continue;
+
+    const row = finalResult.rows.find(r => r.districtId === district.id);
+    if (!row || !row.finalCellIds?.size) continue;
+
+    const protectedSet = protectedByDistrict.get(district.id) || new Set();
+    if (!protectedSet.size) continue;
+
+    const components = getComponentsFromCellIdSet(row.finalCellIds);
+    if (components.length <= 1) continue;
+
+    let protectedComponentCount = 0;
+
+    for (const comp of components) {
+      const hasProtected = comp.some(id => protectedSet.has(String(id)));
+      if (hasProtected) {
+        protectedComponentCount++;
+      }
+    }
+
+    if (protectedComponentCount > 1) {
+      broken.add(district.id);
+    }
+  }
+
+  return broken;
+}
+    
     function getComponentsFromCellIdSet(cellIdSet) {
   const allowed = new Set([...(cellIdSet || [])].map(String));
   const visited = new Set();
@@ -1173,29 +1206,16 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
 
   const additions = new Set(pathCellIds.map(String));
 
-  // Track which districts lose cells
-  const affectedDistrictIds = new Set();
-
-  // Apply expansion
   for (const id of additions) {
     targetRow.finalCellIds.add(String(id));
   }
 
-  // Remove from later districts and track them
+  // Remove from later districts only
   for (const row of cloned.rows) {
     if (row.districtId <= districtId) continue;
 
-    let lostAny = false;
-
     for (const id of additions) {
-      if (row.finalCellIds.has(String(id))) {
-        row.finalCellIds.delete(String(id));
-        lostAny = true;
-      }
-    }
-
-    if (lostAny) {
-      affectedDistrictIds.add(row.districtId);
+      row.finalCellIds.delete(String(id));
     }
   }
 
@@ -1209,7 +1229,7 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
     manualSet.add(String(id));
   }
 
-  // Re-carve ONLY the expanded district
+  // Re-carve selected district
   const targetDistrict = pointDistricts.find(d => d.id === districtId);
   if (targetDistrict) {
     const escapeResult = carveEscapeRoutesFromCellMask(
@@ -1225,11 +1245,12 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
     targetRow.unresolvedForeignCount = escapeResult.unresolvedCount;
   }
 
-  // Re-carve affected districts (no reconnect yet)
-  for (const affectedId of affectedDistrictIds) {
-    const row = cloned.rows.find(r => r.districtId === affectedId);
-    const district = pointDistricts.find(d => d.id === affectedId);
-    if (!row || !district) continue;
+  // Re-carve later districts
+  for (const row of cloned.rows) {
+    if (row.districtId <= districtId) continue;
+
+    const district = pointDistricts.find(d => d.id === row.districtId);
+    if (!district) continue;
 
     const escapeResult = carveEscapeRoutesFromCellMask(
       row.finalCellIds,
@@ -1244,8 +1265,14 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
     row.unresolvedForeignCount = escapeResult.unresolvedCount;
   }
 
-  // 🔥 NEW: targeted reconnect only for affected districts
-  return reconnectOnlyAffectedDistricts(cloned, pointDistricts, affectedDistrictIds);
+  // NEW: repair districts that are actually broken now
+  const brokenDistrictIds = getDistrictIdsWithDisconnectedProtectedComponents(
+    cloned,
+    pointDistricts,
+    districtId + 1
+  );
+
+  return reconnectOnlyAffectedDistricts(cloned, pointDistricts, brokenDistrictIds);
 }
 function getComponentsFromCellIdSet(cellIdSet) {
   const allowed = new Set([...(cellIdSet || [])].map(String));
