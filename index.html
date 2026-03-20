@@ -4382,6 +4382,13 @@ function getDistrictExpansionNeed(pointDistricts, owner) {
   return need;
 }
 
+function shuffleArray(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+    
 function expandIntoUnclaimedCells(claimResult, pointDistricts, maxRounds = 12, maxNewClaims = Infinity) {
   const owner = new Map(claimResult.owner);
   const startingClaimCount = owner.size;
@@ -4608,7 +4615,7 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
   let changed = true;
   let round = 0;
 
-  // First: your normal Step 7 fill logic
+  // First: normal Step 7 fill logic
   while (changed && round < maxRounds) {
     changed = false;
     round++;
@@ -4616,9 +4623,11 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
     const expansionNeed = getDistrictExpansionNeed(pointDistricts, owner);
     const proposals = new Map();
 
-    for (const cell of cellsWorking) {
+    const unclaimedCells = cellsWorking.filter(cell => !owner.has(String(cell.id)));
+    shuffleArray(unclaimedCells);
+
+    for (const cell of unclaimedCells) {
       const cellId = String(cell.id);
-      if (owner.has(cellId)) continue;
 
       const touchingDistricts = [...getTouchingDistrictIdsForCell(cellId, owner)];
       if (!touchingDistricts.length) continue;
@@ -4689,7 +4698,10 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
     const unclaimedCells = cellsWorking.filter(cell => !owner.has(String(cell.id)));
     if (!unclaimedCells.length) break;
 
+    shuffleArray(unclaimedCells);
+
     let assignedAnyThisPass = false;
+    const expansionNeed = getDistrictExpansionNeed(pointDistricts, owner);
 
     for (const cell of unclaimedCells) {
       const cellId = String(cell.id);
@@ -4700,8 +4712,6 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
       let bestDistrict = null;
       let bestBorder = -1;
       let bestNeed = -Infinity;
-
-      const expansionNeed = getDistrictExpansionNeed(pointDistricts, owner);
 
       for (const districtId of touchingDistricts) {
         const sharedBorder = getSharedBorderCountForDistrict(cellId, districtId, owner);
