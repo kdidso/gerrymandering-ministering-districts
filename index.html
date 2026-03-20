@@ -956,9 +956,283 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
     row.unresolvedForeignCount = escapeResult.unresolvedCount;
   }
 
-  return cloned;
+  return enforceConnectedFinalMasks(cloned, pointDistricts);
 }
-    
+function getComponentsFromCellIdSet(cellIdSet) {
+  const allowed = new Set([...(cellIdSet || [])].map(String));
+  const visited = new Set();
+  const components = [];
+
+  for (const startId of allowed) {
+    if (visited.has(startId)) continue;
+
+    const queue = [startId];
+    const component = [];
+    visited.add(startId);
+
+    let qIndex = 0;
+    while (qIndex < queue.length) {
+      const currentId = String(queue[qIndex++]);
+      component.push(currentId);
+
+      const cell = cellById.get(currentId);
+      if (!cell) continue;
+
+      for (const neighborIdRaw of cell.neighbors) {
+        const neighborId = String(neighborIdRaw);
+        if (!allowed.has(neighborId)) continue;
+        if (visited.has(neighborId)) continue;
+
+        visited.add(neighborId);
+        queue.push(neighborId);
+      }
+    }
+
+    components.push(component);
+  }
+
+  return components;
+}
+
+function buildForbiddenCellsForFinalMaskReconnect(finalRows, targetDistrictId, protectedByDistrict) {
+  const forbidden = new Set();
+
+  for (const row of finalRows) {
+    const otherDistrictId = row.districtId;
+    if (otherDistrictId === targetDistrictId) continue;
+
+    const protectedSet = protectedByDistrict.get(otherDistrictId) || new Set();
+
+    for (const id of protectedSet) {
+      forbidden.add(String(id));
+    }
+
+    // older districts are locked
+    if (otherDistrictId < targetDistrictId) {
+      for (const id of row.finalCellIds || []) {
+        forbidden.add(String(id));
+      }
+    }
+  }
+
+  return forbidden;
+}
+
+function findReconnectCorridorForFinalMask(
+  component,
+  mainComponentSet,
+  finalRows,
+  districtId,
+  protectedByDistrict
+) {
+  const owner = getCurrentFinalOwnerEstimate({ rows: finalRows });
+  const forbidden = buildForbiddenCellsForFinalMaskReconnect(finalRows, districtId, protectedByDistrict);
+
+  const distances = new Map();
+  const parent = new Map();
+  const visited = new Set();
+  const queue = [];
+
+  function push(cellId, cost) {
+    queue.push({ cellId: String(cellId), cost });
+    queue.sort((a, b) => a.cost - b.cost);
+  }
+
+  for (const startId of component) {
+    distances.set(String(startId), 0);
+    push(String(startId), 0);
+  }
+
+  while (queue.length) {
+    const { cellId, cost } = queue.shift();
+    const currentId = String(cellId);
+
+    if (visited.has(currentId)) continue;
+    visited.add(currentId);
+
+    if (mainComponentSet.has(currentId)) {
+      const path = [currentId];
+      let walk = currentId;
+
+      while (parent.has(walk)) {
+        walk = parent.get(walk);
+        path.push(walk);
+      }
+
+      path.reverse();
+      return path;
+    }
+
+    const cell = cellById.get(currentId);
+    if (!cell) continue;
+
+    for (const neighborIdRaw of cell.neighbors) {
+      const neighborId = String(neighborIdRaw);
+      if (visited.has(neighborId)) continue;
+      if (forbidden.has(neighborId)) continue;
+
+      const currentOwner = owner.get(neighborId);
+      let stepCost = Infinity;
+
+      if (currentOwner === districtId) {
+        stepCost = 0;
+      } else if (currentOwner == null) {
+        stepCost = 1;
+      } else {
+        const foreignProtected = protectedByDistrict.get(currentOwner) || new Set();
+
+        // allow using later-district cells only if they are not protected
+        if (!foreignProtected.has(neighborId) && currentOwner > districtId) {
+          stepCost = 25;
+        }
+      }
+
+      if (!isFinite(stepCost)) continue;
+
+      const newCost = cost + stepCost;
+      const oldCost = distances.get(neighborId);
+
+      if (oldCost == null || newCost < oldCost) {
+        distances.set(neighborId, newCost);
+        parent.set(neighborId, currentId);
+        push(neighborId, newCost);
+      }
+    }
+  }
+
+  return null;
+}
+
+function reconnectFinalMaskComponents(finalRows, pointDistricts, districtId) {
+  const row = finalRows.find(r => r.districtId === districtId);
+  if (!row || !row.finalCellIds?.size) return;
+
+  const district = pointDistricts.find(d => d.id === districtId);
+  if (!district) return;
+
+  const protectedByDistrict = getProtectedCellIdsByDistrict(pointDistricts);
+  const protectedSet = protectedByDistrict.get(districtId) || new Set();
+
+  let changed = true;
+  let safety = 0;
+
+  while (changed && safety < 8) {
+    changed = false;
+    safety++;
+
+    const components = getComponentsFromCellIdSet(row.finalCellIds);
+    if (components.length <= 1) break;
+
+    let mainIndex = -1;
+    let bestProtectedCount = -1;
+    let bestSize = -1;
+
+    for (let i = 0; i < components.length; i++) {
+      const comp = components[i];
+      const protectedCount = comp.filter(id => protectedSet.has(String(id))).length;
+      const size = comp.length;
+
+      if (
+        protectedCount > bestProtectedCount ||
+        (protectedCount === bestProtectedCount && size > bestSize)
+      ) {
+        mainIndex = i;
+        bestProtectedCount = protectedCount;
+        bestSize = size;
+      }
+    }
+
+    const mainComponent = components[mainIndex];
+    const mainComponentSet = new Set(mainComponent);
+
+    for (let i = 0; i < components.length; i++) {
+      if (i === mainIndex) continue;
+
+      const component = components[i];
+      const hasProtected = component.some(id => protectedSet.has(String(id)));
+
+      // if isolated island has no protected cells, drop it
+      if (!hasProtected) {
+        for (const id of component) {
+          row.finalCellIds.delete(String(id));
+        }
+        changed = true;
+        continue;
+      }
+
+      const corridor = findReconnectCorridorForFinalMask(
+        component,
+        mainComponentSet,
+        finalRows,
+        districtId,
+        protectedByDistrict
+      );
+
+      if (!corridor || !corridor.length) {
+        continue;
+      }
+
+      for (const id of corridor) {
+        row.finalCellIds.add(String(id));
+        mainComponentSet.add(String(id));
+      }
+
+      // remove corridor cells from later districts
+      for (const otherRow of finalRows) {
+        if (otherRow.districtId <= districtId) continue;
+        for (const id of corridor) {
+          otherRow.finalCellIds.delete(String(id));
+        }
+      }
+
+      changed = true;
+    }
+  }
+
+  // re-carve escapes for this district after reconnecting
+  const escapeResult = carveEscapeRoutesFromCellMask(
+    row.finalCellIds,
+    district,
+    pointDistricts,
+    districtId,
+    12
+  );
+
+  row.finalCellIds = escapeResult.finalCellIds;
+  row.escapedForeignCount = escapeResult.escapedCount;
+  row.unresolvedForeignCount = escapeResult.unresolvedCount;
+}
+
+function enforceConnectedFinalMasks(finalResult, pointDistricts) {
+  const cloned = cloneFinalDistrictPolygonsResult(finalResult);
+
+  for (const district of pointDistricts) {
+    reconnectFinalMaskComponents(cloned.rows, pointDistricts, district.id);
+  }
+
+  // one more pass for later districts after earlier districts may have taken corridors
+  for (const district of pointDistricts) {
+    const row = cloned.rows.find(r => r.districtId === district.id);
+    if (!row) continue;
+
+    const districtObj = pointDistricts.find(d => d.id === district.id);
+    if (!districtObj) continue;
+
+    const escapeResult = carveEscapeRoutesFromCellMask(
+      row.finalCellIds,
+      districtObj,
+      pointDistricts,
+      district.id,
+      12
+    );
+
+    row.finalCellIds = escapeResult.finalCellIds;
+    row.escapedForeignCount = escapeResult.escapedCount;
+    row.unresolvedForeignCount = escapeResult.unresolvedCount;
+  }
+
+  return cloned;
+}    
     
 function buildExcelRowsFromAssignments(districtAssignmentResults) {
   const rows = [];
