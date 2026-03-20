@@ -1099,18 +1099,15 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
 
   const additions = new Set(pathCellIds.map(String));
 
-  // Keep this narrow and directional
-  const bloom = new Set();
-
-  for (const id of bloom) additions.add(String(id));
-
+  // Keep manual expansion narrow and directional
   for (const id of additions) {
     targetRow.finalCellIds.add(String(id));
   }
 
-  // Remove only from later districts
+  // Remove these cells from later districts only
   for (const row of cloned.rows) {
     if (row.districtId <= districtId) continue;
+
     for (const id of additions) {
       row.finalCellIds.delete(String(id));
     }
@@ -1120,12 +1117,13 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
   if (!manualExpansionCellsByDistrict.has(districtId)) {
     manualExpansionCellsByDistrict.set(districtId, new Set());
   }
+
   const manualSet = manualExpansionCellsByDistrict.get(districtId);
   for (const id of additions) {
     manualSet.add(String(id));
   }
 
-  // Re-carve target district
+  // Re-carve only the selected district
   const targetDistrict = pointDistricts.find(d => d.id === districtId);
   if (targetDistrict) {
     const escapeResult = carveEscapeRoutesFromCellMask(
@@ -1135,12 +1133,14 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
       targetDistrict.id,
       12
     );
+
     targetRow.finalCellIds = escapeResult.finalCellIds;
     targetRow.escapedForeignCount = escapeResult.escapedCount;
     targetRow.unresolvedForeignCount = escapeResult.unresolvedCount;
   }
 
-  // Re-carve later districts only
+  // Re-carve later districts only so they can lose cells cleanly,
+  // but do NOT reconnect or re-grow them here
   for (const row of cloned.rows) {
     if (row.districtId <= districtId) continue;
 
@@ -1160,8 +1160,7 @@ function applyDirectedMaskExpansion(finalResult, pointDistricts, districtId, pat
     row.unresolvedForeignCount = escapeResult.unresolvedCount;
   }
 
-  // New: only reconnect isolated protected islands through unclaimed cells
-  return reconnectIsolatedProtectedComponentsUnclaimedOnly(cloned, pointDistricts);
+  return cloned;
 }
 function getComponentsFromCellIdSet(cellIdSet) {
   const allowed = new Set([...(cellIdSet || [])].map(String));
