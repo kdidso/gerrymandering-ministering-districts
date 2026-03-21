@@ -629,6 +629,7 @@
     let adjacencyData = null;
     let metadataData = null;
     let wardPolygonFeatures = [];
+    let finalPolygonTouchLayer = null;
 
     let allMembersLayer = null;
     let filteredPreviewLayer = null;
@@ -3282,6 +3283,10 @@ function removeDistrictLayers() {
     map.removeLayer(finalPolygonLayer);
     finalPolygonLayer = null;
   }
+  if (finalPolygonTouchLayer) {
+    map.removeLayer(finalPolygonTouchLayer);
+    finalPolygonTouchLayer = null;
+  }
   if (claimedCellLayer) {
     map.removeLayer(claimedCellLayer);
     claimedCellLayer = null;
@@ -4478,6 +4483,10 @@ function drawStep4Polygons(finalResult) {
     map.removeLayer(finalPolygonLayer);
     finalPolygonLayer = null;
   }
+  if (finalPolygonTouchLayer) {
+    map.removeLayer(finalPolygonTouchLayer);
+    finalPolygonTouchLayer = null;
+  }
 
   const features = [];
 
@@ -4489,7 +4498,50 @@ function drawStep4Polygons(finalResult) {
     features.push(...edges);
   }
 
+  function handleStep4DistrictSelect(ev, districtId) {
+    if (!maskExpandMode) return;
+
+    L.DomEvent.stopPropagation(ev);
+
+    selectedMaskExpandDistrictId = districtId;
+    selectedMaskExpandSourceCellId = getNearestMaskCellForDistrictClick(
+      currentFinalDistrictPolygons,
+      districtId,
+      ev.latlng
+    );
+
+    drawStep4Polygons(currentFinalDistrictPolygons);
+
+    setStatus(
+      gerryStatus,
+      `District ${districtId + 1} selected for mask expansion. Now click a destination area on the map.`,
+      "good"
+    );
+  }
+
+  // Visible boundary layer
   finalPolygonLayer = L.geoJSON(
+    { type: "FeatureCollection", features },
+    {
+      interactive: false,
+      style: function(feature) {
+        const districtId = feature.properties._district;
+        const isSelected =
+          maskExpandMode &&
+          selectedMaskExpandDistrictId != null &&
+          districtId === selectedMaskExpandDistrictId;
+
+        return {
+          color: isSelected ? "#111827" : "#374151",
+          weight: isSelected ? 5 : 2,
+          opacity: isSelected ? 1 : 0.85
+        };
+      }
+    }
+  ).addTo(map);
+
+  // Invisible thick touch layer for mobile/iPad selection
+  finalPolygonTouchLayer = L.geoJSON(
     { type: "FeatureCollection", features },
     {
       style: function(feature) {
@@ -4500,42 +4552,28 @@ function drawStep4Polygons(finalResult) {
           districtId === selectedMaskExpandDistrictId;
 
         return {
-          color: isSelected ? "#111827" : "#374151",
-          weight: isSelected ? 4 : 2,
-          opacity: isSelected ? 1 : 0.8
+          color: "#000000",
+          weight: isSelected ? 26 : 20,
+          opacity: 0.01
         };
       },
       onEachFeature: function(feature, layer) {
         const districtId = feature.properties._district;
 
-        layer.bindPopup(
-          `<strong>District ${districtId + 1}</strong><br>Step 4 finalized masked boundary`
-        );
-
         layer.on("click", function(ev) {
-          if (!maskExpandMode) return;
+          handleStep4DistrictSelect(ev, districtId);
+        });
 
-          L.DomEvent.stopPropagation(ev);
-
-          selectedMaskExpandDistrictId = districtId;
-          selectedMaskExpandSourceCellId = getNearestMaskCellForDistrictClick(
-            currentFinalDistrictPolygons,
-            districtId,
-            ev.latlng
-          );
-
-          drawStep4Polygons(currentFinalDistrictPolygons);
-
-          setStatus(
-            gerryStatus,
-            `District ${districtId + 1} selected for mask expansion. Now click an unclaimed destination area on the map.`,
-            "good"
-          );
+        layer.on("touchstart", function(ev) {
+          handleStep4DistrictSelect(ev, districtId);
         });
       }
     }
   ).addTo(map);
 
+  if (finalPolygonTouchLayer.bringToFront) {
+    finalPolygonTouchLayer.bringToFront();
+  }
   if (finalPolygonLayer.bringToFront) {
     finalPolygonLayer.bringToFront();
   }
@@ -5136,7 +5174,7 @@ function toggleMaskExpansionMode() {
 
     setStatus(
       gerryStatus,
-      "Mask expansion is on. First click a Step 4 district edge to select a mask. Then click an unclaimed destination area to expand that mask there.",
+      "Mask expansion is on. First tap or click a Step 4 district boundary to select a district. Then tap or click a destination area on the map.",
       "good"
     );
   } else {
@@ -5155,7 +5193,7 @@ function handleMaskExpansionMapClick(e) {
   if (selectedMaskExpandDistrictId == null || selectedMaskExpandSourceCellId == null) {
     setStatus(
       gerryStatus,
-      "First click a Step 4 district edge to choose which mask to expand.",
+      "First tap or click a Step 4 district boundary to choose which district to expand.",
       "warn"
     );
     return;
