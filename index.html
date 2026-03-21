@@ -4545,18 +4545,18 @@ function drawStep4Polygons(finalResult) {
     { type: "FeatureCollection", features },
     {
       style: function(feature) {
-        const districtId = feature.properties._district;
-        const isSelected =
-          maskExpandMode &&
-          selectedMaskExpandDistrictId != null &&
-          districtId === selectedMaskExpandDistrictId;
+  const districtId = feature.properties._district;
+  const isSelected =
+    maskExpandMode &&
+    selectedMaskExpandDistrictId != null &&
+    districtId === selectedMaskExpandDistrictId;
 
-        return {
-          color: "#000000",
-          weight: isSelected ? 26 : 20,
-          opacity: 0.01
-        };
-      },
+  return {
+    color: "#000000",
+    weight: isSelected ? 26 : 20,
+    opacity: 0   // 👈 fully invisible
+  };
+},
       onEachFeature: function(feature, layer) {
         const districtId = feature.properties._district;
 
