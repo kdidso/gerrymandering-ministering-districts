@@ -5781,6 +5781,241 @@ function getSharedBorderCountForDistrict(cellId, districtId, owner) {
   return count;
 }
 
+function clonePointDistricts(pointDistricts) {
+  return pointDistricts.map(d => ({
+    ...d,
+    members: d.members.map(item => ({
+      ...item,
+      feature: cloneFeature(item.feature)
+    }))
+  }));
+}
+
+function getDistrictById(pointDistricts, districtId) {
+  return pointDistricts.find(d => d.id === districtId) || null;
+}
+
+function rebuildDistrictCountsAndCentroids(pointDistricts) {
+  for (const district of pointDistricts) {
+    district.group1 = 0;
+    district.group2 = 0;
+    district.total = district.members.length;
+
+    for (const item of district.members) {
+      if (item.group === 1) district.group1++;
+      if (item.group === 2) district.group2++;
+      item._assignedDistrict = district.id;
+    }
+
+    computeDistrictCentroid(district);
+  }
+}
+
+function districtsBorderEachOther(owner, districtA, districtB) {
+  for (const cell of cellsWorking) {
+    const cellId = String(cell.id);
+    if (owner.get(cellId) !== districtA) continue;
+
+    for (const neighborIdRaw of cell.neighbors) {
+      const neighborId = String(neighborIdRaw);
+      if (owner.get(neighborId) === districtB) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function getProtectedCellsPresentInComponent(component, pointDistricts) {
+  const componentSet = new Set(component.map(String));
+  const protectedByDistrict = getProtectedCellIdsByDistrict(pointDistricts);
+  const hits = new Map();
+
+  for (const [districtId, protectedSet] of protectedByDistrict.entries()) {
+    const found = [];
+    for (const cellId of protectedSet) {
+      if (componentSet.has(String(cellId))) {
+        found.push(String(cellId));
+      }
+    }
+    if (found.length) {
+      hits.set(districtId, found);
+    }
+  }
+
+  return hits;
+}
+
+function buildUnresolvedProtectedConflictComponents(owner, pointDistricts) {
+  const conflicts = [];
+
+  for (const district of pointDistricts) {
+    const ownerDistrictId = district.id;
+    const components = getDistrictComponentsFromOwner(owner, ownerDistrictId);
+
+    for (const component of components) {
+      const protectedHits = getProtectedCellsPresentInComponent(component, pointDistricts);
+
+      const ownerProtected = protectedHits.get(ownerDistrictId) || [];
+      const foreignDistrictIds = [...protectedHits.keys()].filter(id => id !== ownerDistrictId);
+
+      if (!foreignDistrictIds.length) continue;
+
+      conflicts.push({
+        ownerDistrictId,
+        componentCellIds: new Set(component.map(String)),
+        componentArray: component.map(String),
+        ownerProtectedCellIds: ownerProtected,
+        foreignDistrictIds,
+        protectedHits
+      });
+    }
+  }
+
+  return conflicts;
+}
+
+function moveMembersByCellIds(pointDistricts, fromDistrictId, toDistrictId, cellIdSet) {
+  const fromDistrict = getDistrictById(pointDistricts, fromDistrictId);
+  const toDistrict = getDistrictById(pointDistricts, toDistrictId);
+  if (!fromDistrict || !toDistrict) return 0;
+
+  const keep = [];
+  const moved = [];
+
+  for (const item of fromDistrict.members) {
+    const itemCellId = item.cellId != null ? String(item.cellId) : null;
+    if (itemCellId && cellIdSet.has(itemCellId)) {
+      item._assignedDistrict = toDistrictId;
+      moved.push(item);
+    } else {
+      keep.push(item);
+    }
+  }
+
+  fromDistrict.members = keep;
+  toDistrict.members.push(...moved);
+
+  return moved.length;
+}
+
+function transferComponentOwnership(owner, componentCellIds, newDistrictId) {
+  for (const cellId of componentCellIds) {
+    owner.set(String(cellId), newDistrictId);
+  }
+}
+
+function findPairSwapOpportunities(owner, pointDistricts) {
+  const conflicts = buildUnresolvedProtectedConflictComponents(owner, pointDistricts);
+  const swaps = [];
+  const usedKeys = new Set();
+
+  for (let i = 0; i < conflicts.length; i++) {
+    const a = conflicts[i];
+
+    for (const foreignA of a.foreignDistrictIds) {
+      if (a.ownerDistrictId === foreignA) continue;
+
+      const b = conflicts.find(c =>
+        c.ownerDistrictId === foreignA &&
+        c.foreignDistrictIds.includes(a.ownerDistrictId)
+      );
+
+      if (!b) continue;
+
+      if (!districtsBorderEachOther(owner, a.ownerDistrictId, b.ownerDistrictId)) continue;
+
+      const key = [a.ownerDistrictId, b.ownerDistrictId].sort((x, y) => x - y).join("|");
+      if (usedKeys.has(key)) continue;
+
+      swaps.push({
+        districtA: a.ownerDistrictId,
+        districtB: b.ownerDistrictId,
+        componentOwnedByA: a.componentCellIds,
+        componentOwnedByB: b.componentCellIds
+      });
+
+      usedKeys.add(key);
+    }
+  }
+
+  return swaps;
+}
+
+function applyPairConflictSwaps(owner, pointDistricts) {
+  const swaps = findPairSwapOpportunities(owner, pointDistricts);
+  let applied = 0;
+
+  for (const swap of swaps) {
+    transferComponentOwnership(owner, swap.componentOwnedByA, swap.districtB);
+    transferComponentOwnership(owner, swap.componentOwnedByB, swap.districtA);
+
+    moveMembersByCellIds(pointDistricts, swap.districtB, swap.districtA, swap.componentOwnedByB);
+    moveMembersByCellIds(pointDistricts, swap.districtA, swap.districtB, swap.componentOwnedByA);
+
+    applied++;
+  }
+
+  if (applied > 0) {
+    rebuildDistrictCountsAndCentroids(pointDistricts);
+  }
+
+  return applied;
+}
+
+function applySingleConflictTransfers(owner, pointDistricts) {
+  const conflicts = buildUnresolvedProtectedConflictComponents(owner, pointDistricts);
+  let applied = 0;
+
+  for (const conflict of conflicts) {
+    if (conflict.foreignDistrictIds.length !== 1) continue;
+
+    const ownerDistrict = getDistrictById(pointDistricts, conflict.ownerDistrictId);
+    const foreignDistrict = getDistrictById(pointDistricts, conflict.foreignDistrictIds[0]);
+
+    if (!ownerDistrict || !foreignDistrict) continue;
+    if (!districtsBorderEachOther(owner, ownerDistrict.id, foreignDistrict.id)) continue;
+
+    // Rule:
+    // if no pair exists, and the trapped point belongs to the district with MORE people,
+    // give that trapped point/component to the smaller district that surrounds/conflicts with it
+    if (foreignDistrict.total <= ownerDistrict.total) continue;
+
+    transferComponentOwnership(owner, conflict.componentCellIds, ownerDistrict.id);
+    moveMembersByCellIds(
+      pointDistricts,
+      foreignDistrict.id,
+      ownerDistrict.id,
+      conflict.componentCellIds
+    );
+
+    applied++;
+  }
+
+  if (applied > 0) {
+    rebuildDistrictCountsAndCentroids(pointDistricts);
+  }
+
+  return applied;
+}
+
+function resolveRemainingStep7Conflicts(owner, pointDistricts) {
+  const districtCopy = clonePointDistricts(pointDistricts);
+  const ownerCopy = new Map(owner);
+
+  const pairSwapsApplied = applyPairConflictSwaps(ownerCopy, districtCopy);
+  const singleTransfersApplied = applySingleConflictTransfers(ownerCopy, districtCopy);
+
+  rebuildDistrictCountsAndCentroids(districtCopy);
+
+  return {
+    owner: ownerCopy,
+    pointDistricts: districtCopy,
+    pairSwapsApplied,
+    singleTransfersApplied
+  };
+}
+    
 function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10) {
   const owner = new Map(claimResult.owner);
 
@@ -5911,7 +6146,7 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
     }
   }
 
-  // Final cleanup after all forced claims
+  // Third: normal cleanup
   const cleanedFinal = cleanupClaimedDistrictIslands(
     {
       owner: new Map(owner),
@@ -5921,11 +6156,19 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
     pointDistricts
   );
 
-  const finalOwner = cleanedFinal.owner;
+  // Fourth: NEW Step 7 conflict-resolution pass
+  const resolved = resolveRemainingStep7Conflicts(
+    cleanedFinal.owner,
+    pointDistricts
+  );
+
+  const finalOwner = resolved.owner;
+  const finalPointDistricts = resolved.pointDistricts;
+
   const claimedFeatures = [];
   const countByDistrict = new Map();
 
-  for (const district of pointDistricts) {
+  for (const district of finalPointDistricts) {
     countByDistrict.set(district.id, 0);
   }
 
@@ -5950,7 +6193,10 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
   return {
     owner: finalOwner,
     claimedFeatures,
-    countByDistrict
+    countByDistrict,
+    pointDistricts: finalPointDistricts,
+    pairSwapsApplied: resolved.pairSwapsApplied,
+    singleTransfersApplied: resolved.singleTransfersApplied
   };
 }
 
@@ -6054,7 +6300,10 @@ async function runStep7() {
         currentPointDistricts,
         10
       );
-
+if (filledResult.pointDistricts) {
+  currentPointDistricts = filledResult.pointDistricts;
+} 
+      
       currentClaimResult = filledResult;
 
       if (rawHullLayer) {
@@ -6088,8 +6337,8 @@ async function runStep7() {
 setStatus(
   gerryStatus,
   remaining === 0
-    ? `Step 7 complete. Added ${added} cells. All cells are now claimed.`
-    : `Step 7 complete, but ${remaining} cell(s) are still unclaimed.`,
+    ? `Step 7 complete. Added ${added} cells. All cells are now claimed. Conflict fixes applied: ${filledResult.pairSwapsApplied || 0} pair swap(s), ${filledResult.singleTransfersApplied || 0} single transfer(s).`
+    : `Step 7 complete, but ${remaining} cell(s) are still unclaimed. Conflict fixes applied: ${filledResult.pairSwapsApplied || 0} pair swap(s), ${filledResult.singleTransfersApplied || 0} single transfer(s).`,
   remaining === 0 ? "good" : "warn"
 );
     } catch (error) {
