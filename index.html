@@ -5995,6 +5995,57 @@ function applyPairConflictSwaps(owner, pointDistricts) {
   return applied;
 }
 
+function countMembersInCellSet(pointDistricts, districtId, cellIdSet) {
+  const district = getDistrictById(pointDistricts, districtId);
+  if (!district) return 0;
+
+  let count = 0;
+  for (const item of district.members) {
+    const itemCellId = item.cellId != null ? String(item.cellId) : null;
+    if (itemCellId && cellIdSet.has(itemCellId)) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
+function wouldCreateForbiddenSingleTransferExtremes(
+  pointDistricts,
+  fromDistrictId,
+  toDistrictId,
+  moveCount
+) {
+  if (moveCount <= 0) return true;
+
+  const newTotals = new Map();
+
+  for (const district of pointDistricts) {
+    newTotals.set(district.id, district.total ?? district.members.length);
+  }
+
+  newTotals.set(fromDistrictId, (newTotals.get(fromDistrictId) || 0) - moveCount);
+  newTotals.set(toDistrictId, (newTotals.get(toDistrictId) || 0) + moveCount);
+
+  const totals = [...newTotals.values()];
+  const maxTotal = Math.max(...totals);
+  const minTotal = Math.min(...totals);
+
+  const maxCount = totals.filter(v => v === maxTotal).length;
+  const minCount = totals.filter(v => v === minTotal).length;
+
+  const receivingTotal = newTotals.get(toDistrictId);
+  const sendingTotal = newTotals.get(fromDistrictId);
+
+  const receivingWouldBeUniqueLargest =
+    receivingTotal === maxTotal && maxCount === 1;
+
+  const sendingWouldBeUniqueSmallest =
+    sendingTotal === minTotal && minCount === 1;
+
+  return receivingWouldBeUniqueLargest || sendingWouldBeUniqueSmallest;
+}
+    
 function applySingleConflictTransfers(owner, pointDistricts) {
   const islands = buildDirectTrappedIslands(owner, pointDistricts);
   let applied = 0;
@@ -6005,12 +6056,31 @@ function applySingleConflictTransfers(owner, pointDistricts) {
 
     if (!trappedDistrict || !surroundingDistrict) continue;
 
-    // Your rule:
-    // if no pair swap exists, and the trapped district has more people,
-    // give the trapped island to the surrounding district
-    if (trappedDistrict.total <= surroundingDistrict.total) continue;
+    const moveCount = countMembersInCellSet(
+      pointDistricts,
+      island.trappedDistrictId,
+      island.componentCellIds
+    );
+
+    if (moveCount <= 0) continue;
+
+    // New rule:
+    // allow the single trapped-island transfer only if it does NOT:
+    // 1) make the receiving district uniquely largest, or
+    // 2) make the sending district uniquely smallest
+    if (
+      wouldCreateForbiddenSingleTransferExtremes(
+        pointDistricts,
+        island.trappedDistrictId,
+        island.surroundingDistrictId,
+        moveCount
+      )
+    ) {
+      continue;
+    }
 
     transferComponentOwnership(owner, island.componentCellIds, island.surroundingDistrictId);
+
     moveMembersByCellIds(
       pointDistricts,
       island.trappedDistrictId,
