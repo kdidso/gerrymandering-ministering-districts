@@ -5830,6 +5830,17 @@ function moveMembersByCellIds(pointDistricts, fromDistrictId, toDistrictId, cell
 
     if (itemCellId && cellIdSet.has(itemCellId)) {
       item._assignedDistrict = toDistrictId;
+
+      if (!item.feature.properties) {
+        item.feature.properties = {};
+      }
+
+      item.feature.properties._district = toDistrictId;
+      item.feature.properties.district_id = toDistrictId;
+      item.feature.properties.district_label = toDistrictId + 1;
+      item.feature.properties.district_color =
+        DISTRICT_COLORS[toDistrictId % DISTRICT_COLORS.length];
+
       moved.push(item);
     } else {
       keep.push(item);
@@ -5901,7 +5912,6 @@ function buildDirectTrappedIslands(owner, pointDistricts) {
       const componentSet = new Set(component.map(String));
       const protectedHits = component.filter(id => protectedSet.has(String(id)));
 
-      // Only treat protected side-components as trapped-island candidates
       if (!protectedHits.length) continue;
 
       const touchingDistricts = new Set();
@@ -5921,7 +5931,6 @@ function buildDirectTrappedIslands(owner, pointDistricts) {
         }
       }
 
-      // Keep it strict: exactly one surrounding foreign district
       if (touchingDistricts.size !== 1) continue;
 
       const surroundingDistrictId = [...touchingDistricts][0];
@@ -5958,7 +5967,6 @@ function applyPairConflictSwaps(owner, pointDistricts) {
     const keyB = `${b.trappedDistrictId}|${b.surroundingDistrictId}|${[...b.componentCellIds].sort().join(",")}`;
     if (used.has(keyB)) continue;
 
-    // A island goes to A's surrounding district
     transferComponentOwnership(owner, a.componentCellIds, a.surroundingDistrictId);
     moveMembersByCellIds(
       pointDistricts,
@@ -5967,7 +5975,6 @@ function applyPairConflictSwaps(owner, pointDistricts) {
       a.componentCellIds
     );
 
-    // B island goes to B's surrounding district
     transferComponentOwnership(owner, b.componentCellIds, b.surroundingDistrictId);
     moveMembersByCellIds(
       pointDistricts,
@@ -6340,9 +6347,11 @@ async function runStep7() {
       );
 if (filledResult.pointDistricts) {
   currentPointDistricts = filledResult.pointDistricts;
-} 
-      
-      currentClaimResult = filledResult;
+}
+
+drawDistrictPoints(currentPointDistricts);
+
+currentClaimResult = filledResult;
 
       if (rawHullLayer) {
         map.removeLayer(rawHullLayer);
