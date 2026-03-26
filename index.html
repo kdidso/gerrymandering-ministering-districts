@@ -5970,22 +5970,28 @@ function applySingleConflictTransfers(owner, pointDistricts) {
   for (const conflict of conflicts) {
     if (conflict.foreignDistrictIds.length !== 1) continue;
 
-    const ownerDistrict = getDistrictById(pointDistricts, conflict.ownerDistrictId);
-    const foreignDistrict = getDistrictById(pointDistricts, conflict.foreignDistrictIds[0]);
+    const surroundingDistrictId = conflict.ownerDistrictId;
+    const trappedDistrictId = conflict.foreignDistrictIds[0];
 
-    if (!ownerDistrict || !foreignDistrict) continue;
-    if (!districtsBorderEachOther(owner, ownerDistrict.id, foreignDistrict.id)) continue;
+    const surroundingDistrict = getDistrictById(pointDistricts, surroundingDistrictId);
+    const trappedDistrict = getDistrictById(pointDistricts, trappedDistrictId);
 
-    // Rule:
-    // if no pair exists, and the trapped point belongs to the district with MORE people,
-    // give that trapped point/component to the smaller district that surrounds/conflicts with it
-    if (foreignDistrict.total <= ownerDistrict.total) continue;
+    if (!surroundingDistrict || !trappedDistrict) continue;
+    if (!districtsBorderEachOther(owner, surroundingDistrictId, trappedDistrictId)) continue;
 
-    transferComponentOwnership(owner, conflict.componentCellIds, ownerDistrict.id);
+    // We only do this fallback when the trapped point's own district has MORE people.
+    // Example:
+    // red point trapped inside blue cells
+    // red district has 37, blue district has 36
+    // then give the trapped red component to blue
+    if (trappedDistrict.total <= surroundingDistrict.total) continue;
+
+    transferComponentOwnership(owner, conflict.componentCellIds, surroundingDistrictId);
+
     moveMembersByCellIds(
       pointDistricts,
-      foreignDistrict.id,
-      ownerDistrict.id,
+      trappedDistrictId,
+      surroundingDistrictId,
       conflict.componentCellIds
     );
 
@@ -6003,16 +6009,35 @@ function resolveRemainingStep7Conflicts(owner, pointDistricts) {
   const districtCopy = clonePointDistricts(pointDistricts);
   const ownerCopy = new Map(owner);
 
-  const pairSwapsApplied = applyPairConflictSwaps(ownerCopy, districtCopy);
-  const singleTransfersApplied = applySingleConflictTransfers(ownerCopy, districtCopy);
+  let totalPairSwapsApplied = 0;
+  let totalSingleTransfersApplied = 0;
+  let changed = true;
+  let safety = 0;
+
+  while (changed && safety < 10) {
+    changed = false;
+    safety++;
+
+    const pairSwapsApplied = applyPairConflictSwaps(ownerCopy, districtCopy);
+    if (pairSwapsApplied > 0) {
+      totalPairSwapsApplied += pairSwapsApplied;
+      changed = true;
+    }
+
+    const singleTransfersApplied = applySingleConflictTransfers(ownerCopy, districtCopy);
+    if (singleTransfersApplied > 0) {
+      totalSingleTransfersApplied += singleTransfersApplied;
+      changed = true;
+    }
+  }
 
   rebuildDistrictCountsAndCentroids(districtCopy);
 
   return {
     owner: ownerCopy,
     pointDistricts: districtCopy,
-    pairSwapsApplied,
-    singleTransfersApplied
+    pairSwapsApplied: totalPairSwapsApplied,
+    singleTransfersApplied: totalSingleTransfersApplied
   };
 }
     
