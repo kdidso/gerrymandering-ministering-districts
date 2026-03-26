@@ -5945,13 +5945,6 @@ function buildDirectTrappedIslands(owner, pointDistricts) {
   }
 
   return islands;
-const debugIslands = buildDirectTrappedIslands(ownerCopy, districtCopy);
-console.log("Step 7 direct trapped islands:", debugIslands.map(x => ({
-  trappedDistrictId: x.trappedDistrictId,
-  surroundingDistrictId: x.surroundingDistrictId,
-  size: x.componentCellIds.size,
-  protectedHits: [...x.trappedProtectedCellIds]
-}))); 
 }
 
 function applyPairConflictSwaps(owner, pointDistricts) {
@@ -6047,6 +6040,14 @@ function resolveRemainingStep7Conflicts(owner, pointDistricts) {
   while (changed && safety < 10) {
     changed = false;
     safety++;
+
+    const debugIslands = buildDirectTrappedIslands(ownerCopy, districtCopy);
+    console.log(`Step 7 direct trapped islands pass ${safety}:`, debugIslands.map(x => ({
+      trappedDistrictId: x.trappedDistrictId,
+      surroundingDistrictId: x.surroundingDistrictId,
+      size: x.componentCellIds.size,
+      protectedHits: [...x.trappedProtectedCellIds]
+    })));
 
     const pairSwapsApplied = applyPairConflictSwaps(ownerCopy, districtCopy);
     if (pairSwapsApplied > 0) {
