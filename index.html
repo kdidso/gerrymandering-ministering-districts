@@ -5781,6 +5781,298 @@ function getSharedBorderCountForDistrict(cellId, districtId, owner) {
   return count;
 }
 
+function clonePointDistricts(pointDistricts) {
+  return pointDistricts.map(d => ({
+    ...d,
+    members: d.members.map(item => ({
+      ...item,
+      feature: cloneFeature(item.feature)
+    }))
+  }));
+}
+
+function getDistrictById(pointDistricts, districtId) {
+  return pointDistricts.find(d => d.id === districtId) || null;
+}
+
+function rebuildDistrictCountsAndCentroids(pointDistricts) {
+  for (const district of pointDistricts) {
+    district.group1 = 0;
+    district.group2 = 0;
+    district.total = district.members.length;
+
+    for (const item of district.members) {
+      if (item.group === 1) district.group1++;
+      if (item.group === 2) district.group2++;
+      item._assignedDistrict = district.id;
+    }
+
+    computeDistrictCentroid(district);
+  }
+}
+
+function transferComponentOwnership(owner, componentCellIds, newDistrictId) {
+  for (const cellId of componentCellIds) {
+    owner.set(String(cellId), newDistrictId);
+  }
+}
+
+function moveMembersByCellIds(pointDistricts, fromDistrictId, toDistrictId, cellIdSet) {
+  const fromDistrict = getDistrictById(pointDistricts, fromDistrictId);
+  const toDistrict = getDistrictById(pointDistricts, toDistrictId);
+  if (!fromDistrict || !toDistrict) return 0;
+
+  const keep = [];
+  const moved = [];
+
+  for (const item of fromDistrict.members) {
+    const itemCellId = item.cellId != null ? String(item.cellId) : null;
+
+    if (itemCellId && cellIdSet.has(itemCellId)) {
+      item._assignedDistrict = toDistrictId;
+
+      if (!item.feature.properties) {
+        item.feature.properties = {};
+      }
+
+      item.feature.properties._district = toDistrictId;
+      item.feature.properties.district_id = toDistrictId;
+      item.feature.properties.district_label = toDistrictId + 1;
+      item.feature.properties.district_color =
+        DISTRICT_COLORS[toDistrictId % DISTRICT_COLORS.length];
+
+      moved.push(item);
+    } else {
+      keep.push(item);
+    }
+  }
+
+  fromDistrict.members = keep;
+  toDistrict.members.push(...moved);
+
+  return moved.length;
+}
+
+function getNeighborOwnerDistrictsAroundComponent(owner, componentCellIds) {
+  const componentSet = new Set([...componentCellIds].map(String));
+  const touching = new Set();
+
+  for (const cellId of componentSet) {
+    const cell = cellById.get(String(cellId));
+    if (!cell) continue;
+
+    for (const neighborIdRaw of cell.neighbors) {
+      const neighborId = String(neighborIdRaw);
+      if (componentSet.has(neighborId)) continue;
+
+      const neighborOwner = owner.get(neighborId);
+      if (neighborOwner != null) {
+        touching.add(neighborOwner);
+      }
+    }
+  }
+
+  return touching;
+}
+
+function buildDirectTrappedIslands(owner, pointDistricts) {
+  const protectedByDistrict = getProtectedCellIdsByDistrict(pointDistricts);
+  const islands = [];
+
+  for (const district of pointDistricts) {
+    const districtId = district.id;
+    const protectedSet = protectedByDistrict.get(districtId) || new Set();
+    const components = getDistrictComponentsFromOwner(owner, districtId);
+
+    if (components.length <= 1) continue;
+
+    let mainIndex = -1;
+    let bestProtectedCount = -1;
+    let bestSize = -1;
+
+    for (let i = 0; i < components.length; i++) {
+      const comp = components[i];
+      const protectedCount = comp.filter(id => protectedSet.has(String(id))).length;
+      const size = comp.length;
+
+      if (
+        protectedCount > bestProtectedCount ||
+        (protectedCount === bestProtectedCount && size > bestSize)
+      ) {
+        mainIndex = i;
+        bestProtectedCount = protectedCount;
+        bestSize = size;
+      }
+    }
+
+    for (let i = 0; i < components.length; i++) {
+      if (i === mainIndex) continue;
+
+      const component = components[i];
+      const componentSet = new Set(component.map(String));
+      const protectedHits = component.filter(id => protectedSet.has(String(id)));
+
+      if (!protectedHits.length) continue;
+
+      const touchingDistricts = new Set();
+
+      for (const cellId of componentSet) {
+        const cell = cellById.get(String(cellId));
+        if (!cell) continue;
+
+        for (const neighborIdRaw of cell.neighbors) {
+          const neighborId = String(neighborIdRaw);
+          if (componentSet.has(neighborId)) continue;
+
+          const neighborOwner = owner.get(neighborId);
+          if (neighborOwner != null && neighborOwner !== districtId) {
+            touchingDistricts.add(neighborOwner);
+          }
+        }
+      }
+
+      if (touchingDistricts.size !== 1) continue;
+
+      const surroundingDistrictId = [...touchingDistricts][0];
+
+      islands.push({
+        trappedDistrictId: districtId,
+        surroundingDistrictId,
+        componentCellIds: componentSet,
+        trappedProtectedCellIds: new Set(protectedHits)
+      });
+    }
+  }
+
+  return islands;
+}
+
+function applyPairConflictSwaps(owner, pointDistricts) {
+  const islands = buildDirectTrappedIslands(owner, pointDistricts);
+  const used = new Set();
+  let applied = 0;
+
+  for (let i = 0; i < islands.length; i++) {
+    const a = islands[i];
+    const keyA = `${a.trappedDistrictId}|${a.surroundingDistrictId}|${[...a.componentCellIds].sort().join(",")}`;
+    if (used.has(keyA)) continue;
+
+    const b = islands.find(x =>
+      x.trappedDistrictId === a.surroundingDistrictId &&
+      x.surroundingDistrictId === a.trappedDistrictId
+    );
+
+    if (!b) continue;
+
+    const keyB = `${b.trappedDistrictId}|${b.surroundingDistrictId}|${[...b.componentCellIds].sort().join(",")}`;
+    if (used.has(keyB)) continue;
+
+    transferComponentOwnership(owner, a.componentCellIds, a.surroundingDistrictId);
+    moveMembersByCellIds(
+      pointDistricts,
+      a.trappedDistrictId,
+      a.surroundingDistrictId,
+      a.componentCellIds
+    );
+
+    transferComponentOwnership(owner, b.componentCellIds, b.surroundingDistrictId);
+    moveMembersByCellIds(
+      pointDistricts,
+      b.trappedDistrictId,
+      b.surroundingDistrictId,
+      b.componentCellIds
+    );
+
+    used.add(keyA);
+    used.add(keyB);
+    applied++;
+  }
+
+  if (applied > 0) {
+    rebuildDistrictCountsAndCentroids(pointDistricts);
+  }
+
+  return applied;
+}
+
+function applySingleConflictTransfers(owner, pointDistricts) {
+  const islands = buildDirectTrappedIslands(owner, pointDistricts);
+  let applied = 0;
+
+  for (const island of islands) {
+    const trappedDistrict = getDistrictById(pointDistricts, island.trappedDistrictId);
+    const surroundingDistrict = getDistrictById(pointDistricts, island.surroundingDistrictId);
+
+    if (!trappedDistrict || !surroundingDistrict) continue;
+
+    // Your rule:
+    // if no pair swap exists, and the trapped district has more people,
+    // give the trapped island to the surrounding district
+    if (trappedDistrict.total <= surroundingDistrict.total) continue;
+
+    transferComponentOwnership(owner, island.componentCellIds, island.surroundingDistrictId);
+    moveMembersByCellIds(
+      pointDistricts,
+      island.trappedDistrictId,
+      island.surroundingDistrictId,
+      island.componentCellIds
+    );
+
+    applied++;
+  }
+
+  if (applied > 0) {
+    rebuildDistrictCountsAndCentroids(pointDistricts);
+  }
+
+  return applied;
+}
+
+function resolveRemainingStep7Conflicts(owner, pointDistricts) {
+  const districtCopy = clonePointDistricts(pointDistricts);
+  const ownerCopy = new Map(owner);
+
+  let totalPairSwapsApplied = 0;
+  let totalSingleTransfersApplied = 0;
+  let changed = true;
+  let safety = 0;
+
+  while (changed && safety < 10) {
+    changed = false;
+    safety++;
+
+    const debugIslands = buildDirectTrappedIslands(ownerCopy, districtCopy);
+    console.log(`Step 7 direct trapped islands pass ${safety}:`, debugIslands.map(x => ({
+      trappedDistrictId: x.trappedDistrictId,
+      surroundingDistrictId: x.surroundingDistrictId,
+      size: x.componentCellIds.size,
+      protectedHits: [...x.trappedProtectedCellIds]
+    })));
+
+    const pairSwapsApplied = applyPairConflictSwaps(ownerCopy, districtCopy);
+    if (pairSwapsApplied > 0) {
+      totalPairSwapsApplied += pairSwapsApplied;
+      changed = true;
+      continue;
+    }
+
+    const singleTransfersApplied = applySingleConflictTransfers(ownerCopy, districtCopy);
+    if (singleTransfersApplied > 0) {
+      totalSingleTransfersApplied += singleTransfersApplied;
+      changed = true;
+    }
+  }
+
+  rebuildDistrictCountsAndCentroids(districtCopy);
+
+  return {
+    owner: ownerCopy,
+    pointDistricts: districtCopy,
+    pairSwapsApplied: totalPairSwapsApplied,
+    singleTransfersApplied: totalSingleTransfersApplied
+  };
+}
+    
 function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10) {
   const owner = new Map(claimResult.owner);
 
@@ -5911,7 +6203,7 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
     }
   }
 
-  // Final cleanup after all forced claims
+  // Third: normal cleanup
   const cleanedFinal = cleanupClaimedDistrictIslands(
     {
       owner: new Map(owner),
@@ -5921,13 +6213,17 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
     pointDistricts
   );
 
-  const finalOwner = cleanedFinal.owner;
+  // Fourth: NEW Step 7 conflict-resolution pass
+  const resolved = resolveRemainingStep7Conflicts(
+    cleanedFinal.owner,
+    pointDistricts
+  );
+
+  const finalOwner = resolved.owner;
+  const finalPointDistricts = resolved.pointDistricts;
+
   const claimedFeatures = [];
   const countByDistrict = new Map();
-
-  for (const district of pointDistricts) {
-    countByDistrict.set(district.id, 0);
-  }
 
   for (const cell of cellsWorking) {
     const districtId = finalOwner.get(String(cell.id));
@@ -5950,7 +6246,10 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
   return {
     owner: finalOwner,
     claimedFeatures,
-    countByDistrict
+    countByDistrict,
+    pointDistricts: finalPointDistricts,
+    pairSwapsApplied: resolved.pairSwapsApplied,
+    singleTransfersApplied: resolved.singleTransfersApplied
   };
 }
 
@@ -6054,8 +6353,13 @@ async function runStep7() {
         currentPointDistricts,
         10
       );
+if (filledResult.pointDistricts) {
+  currentPointDistricts = filledResult.pointDistricts;
+}
 
-      currentClaimResult = filledResult;
+drawDistrictPoints(currentPointDistricts);
+
+currentClaimResult = filledResult;
 
       if (rawHullLayer) {
         map.removeLayer(rawHullLayer);
@@ -6088,8 +6392,8 @@ async function runStep7() {
 setStatus(
   gerryStatus,
   remaining === 0
-    ? `Step 7 complete. Added ${added} cells. All cells are now claimed.`
-    : `Step 7 complete, but ${remaining} cell(s) are still unclaimed.`,
+    ? `Step 7 complete. Added ${added} cells. All cells are now claimed. Conflict fixes applied: ${filledResult.pairSwapsApplied || 0} pair swap(s), ${filledResult.singleTransfersApplied || 0} single transfer(s).`
+    : `Step 7 complete, but ${remaining} cell(s) are still unclaimed. Conflict fixes applied: ${filledResult.pairSwapsApplied || 0} pair swap(s), ${filledResult.singleTransfersApplied || 0} single transfer(s).`,
   remaining === 0 ? "good" : "warn"
 );
     } catch (error) {
