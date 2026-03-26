@@ -6045,6 +6045,69 @@ function wouldCreateForbiddenSingleTransferExtremes(
 
   return receivingWouldBeUniqueLargest || sendingWouldBeUniqueSmallest;
 }
+
+function getMemberCellId(item) {
+  return item && item.cellId != null ? String(item.cellId) : null;
+}
+
+function getDistrictTotalsMap(pointDistricts) {
+  const totals = new Map();
+  for (const district of pointDistricts) {
+    totals.set(district.id, district.total ?? district.members.length);
+  }
+  return totals;
+}
+
+function wouldCreateForbiddenTotalsAfterMove(pointDistricts, fromDistrictId, toDistrictId, moveCount) {
+  if (moveCount <= 0) return true;
+
+  const totals = getDistrictTotalsMap(pointDistricts);
+
+  totals.set(fromDistrictId, (totals.get(fromDistrictId) || 0) - moveCount);
+  totals.set(toDistrictId, (totals.get(toDistrictId) || 0) + moveCount);
+
+  const values = [...totals.values()];
+  const maxTotal = Math.max(...values);
+  const minTotal = Math.min(...values);
+
+  const maxCount = values.filter(v => v === maxTotal).length;
+  const minCount = values.filter(v => v === minTotal).length;
+
+  const receivingTotal = totals.get(toDistrictId);
+  const sendingTotal = totals.get(fromDistrictId);
+
+  const receivingWouldBeUniqueLargest =
+    receivingTotal === maxTotal && maxCount === 1;
+
+  const sendingWouldBeUniqueSmallest =
+    sendingTotal === minTotal && minCount === 1;
+
+  return receivingWouldBeUniqueLargest || sendingWouldBeUniqueSmallest;
+}
+
+function buildMisplacedPointCandidates(owner, pointDistricts) {
+  const candidates = [];
+
+  for (const district of pointDistricts) {
+    for (const item of district.members) {
+      const cellId = getMemberCellId(item);
+      if (!cellId) continue;
+
+      const ownerDistrictId = owner.get(cellId);
+      if (ownerDistrictId == null) continue;
+      if (ownerDistrictId === district.id) continue;
+
+      candidates.push({
+        item,
+        cellId,
+        fromDistrictId: district.id,
+        toDistrictId: ownerDistrictId
+      });
+    }
+  }
+
+  return candidates;
+}
     
 function applySingleConflictTransfers(owner, pointDistricts) {
   const islands = buildDirectTrappedIslands(owner, pointDistricts);
@@ -6098,26 +6161,49 @@ function applySingleConflictTransfers(owner, pointDistricts) {
   return applied;
 }
 
+function applyMisplacedPointTransfers(owner, pointDistricts) {
+  const candidates = buildMisplacedPointCandidates(owner, pointDistricts);
+  let applied = 0;
+
+  for (const candidate of candidates) {
+    const { cellId, fromDistrictId, toDistrictId } = candidate;
+
+    if (wouldCreateForbiddenTotalsAfterMove(pointDistricts, fromDistrictId, toDistrictId, 1)) {
+      continue;
+    }
+
+    const moved = moveMembersByCellIds(
+      pointDistricts,
+      fromDistrictId,
+      toDistrictId,
+      new Set([cellId])
+    );
+
+    if (moved > 0) {
+      applied += moved;
+    }
+  }
+
+  if (applied > 0) {
+    rebuildDistrictCountsAndCentroids(pointDistricts);
+  }
+
+  return applied;
+}
+
 function resolveRemainingStep7Conflicts(owner, pointDistricts) {
   const districtCopy = clonePointDistricts(pointDistricts);
   const ownerCopy = new Map(owner);
 
   let totalPairSwapsApplied = 0;
   let totalSingleTransfersApplied = 0;
+  let totalMisplacedPointTransfersApplied = 0;
   let changed = true;
   let safety = 0;
 
   while (changed && safety < 10) {
     changed = false;
     safety++;
-
-    const debugIslands = buildDirectTrappedIslands(ownerCopy, districtCopy);
-    console.log(`Step 7 direct trapped islands pass ${safety}:`, debugIslands.map(x => ({
-      trappedDistrictId: x.trappedDistrictId,
-      surroundingDistrictId: x.surroundingDistrictId,
-      size: x.componentCellIds.size,
-      protectedHits: [...x.trappedProtectedCellIds]
-    })));
 
     const pairSwapsApplied = applyPairConflictSwaps(ownerCopy, districtCopy);
     if (pairSwapsApplied > 0) {
@@ -6130,6 +6216,13 @@ function resolveRemainingStep7Conflicts(owner, pointDistricts) {
     if (singleTransfersApplied > 0) {
       totalSingleTransfersApplied += singleTransfersApplied;
       changed = true;
+      continue;
+    }
+
+    const misplacedPointTransfersApplied = applyMisplacedPointTransfers(ownerCopy, districtCopy);
+    if (misplacedPointTransfersApplied > 0) {
+      totalMisplacedPointTransfersApplied += misplacedPointTransfersApplied;
+      changed = true;
     }
   }
 
@@ -6139,7 +6232,8 @@ function resolveRemainingStep7Conflicts(owner, pointDistricts) {
     owner: ownerCopy,
     pointDistricts: districtCopy,
     pairSwapsApplied: totalPairSwapsApplied,
-    singleTransfersApplied: totalSingleTransfersApplied
+    singleTransfersApplied: totalSingleTransfersApplied,
+    misplacedPointTransfersApplied: totalMisplacedPointTransfersApplied
   };
 }
     
@@ -6313,13 +6407,14 @@ function fillRemainingUnclaimedCells(claimResult, pointDistricts, maxRounds = 10
     );
   }
 
-  return {
+    return {
     owner: finalOwner,
     claimedFeatures,
     countByDistrict,
     pointDistricts: finalPointDistricts,
     pairSwapsApplied: resolved.pairSwapsApplied,
-    singleTransfersApplied: resolved.singleTransfersApplied
+    singleTransfersApplied: resolved.singleTransfersApplied,
+    misplacedPointTransfersApplied: resolved.misplacedPointTransfersApplied
   };
 }
 
@@ -6462,8 +6557,8 @@ currentClaimResult = filledResult;
 setStatus(
   gerryStatus,
   remaining === 0
-    ? `Step 7 complete. Added ${added} cells. All cells are now claimed. Conflict fixes applied: ${filledResult.pairSwapsApplied || 0} pair swap(s), ${filledResult.singleTransfersApplied || 0} single transfer(s).`
-    : `Step 7 complete, but ${remaining} cell(s) are still unclaimed. Conflict fixes applied: ${filledResult.pairSwapsApplied || 0} pair swap(s), ${filledResult.singleTransfersApplied || 0} single transfer(s).`,
+    ? `Step 7 complete. Added ${added} cells. All cells are now claimed. Conflict fixes applied: ${filledResult.pairSwapsApplied || 0} pair swap(s), ${filledResult.singleTransfersApplied || 0} single transfer(s), ${filledResult.misplacedPointTransfersApplied || 0} misplaced point transfer(s).`
+    : `Step 7 complete, but ${remaining} cell(s) are still unclaimed. Conflict fixes applied: ${filledResult.pairSwapsApplied || 0} pair swap(s), ${filledResult.singleTransfersApplied || 0} single transfer(s), ${filledResult.misplacedPointTransfersApplied || 0} misplaced point transfer(s).`,
   remaining === 0 ? "good" : "warn"
 );
     } catch (error) {
