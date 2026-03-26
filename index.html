@@ -5868,54 +5868,69 @@ function buildDirectTrappedIslands(owner, pointDistricts) {
   const protectedByDistrict = getProtectedCellIdsByDistrict(pointDistricts);
   const islands = [];
 
-  for (const ownerDistrict of pointDistricts) {
-    const ownerDistrictId = ownerDistrict.id;
-    const components = getDistrictComponentsFromOwner(owner, ownerDistrictId);
+  for (const district of pointDistricts) {
+    const districtId = district.id;
+    const protectedSet = protectedByDistrict.get(districtId) || new Set();
+    const components = getDistrictComponentsFromOwner(owner, districtId);
 
-    for (const component of components) {
+    if (components.length <= 1) continue;
+
+    let mainIndex = -1;
+    let bestProtectedCount = -1;
+    let bestSize = -1;
+
+    for (let i = 0; i < components.length; i++) {
+      const comp = components[i];
+      const protectedCount = comp.filter(id => protectedSet.has(String(id))).length;
+      const size = comp.length;
+
+      if (
+        protectedCount > bestProtectedCount ||
+        (protectedCount === bestProtectedCount && size > bestSize)
+      ) {
+        mainIndex = i;
+        bestProtectedCount = protectedCount;
+        bestSize = size;
+      }
+    }
+
+    for (let i = 0; i < components.length; i++) {
+      if (i === mainIndex) continue;
+
+      const component = components[i];
       const componentSet = new Set(component.map(String));
+      const protectedHits = component.filter(id => protectedSet.has(String(id)));
 
-      const protectedHits = new Map();
-      for (const district of pointDistricts) {
-        const protectedSet = protectedByDistrict.get(district.id) || new Set();
-        const hits = [];
+      // Only treat protected side-components as trapped-island candidates
+      if (!protectedHits.length) continue;
 
-        for (const cellId of componentSet) {
-          if (protectedSet.has(String(cellId))) {
-            hits.push(String(cellId));
+      const touchingDistricts = new Set();
+
+      for (const cellId of componentSet) {
+        const cell = cellById.get(String(cellId));
+        if (!cell) continue;
+
+        for (const neighborIdRaw of cell.neighbors) {
+          const neighborId = String(neighborIdRaw);
+          if (componentSet.has(neighborId)) continue;
+
+          const neighborOwner = owner.get(neighborId);
+          if (neighborOwner != null && neighborOwner !== districtId) {
+            touchingDistricts.add(neighborOwner);
           }
-        }
-
-        if (hits.length) {
-          protectedHits.set(district.id, hits);
         }
       }
 
-      const ownerHits = protectedHits.get(ownerDistrictId) || [];
-      if (ownerHits.length) continue; // not a trapped foreign-only island
+      // Keep it strict: exactly one surrounding foreign district
+      if (touchingDistricts.size !== 1) continue;
 
-      const foreignDistrictIds = [...protectedHits.keys()];
-      if (foreignDistrictIds.length !== 1) continue; // keep this strict
-
-      const trappedDistrictId = foreignDistrictIds[0];
-      const trappedProtectedCellIds = new Set(protectedHits.get(trappedDistrictId) || []);
-
-      if (!trappedProtectedCellIds.size) continue;
-
-      const surroundingDistrictIds = getNeighborOwnerDistrictsAroundComponent(owner, componentSet);
-      surroundingDistrictIds.delete(ownerDistrictId);
-
-      if (surroundingDistrictIds.size !== 1) continue; // strict: one surrounding district only
-
-      const surroundingDistrictId = [...surroundingDistrictIds][0];
-      if (surroundingDistrictId !== ownerDistrictId) continue;
+      const surroundingDistrictId = [...touchingDistricts][0];
 
       islands.push({
-        ownerDistrictId,
+        trappedDistrictId: districtId,
         surroundingDistrictId,
-        trappedDistrictId,
         componentCellIds: componentSet,
-        trappedProtectedCellIds
+        trappedProtectedCellIds: new Set(protectedHits)
       });
     }
   }
@@ -5930,24 +5945,36 @@ function applyPairConflictSwaps(owner, pointDistricts) {
 
   for (let i = 0; i < islands.length; i++) {
     const a = islands[i];
-    const keyA = `${a.ownerDistrictId}|${a.trappedDistrictId}|${[...a.componentCellIds].sort().join(",")}`;
+    const keyA = `${a.trappedDistrictId}|${a.surroundingDistrictId}|${[...a.componentCellIds].sort().join(",")}`;
     if (used.has(keyA)) continue;
 
-    const match = islands.find(b =>
-      b.ownerDistrictId === a.trappedDistrictId &&
-      b.trappedDistrictId === a.ownerDistrictId
+    const b = islands.find(x =>
+      x.trappedDistrictId === a.surroundingDistrictId &&
+      x.surroundingDistrictId === a.trappedDistrictId
     );
 
-    if (!match) continue;
+    if (!b) continue;
 
-    const keyB = `${match.ownerDistrictId}|${match.trappedDistrictId}|${[...match.componentCellIds].sort().join(",")}`;
+    const keyB = `${b.trappedDistrictId}|${b.surroundingDistrictId}|${[...b.componentCellIds].sort().join(",")}`;
     if (used.has(keyB)) continue;
 
-    transferComponentOwnership(owner, a.componentCellIds, a.trappedDistrictId);
-    transferComponentOwnership(owner, match.componentCellIds, match.trappedDistrictId);
+    // A island goes to A's surrounding district
+    transferComponentOwnership(owner, a.componentCellIds, a.surroundingDistrictId);
+    moveMembersByCellIds(
+      pointDistricts,
+      a.trappedDistrictId,
+      a.surroundingDistrictId,
+      a.componentCellIds
+    );
 
-    moveMembersByCellIds(pointDistricts, a.trappedDistrictId, a.ownerDistrictId, a.componentCellIds);
-    moveMembersByCellIds(pointDistricts, match.trappedDistrictId, match.ownerDistrictId, match.componentCellIds);
+    // B island goes to B's surrounding district
+    transferComponentOwnership(owner, b.componentCellIds, b.surroundingDistrictId);
+    moveMembersByCellIds(
+      pointDistricts,
+      b.trappedDistrictId,
+      b.surroundingDistrictId,
+      b.componentCellIds
+    );
 
     used.add(keyA);
     used.add(keyB);
@@ -5966,22 +5993,21 @@ function applySingleConflictTransfers(owner, pointDistricts) {
   let applied = 0;
 
   for (const island of islands) {
-    const surroundingDistrict = getDistrictById(pointDistricts, island.ownerDistrictId);
     const trappedDistrict = getDistrictById(pointDistricts, island.trappedDistrictId);
+    const surroundingDistrict = getDistrictById(pointDistricts, island.surroundingDistrictId);
 
-    if (!surroundingDistrict || !trappedDistrict) continue;
+    if (!trappedDistrict || !surroundingDistrict) continue;
 
-    // Example:
-    // red point trapped inside blue-owned island area
-    // red has 37, blue has 36
-    // then give that red island to blue
+    // Your rule:
+    // if no pair swap exists, and the trapped district has more people,
+    // give the trapped island to the surrounding district
     if (trappedDistrict.total <= surroundingDistrict.total) continue;
 
-    transferComponentOwnership(owner, island.componentCellIds, island.ownerDistrictId);
+    transferComponentOwnership(owner, island.componentCellIds, island.surroundingDistrictId);
     moveMembersByCellIds(
       pointDistricts,
       island.trappedDistrictId,
-      island.ownerDistrictId,
+      island.surroundingDistrictId,
       island.componentCellIds
     );
 
