@@ -565,7 +565,7 @@
   <h2>Companionships, assignments, and Excel output</h2>
   <p>
     Districting is complete. This next workflow section will handle companionship creation,
-    ministering assignments, and downloadable Excel output.
+    ministering assignments, optional out-of-boundary handling, and downloadable Excel output.
   </p>
 
   <div id="continueStatus" class="status good">
@@ -575,24 +575,29 @@
   <div class="row" style="margin-top:10px;">
     <button id="createCompanionshipsBtn" class="secondary" type="button">Create Companionships</button>
     <button id="createAssignmentsBtn" class="secondary" type="button">Create Assignments</button>
+    <button id="includeOutsideBoundaryBtn" class="secondary" type="button" disabled>Include Out of Boundary</button>
     <button id="downloadExcelBtn" class="secondary" type="button" disabled>Download Excel</button>
     <button id="backToDistrictingBtn" class="secondary" type="button">Back to Districting</button>
   </div>
   <div id="companionshipStatus" class="status">
     Click <strong>Create Companionships</strong> to connect companionships within each district.
   </div>
-  
+
   <div class="district-summary" id="companionshipSummary"></div>
   <div id="assignmentStatus" class="status">
   Create companionships first, then create ministering assignments.
 </div>
 
 <div class="district-summary" id="assignmentSummary"></div>
+<div id="outsideBoundaryStatus" class="status">
+  Create assignments first, then optionally include out-of-boundary members.
+</div>
+<div class="district-summary" id="outsideBoundarySummary"></div>
 <div id="exportStatus" class="status">
   Create assignments first, then download the Excel file.
 </div>
   <div class="small-note">
-    This step creates companionships only from people with Assigned_to_minister = yes, within the same district, using nearest-neighbor proximity.
+    This step creates companionships only from people with Assigned_to_minister = yes, within the same district, using nearest-neighbor proximity. Out-of-boundary people can optionally be added after assignments are created.
   </div>
 </div>
     </aside>
@@ -633,6 +638,7 @@
 
     let allMembersLayer = null;
     let filteredPreviewLayer = null;
+    let outsideBoundaryPreviewLayer = null;
     let wardLayer = null;
     let cellsOutlineLayer = null;
     let districtPointLayer = null;
@@ -643,7 +649,10 @@
     let assignmentLineLayer = null;
     let companionshipMidpointLayer = null;
     let currentAssignments = null;
+    let currentAssignmentsBase = null;
     let currentFiltered = [];
+    let currentOutsideBoundaryFiltered = [];
+    let currentOutsideBoundaryResult = null;
     let currentStats = null;
     let currentDistrictTargets = null;
     let currentPointDistricts = null;
@@ -714,6 +723,9 @@
     const createAssignmentsBtn = document.getElementById("createAssignmentsBtn");
     const assignmentStatus = document.getElementById("assignmentStatus");
     const assignmentSummary = document.getElementById("assignmentSummary");
+    const includeOutsideBoundaryBtn = document.getElementById("includeOutsideBoundaryBtn");
+    const outsideBoundaryStatus = document.getElementById("outsideBoundaryStatus");
+    const outsideBoundarySummary = document.getElementById("outsideBoundarySummary");
     const downloadExcelBtn = document.getElementById("downloadExcelBtn");
     const exportStatus = document.getElementById("exportStatus");
     const closeBtn = document.getElementById("processingModalClose");
@@ -1579,7 +1591,7 @@ function buildExcelRowsFromAssignments(districtAssignmentResults) {
     .forEach((districtResult, districtIndex) => {
       const titleRowIndex = rows.length;
 
-      rows.push([`District ${districtResult.districtId + 1}`]);
+      rows.push([districtResult.displayName || `District ${districtResult.districtId + 1}`]);
       merges.push({
         s: { r: titleRowIndex, c: 0 },
         e: { r: titleRowIndex, c: headerRowLength - 1 }
@@ -1746,6 +1758,460 @@ document.addEventListener("DOMContentLoaded", () => {
 
 function resetAssignmentSummary() {
   if (assignmentSummary) assignmentSummary.innerHTML = "";
+}
+
+function resetOutsideBoundarySummary() {
+  if (outsideBoundarySummary) outsideBoundarySummary.innerHTML = "";
+}
+
+function removeOutsideBoundaryPreviewLayer() {
+  if (outsideBoundaryPreviewLayer) {
+    map.removeLayer(outsideBoundaryPreviewLayer);
+    outsideBoundaryPreviewLayer = null;
+  }
+}
+
+function addOutsideBoundaryPreviewLayer(filteredItems) {
+  removeOutsideBoundaryPreviewLayer();
+
+  if (!filteredItems || !filteredItems.length) return;
+
+  const features = filteredItems.map(item => {
+    const clone = cloneFeature(item.feature);
+    clone.properties = clone.properties || {};
+    clone.properties._group = item.group;
+    clone.properties._outsideBoundary = true;
+    return clone;
+  });
+
+  outsideBoundaryPreviewLayer = L.geoJSON(
+    { type: "FeatureCollection", features },
+    {
+      pointToLayer: function(feature, latlng) {
+        return L.circleMarker(latlng, {
+          radius: feature.properties._group === 1 ? 7 : 6,
+          color: "#ffffff",
+          weight: 1.5,
+          fillColor: "#9ca3af",
+          fillOpacity: 1,
+          opacity: 1
+        });
+      },
+      onEachFeature: function(feature, layer) {
+        const groupLabel = feature.properties._group === 1 ? "Out-of-boundary Group 1" : "Out-of-boundary Group 2";
+        layer.bindPopup(makeMemberPopup(feature, groupLabel, "Outside ward"));
+      }
+    }
+  ).addTo(map);
+}
+
+function getOutsideBoundaryStats(filteredItems) {
+  const group1 = filteredItems.filter(item => item.group === 1).length;
+  const group2 = filteredItems.filter(item => item.group === 2).length;
+  return {
+    group1,
+    group2,
+    total: group1 + group2
+  };
+}
+
+function getAllCompanionshipRecords(districtAssignmentResults) {
+  const comps = [];
+  for (const districtResult of districtAssignmentResults || []) {
+    for (const comp of districtResult.companionships || []) {
+      comps.push(comp);
+    }
+  }
+  return comps;
+}
+
+function getCurrentMaxAssignmentLoad(districtAssignmentResults) {
+  const comps = getAllCompanionshipRecords(districtAssignmentResults);
+  if (!comps.length) return 0;
+  return Math.max(...comps.map(comp => (comp.assignedPeople || []).length));
+}
+
+function getAllHomeCompanionshipLookupFromAssignments(districtAssignmentResults) {
+  const lookup = new Map();
+
+  for (const districtResult of districtAssignmentResults || []) {
+    for (const comp of districtResult.companionships || []) {
+      const compKey = comp.companionshipKey || getCompanionshipKey(comp);
+      for (const member of comp.members || []) {
+        lookup.set(getPersonKey(member), compKey);
+      }
+    }
+  }
+
+  return lookup;
+}
+
+function getDirectedTeachPairsFromAssignments(districtAssignmentResults) {
+  const pairs = new Set();
+  const homeLookup = getAllHomeCompanionshipLookupFromAssignments(districtAssignmentResults);
+
+  for (const districtResult of districtAssignmentResults || []) {
+    for (const comp of districtResult.companionships || []) {
+      const compKey = comp.companionshipKey || getCompanionshipKey(comp);
+
+      for (const person of comp.assignedPeople || []) {
+        const homeCompKey = homeLookup.get(getPersonKey(person));
+        if (homeCompKey) {
+          pairs.add(`${compKey}=>${homeCompKey}`);
+        }
+      }
+    }
+  }
+
+  return pairs;
+}
+
+function pickRandomFromArray(arr) {
+  if (!arr || !arr.length) return null;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function getLeastLoadedCompanionships(companionships, allowedPredicate = null) {
+  const eligible = (companionships || []).filter(comp => {
+    if (!allowedPredicate) return true;
+    return allowedPredicate(comp);
+  });
+
+  if (!eligible.length) return [];
+
+  let minAssignments = Infinity;
+  for (const comp of eligible) {
+    const count = (comp.assignedPeople || []).length;
+    if (count < minAssignments) minAssignments = count;
+  }
+
+  return eligible.filter(comp => (comp.assignedPeople || []).length === minAssignments);
+}
+
+function canAssignOutsidePersonToComp(person, comp, homeLookup, directedTeachPairs, enforceReciprocalRule = true) {
+  const homeCompKey = homeLookup.get(getPersonKey(person)) || null;
+  const targetCompKey = comp.companionshipKey || getCompanionshipKey(comp);
+
+  if (homeCompKey && targetCompKey === homeCompKey) return false;
+
+  if (enforceReciprocalRule && homeCompKey) {
+    const reverseKey = `${homeCompKey}=>${targetCompKey}`;
+    if (directedTeachPairs.has(reverseKey)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function assignOutsidePeopleAcrossExistingCompanionships(people, districtAssignmentResults) {
+  const comps = getAllCompanionshipRecords(districtAssignmentResults);
+  const homeLookup = getAllHomeCompanionshipLookupFromAssignments(districtAssignmentResults);
+  const directedTeachPairs = getDirectedTeachPairsFromAssignments(districtAssignmentResults);
+  let placed = 0;
+
+  for (const person of people) {
+    let candidates = getLeastLoadedCompanionships(
+      comps,
+      comp => canAssignOutsidePersonToComp(person, comp, homeLookup, directedTeachPairs, true)
+    );
+
+    if (!candidates.length) {
+      candidates = getLeastLoadedCompanionships(
+        comps,
+        comp => canAssignOutsidePersonToComp(person, comp, homeLookup, directedTeachPairs, false)
+      );
+    }
+
+    const chosen = pickRandomFromArray(candidates);
+    if (!chosen) continue;
+
+    chosen.assignedPeople.push(person);
+    placed++;
+
+    const homeCompKey = homeLookup.get(getPersonKey(person)) || null;
+    const targetCompKey = chosen.companionshipKey || getCompanionshipKey(chosen);
+    if (homeCompKey) {
+      directedTeachPairs.add(`${targetCompKey}=>${homeCompKey}`);
+    }
+  }
+
+  return placed;
+}
+
+function buildOutsideBoundaryCompanionship(members, districtId) {
+  const comp = {
+    districtId,
+    members: members.slice().sort(compareItemsAlphabetically),
+    isTrio: members.length === 3
+  };
+
+  return {
+    ...comp,
+    companionshipIndex: 0,
+    companionshipKey: getCompanionshipKey(comp),
+    midpoint: getCompanionshipMidpoint(comp),
+    assignedPeople: [],
+    targetCount: 0
+  };
+}
+
+function assignPeopleWithinSpecificCompanionships(people, companionships) {
+  if (!companionships || !companionships.length) {
+    return { placed: 0, unassignedCount: people.length };
+  }
+
+  const homeLookup = buildHomeCompanionshipLookup(companionships);
+  const directedTeachPairs = new Set();
+  let placed = 0;
+
+  for (const person of people) {
+    let candidates = getLeastLoadedCompanionships(
+      companionships,
+      comp => canAssignOutsidePersonToComp(person, comp, homeLookup, directedTeachPairs, true)
+    );
+
+    if (!candidates.length) {
+      candidates = getLeastLoadedCompanionships(
+        companionships,
+        comp => canAssignOutsidePersonToComp(person, comp, homeLookup, directedTeachPairs, false)
+      );
+    }
+
+    const chosen = pickRandomFromArray(candidates);
+    if (!chosen) continue;
+
+    chosen.assignedPeople.push(person);
+    placed++;
+
+    const homeCompKey = homeLookup.get(getPersonKey(person)) || null;
+    const targetCompKey = chosen.companionshipKey || getCompanionshipKey(chosen);
+    if (homeCompKey) {
+      directedTeachPairs.add(`${targetCompKey}=>${homeCompKey}`);
+    }
+  }
+
+  return {
+    placed,
+    unassignedCount: people.length - placed
+  };
+}
+
+function cloneDistrictAssignmentResults(districtAssignmentResults) {
+  return (districtAssignmentResults || []).map(result => ({
+    ...result,
+    companionships: (result.companionships || []).map(comp => ({
+      ...comp,
+      members: (comp.members || []).slice(),
+      assignedPeople: (comp.assignedPeople || []).slice(),
+      midpoint: comp.midpoint ? comp.midpoint.slice() : getCompanionshipMidpoint(comp),
+      companionshipKey: comp.companionshipKey || getCompanionshipKey(comp)
+    }))
+  }));
+}
+
+function renderOutsideBoundarySummary(result) {
+  resetOutsideBoundarySummary();
+  if (!result) return;
+
+  const intro = document.createElement("div");
+  intro.className = "district-row";
+  intro.innerHTML = `<strong>Out-of-boundary step complete</strong><br>
+    Rule used: ${escapeHtml(result.ruleLabel)}<br>
+    Out-of-boundary Group 1: ${result.group1Count}<br>
+    Out-of-boundary Group 2: ${result.group2Count}<br>
+    Assignments placed: ${result.assignedCount}<br>
+    Unassigned remaining: ${result.unassignedCount}`;
+  outsideBoundarySummary.appendChild(intro);
+
+  if (result.appendedDistrict) {
+    const row = document.createElement("div");
+    row.className = "district-row";
+    row.innerHTML = `<strong>${escapeHtml(result.appendedDistrict.displayName || "Out of Boundary District")}</strong><br>
+      Companionships: ${(result.appendedDistrict.companionships || []).length}<br>
+      Assignments in this district: ${(result.appendedDistrict.companionships || []).reduce((sum, c) => sum + ((c.assignedPeople || []).length), 0)}`;
+    outsideBoundarySummary.appendChild(row);
+  }
+}
+
+function applyOutsideBoundaryAssignments() {
+  if (!currentAssignmentsBase || !currentAssignmentsBase.length) {
+    throw new Error("Create assignments first.");
+  }
+
+  const updatedAssignments = cloneDistrictAssignmentResults(currentAssignmentsBase);
+  const outsideGroup1 = (currentOutsideBoundaryFiltered || []).filter(item => item.group === 1);
+  const outsideGroup2 = (currentOutsideBoundaryFiltered || []).filter(item => item.group === 2);
+
+  if (!outsideGroup1.length && !outsideGroup2.length) {
+    return {
+      updatedAssignments,
+      result: {
+        ruleType: "none",
+        ruleLabel: "No out-of-boundary members matched the current filter.",
+        group1Count: 0,
+        group2Count: 0,
+        assignedCount: 0,
+        unassignedCount: 0,
+        appendedDistrict: null
+      }
+    };
+  }
+
+  const nextDistrictId = updatedAssignments.length
+    ? Math.max(...updatedAssignments.map(r => Number(r.districtId) || 0)) + 1
+    : 0;
+
+  let appendedDistrict = null;
+  let assignedCount = 0;
+  let unassignedCount = 0;
+  let ruleType = "";
+  let ruleLabel = "";
+
+  if (outsideGroup1.length === 1) {
+    const duoChoices = getAllCompanionshipRecords(updatedAssignments).filter(comp => (comp.members || []).length === 2);
+    const leastLoadedDuos = getLeastLoadedCompanionships(duoChoices);
+    const chosenDuo = pickRandomFromArray(leastLoadedDuos);
+
+    if (!chosenDuo) {
+      throw new Error("No existing duo companionship was available for the one out-of-boundary minister.");
+    }
+
+    chosenDuo.members.push(outsideGroup1[0]);
+    chosenDuo.isTrio = true;
+    chosenDuo.midpoint = getCompanionshipMidpoint(chosenDuo);
+
+    assignedCount = assignOutsidePeopleAcrossExistingCompanionships(
+      [outsideGroup1[0], ...outsideGroup2],
+      updatedAssignments
+    );
+    unassignedCount = (1 + outsideGroup2.length) - assignedCount;
+    ruleType = "single-added-to-existing";
+    ruleLabel = "1 out-of-boundary minister was added to an existing duo to create a trio, then all out-of-boundary assignees were distributed one by one to the least-loaded companionships across all districts.";
+  } else if (outsideGroup1.length === 2 || outsideGroup1.length === 3) {
+    const outsideComp = buildOutsideBoundaryCompanionship(outsideGroup1, nextDistrictId);
+    const maxExistingLoad = getCurrentMaxAssignmentLoad(updatedAssignments);
+    const directAssignees = outsideGroup2.slice(0, maxExistingLoad);
+    const overflowAssignees = outsideGroup2.slice(directAssignees.length);
+
+    outsideComp.assignedPeople.push(...directAssignees);
+    assignedCount += directAssignees.length;
+
+    if (overflowAssignees.length) {
+      assignedCount += assignOutsidePeopleAcrossExistingCompanionships(
+        overflowAssignees,
+        updatedAssignments
+      );
+    }
+
+    unassignedCount = outsideGroup2.length - assignedCount;
+    appendedDistrict = {
+      districtId: nextDistrictId,
+      displayName: "Out of Boundary District",
+      companionships: [outsideComp],
+      unassignedCount: 0
+    };
+    updatedAssignments.push(appendedDistrict);
+
+    ruleType = "single-outside-companionship";
+    ruleLabel = outsideGroup2.length <= maxExistingLoad
+      ? "2 or 3 out-of-boundary ministers were made into one companionship and all out-of-boundary non-ministers were assigned to that companionship."
+      : "2 or 3 out-of-boundary ministers were made into one companionship, that companionship was capped at the current maximum assignment load, and any overflow was distributed one by one to the least-loaded companionships across all districts.";
+  } else {
+    const outsideCompanionships = buildAllCompanionships([
+      {
+        id: nextDistrictId,
+        members: outsideGroup1.slice(),
+        group1: outsideGroup1.length,
+        group2: outsideGroup2.length,
+        total: outsideGroup1.length + outsideGroup2.length
+      }
+    ]).map((comp, index) => ({
+      ...comp,
+      companionshipIndex: index,
+      companionshipKey: getCompanionshipKey(comp),
+      midpoint: getCompanionshipMidpoint(comp),
+      assignedPeople: [],
+      targetCount: 0
+    }));
+
+    const allOutsidePeopleToAssign = [...outsideGroup1, ...outsideGroup2];
+    const internalResult = assignPeopleWithinSpecificCompanionships(
+      allOutsidePeopleToAssign,
+      outsideCompanionships
+    );
+
+    appendedDistrict = {
+      districtId: nextDistrictId,
+      displayName: "Out of Boundary District",
+      companionships: outsideCompanionships,
+      unassignedCount: internalResult.unassignedCount
+    };
+    updatedAssignments.push(appendedDistrict);
+
+    assignedCount = internalResult.placed;
+    unassignedCount = internalResult.unassignedCount;
+    ruleType = "outside-district";
+    ruleLabel = "The out-of-boundary ministers were treated as a separate district, companionships were built inside that group, and assignments were balanced inside that group without using proximity.";
+  }
+
+  return {
+    updatedAssignments,
+    result: {
+      ruleType,
+      ruleLabel,
+      group1Count: outsideGroup1.length,
+      group2Count: outsideGroup2.length,
+      assignedCount,
+      unassignedCount,
+      appendedDistrict
+    }
+  };
+}
+
+function runStep10IncludeOutsideBoundary() {
+  if (!currentAssignmentsBase || !currentAssignmentsBase.length) {
+    setStatus(outsideBoundaryStatus, "Create assignments first before including out-of-boundary members.", "warn");
+    return;
+  }
+
+  setStatus(outsideBoundaryStatus, "Including out-of-boundary members...", "warn");
+  showStepSpinner("Including out-of-boundary members...");
+
+  setTimeout(() => {
+    try {
+      const { updatedAssignments, result } = applyOutsideBoundaryAssignments();
+
+      currentAssignments = updatedAssignments;
+      currentOutsideBoundaryResult = result;
+
+      drawAssignmentResults(currentAssignments);
+      renderAssignmentSummary(currentAssignments);
+      renderOutsideBoundarySummary(result);
+
+      hideStepSpinner();
+
+      setStatus(
+        outsideBoundaryStatus,
+        result.group1Count || result.group2Count
+          ? `Out-of-boundary step complete. ${result.assignedCount} assignment(s) were placed and ${result.unassignedCount} remain unassigned.`
+          : "No out-of-boundary members matched the current filter, so nothing was added.",
+        result.unassignedCount === 0 ? "good" : "warn"
+      );
+
+      if (exportStatus) {
+        setStatus(exportStatus, "Assignments are ready. You can now download the Excel file.", "good");
+      }
+    } catch (error) {
+      console.error(error);
+      hideStepSpinner();
+      setStatus(
+        outsideBoundaryStatus,
+        `Out-of-boundary step failed: ${error?.message || error}`,
+        "error"
+      );
+    }
+  }, 40);
 }
 
 function removeAssignmentLayers() {
@@ -2112,11 +2578,12 @@ function renderAssignmentSummary(districtAssignmentResults) {
 
   districtAssignmentResults.forEach(result => {
     const totalAssigned = result.companionships.reduce((sum, c) => sum + c.assignedPeople.length, 0);
+    const title = result.displayName || `District ${result.districtId + 1}`;
 
     const row = document.createElement("div");
     row.className = "district-row";
     row.innerHTML = `
-      <strong>District ${result.districtId + 1}</strong><br>
+      <strong>${escapeHtml(title)}</strong><br>
       Companionships: ${result.companionships.length}<br>
       Total assignments placed: ${totalAssigned}<br>
       Unassigned remaining: ${result.unassignedCount}
@@ -2415,6 +2882,8 @@ function runStep8CreateCompanionships() {
       const companionships = buildAllCompanionships(currentPointDistricts);
       currentCompanionships = companionships;
       currentAssignments = null;
+      currentAssignmentsBase = null;
+      currentOutsideBoundaryResult = null;
       drawCompanionshipLines(companionships);
       renderCompanionshipSummary(companionships);
       removeAssignmentLayers();
@@ -2430,6 +2899,10 @@ function runStep8CreateCompanionships() {
         
       );
 if (downloadExcelBtn) downloadExcelBtn.disabled = true;
+if (includeOutsideBoundaryBtn) includeOutsideBoundaryBtn.disabled = true;
+if (outsideBoundaryStatus) {
+  setStatus(outsideBoundaryStatus, "Create assignments first, then optionally include out-of-boundary members.");
+}
 if (exportStatus) {
   setStatus(exportStatus, "Create assignments first, then download the Excel file.");
 }
@@ -2462,12 +2935,26 @@ function runStep9CreateAssignments() {
         currentCompanionships
       );
 
-      currentAssignments = districtAssignmentResults;
+      currentAssignmentsBase = cloneDistrictAssignmentResults(districtAssignmentResults);
+      currentAssignments = cloneDistrictAssignmentResults(districtAssignmentResults);
+      currentOutsideBoundaryResult = null;
 
-      drawAssignmentResults(districtAssignmentResults);
-      renderAssignmentSummary(districtAssignmentResults);
+      drawAssignmentResults(currentAssignments);
+      renderAssignmentSummary(currentAssignments);
+      resetOutsideBoundarySummary();
 
       downloadExcelBtn.disabled = false;
+      if (includeOutsideBoundaryBtn) {
+        includeOutsideBoundaryBtn.disabled = !(currentOutsideBoundaryFiltered && currentOutsideBoundaryFiltered.length);
+      }
+      if (outsideBoundaryStatus) {
+        if (currentOutsideBoundaryFiltered && currentOutsideBoundaryFiltered.length) {
+          setStatus(outsideBoundaryStatus, "Assignments created. You can now optionally include out-of-boundary members.", "good");
+        } else {
+          setStatus(outsideBoundaryStatus, "No out-of-boundary members matched the current filter, so there is nothing extra to include.", "good");
+        }
+      }
+
       if (exportStatus) {
         setStatus(exportStatus, "Assignments created. You can now download the Excel file.", "good");
       }
@@ -4714,9 +5201,13 @@ function renderStep4Summary(finalResult) {
       resetDistrictSummary();
       resetGerrySummary();
       resetAssignmentSummary();
+      resetOutsideBoundarySummary();
       removeCompanionshipLayer();
       removeAssignmentLayers();
+      removeOutsideBoundaryPreviewLayer();
       currentFiltered = [];
+      currentOutsideBoundaryFiltered = [];
+      currentOutsideBoundaryResult = null;
       currentStats = null;
       currentDistrictTargets = null;
       currentPointDistricts = null;
@@ -4727,6 +5218,8 @@ function renderStep4Summary(finalResult) {
       currentStep6RunCount = 0;
       currentCompanionships = null;
       currentAssignments = null;
+      currentAssignmentsBase = null;
+      currentAssignmentsBase = null;
       selectedMaskExpandDistrictId = null;
       selectedMaskExpandSourceCellId = null;
       manualExpansionCellsByDistrict = new Map();
@@ -4758,6 +5251,7 @@ if (exportStatus) {
       const features = membersData.features || [];
       let outsideWardExcluded = 0;
       const filteredItems = [];
+      const outsideFilteredItems = [];
 
       for (const feature of features) {
         if (!feature?.geometry || feature.geometry.type !== "Point") continue;
@@ -4769,11 +5263,6 @@ if (exportStatus) {
         if (gender !== chosenGender) continue;
         if (!isAssignedMinisters) continue;
 
-        if (!pointInsideWard(feature)) {
-          outsideWardExcluded++;
-          continue;
-        }
-
         let group = 0;
         if (assignedToMinister && isAssignedMinisters) group = 1;
         else if (!assignedToMinister && isAssignedMinisters) group = 2;
@@ -4783,20 +5272,30 @@ if (exportStatus) {
         cloned.properties = cloned.properties || {};
         cloned.properties._group = group;
 
-        filteredItems.push({
+        const item = {
           feature: cloned,
           group,
           cellId: null,
           _assignedDistrict: null
-        });
+        };
+
+        if (!pointInsideWard(feature)) {
+          outsideWardExcluded++;
+          outsideFilteredItems.push(item);
+          continue;
+        }
+
+        filteredItems.push(item);
       }
 
       currentFiltered = filteredItems;
+      currentOutsideBoundaryFiltered = outsideFilteredItems;
       const assignedCount = assignFilteredPointsToCells(currentFiltered);
       currentStats = computeStats(filteredItems, outsideWardExcluded);
       updateMetricCards(currentStats);
 
       addFilteredPreviewLayer(currentFiltered);
+      addOutsideBoundaryPreviewLayer(currentOutsideBoundaryFiltered);
 
       if (allMembersLayer) {
         allMembersLayer.setStyle({
@@ -4814,9 +5313,10 @@ if (exportStatus) {
       zoomFilteredBtn.disabled = filteredItems.length === 0;
 
       const chosenLabel = chosenGender === "M" ? "male" : "female";
+      const outsideStats = getOutsideBoundaryStats(currentOutsideBoundaryFiltered);
       setStatus(
         filterStatus,
-        `Filter complete for ${chosenLabel} members. Group 1 = ${currentStats.group1}, Group 2 = ${currentStats.group2}, Total = ${currentStats.total}. Outside ward excluded = ${currentStats.outsideWardExcluded}. Points assigned to cells = ${assignedCount}/${filteredItems.length}.`,
+        `Filter complete for ${chosenLabel} members. Group 1 = ${currentStats.group1}, Group 2 = ${currentStats.group2}, Total = ${currentStats.total}. Outside ward excluded from districting = ${currentStats.outsideWardExcluded} (grey points shown: ${outsideStats.total}, Group 1 = ${outsideStats.group1}, Group 2 = ${outsideStats.group2}). Points assigned to cells = ${assignedCount}/${filteredItems.length}.`,
         filteredItems.length ? "good" : "warn"
       );
       setStatus(districtStatus, "Choose district count and click Calculate Targets.", "good");
@@ -6576,6 +7076,8 @@ setStatus(
     
     function resetPage() {
       currentFiltered = [];
+      currentOutsideBoundaryFiltered = [];
+      currentOutsideBoundaryResult = null;
       currentStats = null;
       currentDistrictTargets = null;
       currentPointDistricts = null;
@@ -6592,10 +7094,12 @@ setStatus(
       removeAssignmentLayers();
       removeDistrictLayers();
       removeFilteredPreviewLayer();
+      removeOutsideBoundaryPreviewLayer();
       hideStepSpinner();
       removeCompanionshipLayer();
       resetCompanionshipSummary();
       resetAssignmentSummary();
+      resetOutsideBoundarySummary();
 if (assignmentStatus) {
   setStatus(assignmentStatus, "Create companionships first, then create ministering assignments.");
 }
@@ -6613,6 +7117,10 @@ if (companionshipStatus) {
         });
       }
 if (downloadExcelBtn) downloadExcelBtn.disabled = true;
+if (includeOutsideBoundaryBtn) includeOutsideBoundaryBtn.disabled = true;
+if (outsideBoundaryStatus) {
+  setStatus(outsideBoundaryStatus, "Create assignments first, then optionally include out-of-boundary members.");
+}
 if (exportStatus) {
   setStatus(exportStatus, "Create assignments first, then download the Excel file.");
 }
@@ -6762,6 +7270,9 @@ if (createCompanionshipsBtn) {
 }  
 if (createAssignmentsBtn) {
   createAssignmentsBtn.addEventListener("click", runStep9CreateAssignments);
+}
+if (includeOutsideBoundaryBtn) {
+  includeOutsideBoundaryBtn.addEventListener("click", runStep10IncludeOutsideBoundary);
 }
 if (downloadExcelBtn) {
   downloadExcelBtn.addEventListener("click", downloadAssignmentsExcel);
