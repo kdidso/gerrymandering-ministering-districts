@@ -2068,7 +2068,15 @@ function applyOutsideBoundaryAssignments() {
   let ruleType = "";
   let ruleLabel = "";
 
-  if (outsideGroup1.length === 1) {
+  if (outsideGroup1.length === 0) {
+    assignedCount = assignOutsidePeopleAcrossExistingCompanionships(
+      outsideGroup2,
+      updatedAssignments
+    );
+    unassignedCount = outsideGroup2.length - assignedCount;
+    ruleType = "no-outside-ministers";
+    ruleLabel = "There were no out-of-boundary ministers, so no out-of-boundary district was created. All out-of-boundary assignees were distributed one by one to the least-loaded companionships across all districts.";
+  } else if (outsideGroup1.length === 1) {
     const duoChoices = getAllCompanionshipRecords(updatedAssignments).filter(comp => (comp.members || []).length === 2);
     const leastLoadedDuos = getLeastLoadedCompanionships(duoChoices);
     const chosenDuo = pickRandomFromArray(leastLoadedDuos);
