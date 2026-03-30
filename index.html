@@ -536,7 +536,6 @@
 </div>
 
   <div class="row" style="margin-top:10px;">
-    <button id="uploadBtn" class="secondary" disabled>Upload District Files</button>
     <button id="continueBtn" class="secondary" disabled>Continue</button>
   </div>
 
@@ -556,7 +555,7 @@
   <div class="district-summary" id="gerrySummary"></div>
 
   <div class="small-note">
-    This version now runs through Step 7. After Step 6, you can re-run Step 6 from the same Step 5 baseline to try a different safe expansion. After Step 7 finishes, you can upload the district files or continue to the next workflow section.
+    This version now runs through Step 7. After Step 6, you can re-run Step 6 from the same Step 5 baseline to try a different safe expansion. After Step 7 finishes, continue to the next workflow section to create companionships, assignments, optionally include out-of-boundary members, and then upload the district files.
   </div>
 </div>
 
@@ -573,12 +572,13 @@
   </div>
 
   <div class="row" style="margin-top:10px;">
-    <button id="createCompanionshipsBtn" class="secondary" type="button">Create Companionships</button>
-    <button id="createAssignmentsBtn" class="secondary" type="button">Create Assignments</button>
-    <button id="includeOutsideBoundaryBtn" class="secondary" type="button" disabled>Include Out of Boundary</button>
-    <button id="downloadExcelBtn" class="secondary" type="button" disabled>Download Excel</button>
-    <button id="backToDistrictingBtn" class="secondary" type="button">Back to Districting</button>
-  </div>
+  <button id="createCompanionshipsBtn" class="secondary" type="button">Create Companionships</button>
+  <button id="createAssignmentsBtn" class="secondary" type="button">Create Assignments</button>
+  <button id="includeOutsideBoundaryBtn" class="secondary" type="button" disabled>Include Out of Boundary</button>
+  <button id="uploadBtn" class="secondary" type="button" disabled>Upload District Files</button>
+  <button id="downloadExcelBtn" class="secondary" type="button" disabled>Download Excel</button>
+  <button id="backToDistrictingBtn" class="secondary" type="button">Back to Districting</button>
+</div>
   <div id="companionshipStatus" class="status">
     Click <strong>Create Companionships</strong> to connect companionships within each district.
   </div>
@@ -2206,7 +2206,9 @@ function runStep10IncludeOutsideBoundary() {
           : "No out-of-boundary members matched the current filter, so nothing was added.",
         result.unassignedCount === 0 ? "good" : "warn"
       );
-
+if (uploadBtn) {
+  uploadBtn.disabled = false;
+}
       if (exportStatus) {
         setStatus(exportStatus, "Assignments are ready. You can now download the Excel file.", "good");
       }
@@ -2266,6 +2268,53 @@ function getPersonKey(item) {
   const first = String(p.First_Name ?? p.first_name ?? "").trim().toLowerCase();
   const coords = item.feature.geometry.coordinates;
   return `${last}|${first}|${coords[0]}|${coords[1]}`;
+}
+function buildOutsideBoundaryDistrictLookup(assignments) {
+  const lookup = new Map();
+  const separateOutsideDistrictIds = new Set();
+
+  for (const districtResult of assignments || []) {
+    const districtId = Number(districtResult.districtId);
+    const isSeparateOutsideDistrict =
+      String(districtResult.displayName || "").trim() === "Out of Boundary District";
+
+    if (isSeparateOutsideDistrict && Number.isFinite(districtId)) {
+      separateOutsideDistrictIds.add(districtId);
+    }
+
+    for (const comp of districtResult.companionships || []) {
+      const targetDistrictId = Number(comp.districtId);
+
+      for (const member of comp.members || []) {
+        const props = member?.feature?.properties || {};
+        if (props._outsideBoundary) {
+          lookup.set(getPersonKey(member), {
+            districtId: Number.isFinite(targetDistrictId) ? targetDistrictId : null,
+            separateEntity: isSeparateOutsideDistrict
+          });
+        }
+      }
+
+      for (const person of comp.assignedPeople || []) {
+        const props = person?.feature?.properties || {};
+        if (props._outsideBoundary) {
+          const key = getPersonKey(person);
+
+          if (!lookup.has(key)) {
+            lookup.set(key, {
+              districtId: Number.isFinite(targetDistrictId) ? targetDistrictId : null,
+              separateEntity: isSeparateOutsideDistrict
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    lookup,
+    separateOutsideDistrictIds
+  };
 }
 
 function distributeDistrictAssignmentTargets(totalPeople, companionshipCount) {
@@ -2907,6 +2956,7 @@ function runStep8CreateCompanionships() {
         
       );
 if (downloadExcelBtn) downloadExcelBtn.disabled = true;
+if (uploadBtn) uploadBtn.disabled = true;
 if (includeOutsideBoundaryBtn) includeOutsideBoundaryBtn.disabled = true;
 if (outsideBoundaryStatus) {
   setStatus(outsideBoundaryStatus, "Create assignments first, then optionally include out-of-boundary members.");
@@ -2949,9 +2999,11 @@ function runStep9CreateAssignments() {
 
       drawAssignmentResults(currentAssignments);
       renderAssignmentSummary(currentAssignments);
-      resetOutsideBoundarySummary();
-
+      resetOutsideBoundarySummary()
       downloadExcelBtn.disabled = false;
+if (uploadBtn) {
+  uploadBtn.disabled = false;
+}
       if (includeOutsideBoundaryBtn) {
         includeOutsideBoundaryBtn.disabled = !(currentOutsideBoundaryFiltered && currentOutsideBoundaryFiltered.length);
       }
@@ -3051,19 +3103,32 @@ function buildDistrictPointsGeoJSON(pointDistricts) {
     }
   }
 
-  // Out-of-boundary points appended into the same uploaded points file
+  // Out-of-boundary points
+  const outsideInfo = buildOutsideBoundaryDistrictLookup(currentAssignments || []);
+  const outsideLookup = outsideInfo.lookup;
+  const separateOutsideDistrictIds = outsideInfo.separateOutsideDistrictIds;
+
   for (const item of (currentOutsideBoundaryFiltered || [])) {
     const clone = cloneFeature(item.feature);
+    const match = outsideLookup.get(getPersonKey(item));
+
+    let districtId = null;
+
+    if (match && Number.isFinite(match.districtId) && !match.separateEntity && !separateOutsideDistrictIds.has(match.districtId)) {
+      districtId = match.districtId;
+    }
+
     clone.properties = {
       ...(clone.properties || {}),
-      district_id: null,
-      _district: null,
+      district_id: districtId,
+      _district: districtId,
       district_color: "#9ca3af",
       district_label: "Out of Boundary",
       group: item.group,
       cell_id: null,
       _outsideBoundary: true
     };
+
     features.push(clone);
   }
 
@@ -6971,11 +7036,16 @@ function buildDistrictAssignmentPayload(claimResult) {
 }
 async function uploadDistrictFiles() {
   if (!currentPointDistricts || !currentClaimResult) {
-    setStatus(gerryStatus, "Run Step 7 first before uploading.", "warn");
+    setStatus(exportStatus, "Run Step 7 first before uploading district files.", "warn");
     return;
   }
 
-  setStatus(gerryStatus, "Uploading district files to backend...", "warn");
+  if (!currentAssignments || !currentAssignments.length) {
+    setStatus(exportStatus, "Create assignments first before uploading district files.", "warn");
+    return;
+  }
+
+  setStatus(exportStatus, "Uploading district files to backend...", "warn");
   showStepSpinner("Uploading district files...");
 
   try {
@@ -6988,7 +7058,7 @@ async function uploadDistrictFiles() {
     hideStepSpinner();
 
     setStatus(
-      gerryStatus,
+      exportStatus,
       "Upload complete. District assignment and district points files were sent to the backend successfully.",
       "good"
     );
@@ -6997,7 +7067,7 @@ async function uploadDistrictFiles() {
     hideStepSpinner();
 
     setStatus(
-      gerryStatus,
+      exportStatus,
       `Upload failed: ${error?.message || error}`,
       "error"
     );
