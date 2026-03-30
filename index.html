@@ -3030,6 +3030,7 @@ function showStep8Workflow() {
 function buildDistrictPointsGeoJSON(pointDistricts) {
   const features = [];
 
+  // Regular in-boundary district points
   for (const district of pointDistricts) {
     const districtId = district.id;
     const districtColor = DISTRICT_COLORS[districtId % DISTRICT_COLORS.length];
@@ -3039,13 +3040,31 @@ function buildDistrictPointsGeoJSON(pointDistricts) {
       clone.properties = {
         ...(clone.properties || {}),
         district_id: districtId,
+        _district: districtId,
         district_color: districtColor,
         district_label: districtId + 1,
         group: item.group,
-        cell_id: item.cellId ?? null
+        cell_id: item.cellId ?? null,
+        _outsideBoundary: false
       };
       features.push(clone);
     }
+  }
+
+  // Out-of-boundary points appended into the same uploaded points file
+  for (const item of (currentOutsideBoundaryFiltered || [])) {
+    const clone = cloneFeature(item.feature);
+    clone.properties = {
+      ...(clone.properties || {}),
+      district_id: null,
+      _district: null,
+      district_color: "#9ca3af",
+      district_label: "Out of Boundary",
+      group: item.group,
+      cell_id: null,
+      _outsideBoundary: true
+    };
+    features.push(clone);
   }
 
   return {
