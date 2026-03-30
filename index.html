@@ -2272,6 +2272,9 @@ function getPersonKey(item) {
 function buildOutsideBoundaryDistrictLookup(assignments) {
   const lookup = new Map();
   const separateOutsideDistrictIds = new Set();
+  const outsideKeys = new Set(
+    (currentOutsideBoundaryFiltered || []).map(item => getPersonKey(item))
+  );
 
   for (const districtResult of assignments || []) {
     const districtId = Number(districtResult.districtId);
@@ -2286,9 +2289,9 @@ function buildOutsideBoundaryDistrictLookup(assignments) {
       const targetDistrictId = Number(comp.districtId);
 
       for (const member of comp.members || []) {
-        const props = member?.feature?.properties || {};
-        if (props._outsideBoundary) {
-          lookup.set(getPersonKey(member), {
+        const key = getPersonKey(member);
+        if (outsideKeys.has(key)) {
+          lookup.set(key, {
             districtId: Number.isFinite(targetDistrictId) ? targetDistrictId : null,
             separateEntity: isSeparateOutsideDistrict
           });
@@ -2296,16 +2299,12 @@ function buildOutsideBoundaryDistrictLookup(assignments) {
       }
 
       for (const person of comp.assignedPeople || []) {
-        const props = person?.feature?.properties || {};
-        if (props._outsideBoundary) {
-          const key = getPersonKey(person);
-
-          if (!lookup.has(key)) {
-            lookup.set(key, {
-              districtId: Number.isFinite(targetDistrictId) ? targetDistrictId : null,
-              separateEntity: isSeparateOutsideDistrict
-            });
-          }
+        const key = getPersonKey(person);
+        if (outsideKeys.has(key) && !lookup.has(key)) {
+          lookup.set(key, {
+            districtId: Number.isFinite(targetDistrictId) ? targetDistrictId : null,
+            separateEntity: isSeparateOutsideDistrict
+          });
         }
       }
     }
@@ -5379,9 +5378,16 @@ if (exportStatus) {
 
         if (!pointInsideWard(feature)) {
           outsideWardExcluded++;
+
+          item.feature.properties = item.feature.properties || {};
+          item.feature.properties._outsideBoundary = true;
+
           outsideFilteredItems.push(item);
           continue;
         }
+
+        item.feature.properties = item.feature.properties || {};
+        item.feature.properties._outsideBoundary = false;
 
         filteredItems.push(item);
       }
