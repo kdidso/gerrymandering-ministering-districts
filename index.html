@@ -1688,14 +1688,14 @@ function downloadAssignmentsExcel() {
     XLSX.utils.book_append_sheet(wb, ws, "Ministering Assignments");
     XLSX.writeFile(wb, "ministering_assignments.xlsx");
 
-    if (exportStatus) {
-      setStatus(exportStatus, "Excel file downloaded successfully.", "good");
+    if (continueStatus) {
+      setStatus(continueStatus, "Excel file downloaded successfully.", "good");
     }
 showProcessingModal(5);
   } catch (error) {
     console.error(error);
-    if (exportStatus) {
-      setStatus(exportStatus, `Excel export failed: ${error?.message || error}`, "error");
+    if (continueStatus) {
+      setStatus(continueStatus, `Excel export failed: ${error?.message || error}`, "error");
     }
   }
 }  
@@ -7045,7 +7045,7 @@ async function uploadDistrictFiles() {
     return;
   }
 
-  setStatus(exportStatus, "Uploading district files to backend...", "warn");
+  setStatus(continueStatus, "Uploading district files to backend...", "warn");
   showStepSpinner("Uploading district files...");
 
   try {
@@ -7057,17 +7057,17 @@ async function uploadDistrictFiles() {
 
     hideStepSpinner();
 
-    setStatus(
-      exportStatus,
-      "Upload complete. District assignment and district points files were sent to the backend successfully.",
-      "good"
-    );
+setStatus(
+  continueStatus,
+  "District files were successfully sent to the backend.",
+  "good"
+);
   } catch (error) {
     console.error(error);
     hideStepSpinner();
 
     setStatus(
-      exportStatus,
+      continueStatus,
       `Upload failed: ${error?.message || error}`,
       "error"
     );
