@@ -2068,7 +2068,15 @@ function applyOutsideBoundaryAssignments() {
   let ruleType = "";
   let ruleLabel = "";
 
-  if (outsideGroup1.length === 1) {
+  if (outsideGroup1.length === 0) {
+    assignedCount = assignOutsidePeopleAcrossExistingCompanionships(
+      outsideGroup2,
+      updatedAssignments
+    );
+    unassignedCount = outsideGroup2.length - assignedCount;
+    ruleType = "no-outside-ministers";
+    ruleLabel = "There were no out-of-boundary ministers, so no out-of-boundary district was created. All out-of-boundary assignees were distributed one by one to the least-loaded companionships across all districts.";
+  } else if (outsideGroup1.length === 1) {
     const duoChoices = getAllCompanionshipRecords(updatedAssignments).filter(comp => (comp.members || []).length === 2);
     const leastLoadedDuos = getLeastLoadedCompanionships(duoChoices);
     const chosenDuo = pickRandomFromArray(leastLoadedDuos);
@@ -3019,7 +3027,7 @@ function showStep8Workflow() {
   });
 }
     
-function buildDistrictPointsGeoJSON(pointDistricts, outsideBoundaryItems = []) {
+function buildDistrictPointsGeoJSON(pointDistricts) {
   const features = [];
 
   for (const district of pointDistricts) {
@@ -3031,30 +3039,13 @@ function buildDistrictPointsGeoJSON(pointDistricts, outsideBoundaryItems = []) {
       clone.properties = {
         ...(clone.properties || {}),
         district_id: districtId,
-        _district: districtId,
         district_color: districtColor,
         district_label: districtId + 1,
         group: item.group,
-        cell_id: item.cellId ?? null,
-        _outsideBoundary: false
+        cell_id: item.cellId ?? null
       };
       features.push(clone);
     }
-  }
-
-  for (const item of outsideBoundaryItems || []) {
-    const clone = cloneFeature(item.feature);
-    clone.properties = {
-      ...(clone.properties || {}),
-      district_id: null,
-      _district: null,
-      district_color: "#9ca3af",
-      district_label: "Out of Boundary",
-      group: item.group,
-      cell_id: item.cellId ?? null,
-      _outsideBoundary: true
-    };
-    features.push(clone);
   }
 
   return {
@@ -6970,10 +6961,7 @@ async function uploadDistrictFiles() {
 
   try {
     const payloadToSave = buildDistrictAssignmentPayload(currentClaimResult);
-    const pointsGeoJSON = buildDistrictPointsGeoJSON(
-      currentPointDistricts,
-      currentOutsideBoundaryFiltered || []
-    );
+    const pointsGeoJSON = buildDistrictPointsGeoJSON(currentPointDistricts);
 
     await saveToBackend(payloadToSave, "district_assignment.json");
     await saveToBackend(pointsGeoJSON, "district_points.geojson");
