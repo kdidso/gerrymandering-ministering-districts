@@ -3069,6 +3069,12 @@ function showStep8Workflow() {
     );
   }
 
+  if (uploadBtn) uploadBtn.disabled = true;
+  if (downloadExcelBtn) downloadExcelBtn.disabled = true;
+  if (includeOutsideBoundaryBtn) {
+    includeOutsideBoundaryBtn.disabled = true;
+  }
+
   if (sidebarEl) {
     sidebarEl.scrollTop = 0;
   }
