@@ -263,7 +263,41 @@ def select_month(driver: webdriver.Chrome, target_month: str) -> None:
     )
 
     log(f"Selecting attendance month: {target_month}")
-    selector.select_by_value(target_month)
+
+    # LCR's native <select> is present in the DOM but hidden by the custom
+    # Eden UI, so Selenium's Select.select_by_value() can fail with
+    # "element not interactable." Set the value through JavaScript and
+    # dispatch both input and change events so React updates the table.
+    changed = driver.execute_script(
+        """
+        const el = arguments[0];
+        const value = arguments[1];
+
+        const optionExists = Array.from(el.options).some(
+            option => option.value === value
+        );
+        if (!optionExists) {
+            return false;
+        }
+
+        const valueSetter = Object.getOwnPropertyDescriptor(
+            HTMLSelectElement.prototype,
+            "value"
+        ).set;
+
+        valueSetter.call(el, value);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+        """,
+        select_el,
+        target_month,
+    )
+
+    if not changed:
+        raise RuntimeError(
+            f"Could not set the hidden attendance month selector to {target_month}."
+        )
 
     def month_changed(d: webdriver.Chrome) -> bool:
         try:
