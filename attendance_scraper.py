@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import sys
-from datetime import date, datetime, timedelta
+import time
+from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
-import requests
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver import ChromeOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import Select, WebDriverWait
 
 
 # ============================================================
@@ -25,30 +25,27 @@ from selenium.webdriver.support.ui import WebDriverWait
 # ============================================================
 
 LCR_BASE = "https://lcr.churchofjesuschrist.org"
-ATTENDANCE_PAGE_URL = f"{LCR_BASE}/report/class-and-quorum-attendance/overview?lang=eng"
-# FIX: LCR moved the rendered member list under /mlt/.
-MEMBER_LIST_PAGE_URL = f"{LCR_BASE}/mlt/records/member-list?lang=eng"
-
-UNIT_NUMBER = os.getenv("UNIT_NUMBER", "253022").strip()
+ATTENDANCE_PAGE_URL = (
+    f"{LCR_BASE}/mlt/report/class-and-quorum-attendance?lang=eng"
+)
 
 USERNAME = os.getenv("LCR_USERNAME", "").strip()
 PASSWORD = os.getenv("LCR_PASSWORD", "").strip()
 
 START_DATE = os.getenv("START_DATE", "2025-12-28").strip()
 END_DATE = os.getenv("END_DATE", "2026-03-08").strip()
-
-OUTPUT_DIR = "data"
+OUTPUT_DIR = Path("data")
 
 HEADLESS = True
-DEFAULT_WAIT = 30
 LONG_WAIT = 60
-ROSTER_WAIT = 180
-WINDOW_DAYS = 28
+ATTENDANCE_WAIT = 180
+MONTH_CHANGE_WAIT = 90
 
-DEBUG_MEMBER_HTML = Path(OUTPUT_DIR) / "debug_attendance_member_list.html"
-DEBUG_MEMBER_TEXT = Path(OUTPUT_DIR) / "debug_attendance_member_list.txt"
-DEBUG_MEMBER_ROWS = Path(OUTPUT_DIR) / "debug_attendance_member_rows.txt"
-DEBUG_ATTENDANCE_JSON = Path(OUTPUT_DIR) / "debug_attendance_last_response.json"
+DEBUG_ATTENDANCE_HTML = OUTPUT_DIR / "debug_attendance_page.html"
+DEBUG_ATTENDANCE_TEXT = OUTPUT_DIR / "debug_attendance_page.txt"
+DEBUG_ATTENDANCE_ROWS = OUTPUT_DIR / "debug_attendance_rows.txt"
+DEBUG_ATTENDANCE_CONTROLS = OUTPUT_DIR / "debug_attendance_controls.txt"
+DEBUG_ATTENDANCE_SCREENSHOT = OUTPUT_DIR / "debug_attendance_page.png"
 
 
 # ============================================================
@@ -63,39 +60,12 @@ def err(msg: str) -> None:
     print(f"[ERROR] {msg}", file=sys.stderr)
 
 
-def ensure_dir(path: str | Path) -> Path:
-    p = Path(path)
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
 def parse_iso_date(value: str) -> date:
     return datetime.strptime(value, "%Y-%m-%d").date()
 
 
-def to_iso(dt: date) -> str:
-    return dt.strftime("%Y-%m-%d")
-
-
 def format_excel_header(dt: date) -> str:
     return f"{dt.strftime('%b')} {dt.day} {dt.year}"
-
-
-def sunday_on_or_before(dt: date) -> date:
-    return dt - timedelta(days=(dt.weekday() + 1) % 7)
-
-
-def build_date_windows(start_dt: date, end_dt: date) -> List[Tuple[date, date]]:
-    windows: List[Tuple[date, date]] = []
-    first_start = sunday_on_or_before(start_dt - timedelta(days=28))
-    last_start = sunday_on_or_before(end_dt)
-
-    current = first_start
-    while current <= last_start:
-        windows.append((current, current + timedelta(days=28)))
-        current += timedelta(days=7)
-
-    return windows
 
 
 def get_body_text(driver: webdriver.Chrome) -> str:
@@ -109,17 +79,40 @@ def clean_name(name: str) -> str:
 
 
 def looks_like_name(name: str) -> bool:
-    if not name or name == "Come, Follow Me" or len(name) > 90:
+    if not name or name == "Come, Follow Me" or len(name) > 100:
         return False
-    return bool(re.match(r"^[A-Za-zÀ-ÿ'’.\- ]+,\s+[A-Za-zÀ-ÿ'’.\- ]+$", name))
+    return bool(
+        re.match(
+            r"^[A-Za-zÀ-ÿ'’\.\- ]+,\s+[A-Za-zÀ-ÿ'’\.\- ]+$",
+            name,
+        )
+    )
 
 
-def first_string(obj: dict, keys: tuple[str, ...]) -> str:
-    for key in keys:
-        value = obj.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+def month_key(dt: date) -> str:
+    return dt.strftime("%Y-%m")
+
+
+def month_keys_between(start_dt: date, end_dt: date) -> List[str]:
+    keys: List[str] = []
+    year, month = start_dt.year, start_dt.month
+    while (year, month) <= (end_dt.year, end_dt.month):
+        keys.append(f"{year:04d}-{month:02d}")
+        month += 1
+        if month == 13:
+            month = 1
+            year += 1
+    return keys
+
+
+def parse_col_date(col_id: str) -> Optional[date]:
+    match = re.match(r"week_(\d{4}-\d{2}-\d{2})_SORT$", col_id or "")
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y-%m-%d").date()
+    except ValueError:
+        return None
 
 
 # ============================================================
@@ -133,7 +126,7 @@ def make_driver() -> webdriver.Chrome:
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
-    opts.add_argument("--window-size=1600,2200")
+    opts.add_argument("--window-size=1920,3000")
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_argument("--lang=en-US")
     return webdriver.Chrome(options=opts)
@@ -164,309 +157,292 @@ def login(driver: webdriver.Chrome) -> None:
     log("Login submitted successfully")
 
 
-def build_requests_session_from_driver(driver: webdriver.Chrome) -> requests.Session:
-    session = requests.Session()
-
-    for cookie in driver.get_cookies():
-        session.cookies.set(
-            cookie["name"],
-            cookie["value"],
-            domain=cookie.get("domain"),
-            path=cookie.get("path", "/"),
-        )
-
-    session.headers.update(
-        {
-            "User-Agent": driver.execute_script("return navigator.userAgent;") or "Mozilla/5.0",
-            "Accept": "application/json, text/plain, */*",
-            "Referer": ATTENDANCE_PAGE_URL,
-            "Origin": LCR_BASE,
-        }
-    )
-    return session
-
-
 # ============================================================
-# ROSTER FROM THE WORKING RENDERED MEMBER LIST
+# DEBUG OUTPUT
 # ============================================================
 
-def extract_uuid_from_row(row) -> str:
-    candidate_attributes = (
-        "data-uuid",
-        "data-person-uuid",
-        "data-personuuid",
-        "data-member-uuid",
-        "id",
-    )
+def save_debug(driver: webdriver.Chrome, row_lines: Optional[List[str]] = None) -> None:
+    try:
+        DEBUG_ATTENDANCE_HTML.write_text(driver.page_source, encoding="utf-8")
+        DEBUG_ATTENDANCE_TEXT.write_text(get_body_text(driver), encoding="utf-8")
+    except Exception:
+        pass
 
-    for attr in candidate_attributes:
-        value = (row.get_attribute(attr) or "").strip()
-        match = re.search(
-            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
-            value,
-        )
-        if match:
-            return match.group(0)
+    try:
+        driver.save_screenshot(str(DEBUG_ATTENDANCE_SCREENSHOT))
+    except Exception as ex:
+        log(f"Could not save attendance screenshot: {ex}")
 
-    for link in row.find_elements(By.CSS_SELECTOR, "a[href]"):
-        href = link.get_attribute("href") or ""
-        match = re.search(
-            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
-            href,
-        )
-        if match:
-            return match.group(0)
-
-    return ""
-
-
-def fetch_member_roster_from_page(driver: webdriver.Chrome) -> tuple[Dict[str, str], Set[str]]:
-    log(f"Loading rendered member list: {MEMBER_LIST_PAGE_URL}")
-    driver.get(MEMBER_LIST_PAGE_URL)
-
-    WebDriverWait(driver, ROSTER_WAIT).until(
-        lambda d: (
-            "Name" in get_body_text(d)
-            and "Gender" in get_body_text(d)
-            and "Birth Date" in get_body_text(d)
-            and get_body_text(d).count(",") > 50
-        )
-    )
-
-    DEBUG_MEMBER_HTML.write_text(driver.page_source, encoding="utf-8")
-    DEBUG_MEMBER_TEXT.write_text(get_body_text(driver), encoding="utf-8")
-
-    roster_by_uuid: Dict[str, str] = {}
-    roster_names: Set[str] = set()
-    debug_rows: list[str] = []
-
-    for row in driver.find_elements(By.CSS_SELECTOR, "tr"):
-        cells = row.find_elements(By.CSS_SELECTOR, "td")
-        cell_texts = [cell.text.strip() for cell in cells]
-        if cell_texts:
-            debug_rows.append(" | ".join(cell_texts))
-
-        if len(cell_texts) < 5:
-            continue
-
-        possible_name = clean_name(cell_texts[1])
-        gender = cell_texts[2].strip()
-        age = cell_texts[3].strip()
-        birth_date = cell_texts[4].strip()
-
-        if gender not in {"M", "F"}:
-            continue
-        if not age.isdigit():
-            continue
-        if not re.search(r"\b\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\b", birth_date):
-            continue
-        if not looks_like_name(possible_name):
-            continue
-
-        roster_names.add(possible_name)
-        uuid = extract_uuid_from_row(row)
-        if uuid:
-            roster_by_uuid[uuid] = possible_name
-
-    DEBUG_MEMBER_ROWS.write_text("\n".join(debug_rows), encoding="utf-8")
-
-    log(f"Rendered roster names found: {len(roster_names)}")
-    log(f"Rendered roster UUID mappings found: {len(roster_by_uuid)}")
-
-    if len(roster_names) < 50:
-        raise RuntimeError(
-            f"Only found {len(roster_names)} roster names. Member list may not have fully loaded."
-        )
-
-    return roster_by_uuid, roster_names
-
-
-# ============================================================
-# ATTENDANCE API
-# ============================================================
-
-def attendance_api_url(unit_number: str, start_dt: date, end_dt: date) -> str:
-    return (
-        f"{LCR_BASE}/api/umlu/v1/class-and-quorum/attendance/overview/"
-        f"unitNumber/{unit_number}/start/{to_iso(start_dt)}/end/{to_iso(end_dt)}?lang=eng"
-    )
-
-
-def fetch_json(session: requests.Session, url: str) -> dict | list:
-    response = session.get(url, timeout=60, allow_redirects=True)
-
-    content_type = response.headers.get("content-type", "")
-    if response.status_code >= 400:
-        raise RuntimeError(
-            f"Request failed with HTTP {response.status_code}: {url}\n"
-            f"Response preview: {response.text[:500]}"
-        )
-
-    if "json" not in content_type.lower():
-        raise RuntimeError(
-            f"Expected JSON but received {content_type or 'unknown content type'} from {url}. "
-            "The session may have been redirected to a login or error page.\n"
-            f"Response preview: {response.text[:500]}"
-        )
-
-    return response.json()
-
-
-def fetch_attendance_window(
-    session: requests.Session,
-    unit_number: str,
-    start_dt: date,
-    end_dt: date,
-) -> dict:
-    url = attendance_api_url(unit_number, start_dt, end_dt)
-    log(f"Fetching attendance window: {to_iso(start_dt)} to {to_iso(end_dt)}")
-    payload = fetch_json(session, url)
-
-    if not isinstance(payload, dict):
-        raise RuntimeError("Attendance API did not return an object.")
-
-    DEBUG_ATTENDANCE_JSON.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    return payload
-
-
-# ============================================================
-# MERGE ATTENDANCE
-# ============================================================
-
-def name_from_attendance_person(person: dict) -> str:
-    direct = first_string(
-        person,
-        (
-            "nameListPreferredLocal",
-            "listPreferredLocal",
-            "displayName",
-            "name",
-            "memberName",
-            "personName",
-            "houseHoldMemberNameForList",
-        ),
-    )
-    if direct:
-        return clean_name(direct)
-
-    name_formats = person.get("nameFormats")
-    if isinstance(name_formats, dict):
-        nested = first_string(
-            name_formats,
-            ("listPreferredLocal", "nameListPreferredLocal", "displayName", "name"),
-        )
-        if nested:
-            return clean_name(nested)
-
-    return ""
-
-
-def merge_attendance_window(
-    payload: dict,
-    roster_by_uuid: Dict[str, str],
-    roster_names: Set[str],
-    attendance_data: Dict[str, Dict[date, bool]],
-    all_dates: Set[date],
-    start_dt: date,
-    end_dt: date,
-) -> tuple[int, int]:
-    attendance_data_obj = payload.get("attendanceData") or payload
-    attendees = attendance_data_obj.get("attendees") or []
-
-    merged_people = 0
-    skipped_people = 0
-
-    for person in attendees:
-        uuid = first_string(person, ("uuid", "personUuid", "personUUID", "memberUuid"))
-
-        # Prefer the attendance response's own name. This removes dependence on
-        # the member-list API that recently stopped working.
-        name = name_from_attendance_person(person)
-        if not name and uuid:
-            name = roster_by_uuid.get(uuid, "")
-
-        if not name or not looks_like_name(name):
-            skipped_people += 1
-            continue
-
-        # Keep legitimate attendance names even if the rendered roster omits
-        # an out-of-unit attendee, but log roster mismatches for diagnosis.
-        if roster_names and name not in roster_names:
-            log(f"Attendance name not found in rendered roster: {name}")
-
-        merged_people += 1
-        attendance_data.setdefault(name, {})
-
-        entries = person.get("entries") or person.get("attendanceEntries") or []
-        for entry in entries:
-            raw_date = entry.get("date")
-            if isinstance(raw_date, dict):
-                iso = first_string(raw_date, ("isoYearMonthDay", "isoDate", "date"))
-            elif isinstance(raw_date, str):
-                iso = raw_date
-            else:
-                iso = first_string(entry, ("isoYearMonthDay", "attendanceDate"))
-
-            if not iso:
-                continue
-
+    controls: List[str] = []
+    try:
+        for index, el in enumerate(
+            driver.find_elements(By.CSS_SELECTOR, "input, button, select"), start=1
+        ):
             try:
-                dt = datetime.strptime(iso[:10], "%Y-%m-%d").date()
-            except ValueError:
-                continue
-
-            if not (start_dt <= dt <= end_dt):
-                continue
-
-            all_dates.add(dt)
-            attended = bool(
-                entry.get(
-                    "isMarkedAttended",
-                    entry.get("markedAttended", entry.get("attended", False)),
+                controls.append(
+                    " | ".join(
+                        [
+                            str(index),
+                            f"tag={el.tag_name}",
+                            f"type={el.get_attribute('type') or ''}",
+                            f"id={el.get_attribute('id') or ''}",
+                            f"title={el.get_attribute('title') or ''}",
+                            f"value={el.get_attribute('value') or ''}",
+                            f"text={re.sub(r'\\s+', ' ', el.text or '').strip()}",
+                        ]
+                    )
                 )
+            except StaleElementReferenceException:
+                continue
+    except Exception:
+        pass
+
+    DEBUG_ATTENDANCE_CONTROLS.write_text("\n".join(controls), encoding="utf-8")
+    if row_lines is not None:
+        DEBUG_ATTENDANCE_ROWS.write_text("\n".join(row_lines), encoding="utf-8")
+
+
+# ============================================================
+# PAGE AND MONTH SELECTION
+# ============================================================
+
+def wait_for_attendance_table(driver: webdriver.Chrome) -> None:
+    WebDriverWait(driver, ATTENDANCE_WAIT).until(
+        lambda d: len(d.find_elements(By.CSS_SELECTOR, "table[role='grid'] tbody tr")) > 5
+        and len(d.find_elements(By.CSS_SELECTOR, "colgroup col[id^='week_']")) > 0
+    )
+
+
+def find_month_select(driver: webdriver.Chrome):
+    """Find the select whose option values use YYYY-MM."""
+    for select_el in driver.find_elements(By.CSS_SELECTOR, "select"):
+        try:
+            values = [
+                option.get_attribute("value") or ""
+                for option in select_el.find_elements(By.TAG_NAME, "option")
+            ]
+            if any(re.fullmatch(r"\d{4}-\d{2}", value) for value in values):
+                return select_el
+        except StaleElementReferenceException:
+            continue
+    raise RuntimeError("Could not find the attendance month selector.")
+
+
+def visible_month_from_columns(driver: webdriver.Chrome) -> str:
+    for col in driver.find_elements(By.CSS_SELECTOR, "colgroup col[id^='week_']"):
+        dt = parse_col_date(col.get_attribute("id") or "")
+        if dt:
+            return month_key(dt)
+    return ""
+
+
+def select_month(driver: webdriver.Chrome, target_month: str) -> None:
+    select_el = find_month_select(driver)
+    selector = Select(select_el)
+    available_values = {
+        option.get_attribute("value") or "" for option in selector.options
+    }
+
+    if target_month not in available_values:
+        raise RuntimeError(
+            f"Attendance month {target_month} is not available in the LCR month selector. "
+            f"Available months include: {', '.join(sorted(v for v in available_values if re.fullmatch(r'\\d{{4}}-\\d{{2}}', v)))}"
+        )
+
+    current_value = select_el.get_attribute("value") or ""
+    if current_value == target_month and visible_month_from_columns(driver) == target_month:
+        return
+
+    old_signature = tuple(
+        col.get_attribute("id") or ""
+        for col in driver.find_elements(By.CSS_SELECTOR, "colgroup col[id^='week_']")
+    )
+
+    log(f"Selecting attendance month: {target_month}")
+    selector.select_by_value(target_month)
+
+    def month_changed(d: webdriver.Chrome) -> bool:
+        try:
+            new_signature = tuple(
+                col.get_attribute("id") or ""
+                for col in d.find_elements(By.CSS_SELECTOR, "colgroup col[id^='week_']")
             )
-            attendance_data[name][dt] = attended
+            return (
+                bool(new_signature)
+                and new_signature != old_signature
+                and visible_month_from_columns(d) == target_month
+                and len(d.find_elements(By.CSS_SELECTOR, "table[role='grid'] tbody tr")) > 5
+            )
+        except StaleElementReferenceException:
+            return False
 
-    return merged_people, skipped_people
+    WebDriverWait(driver, MONTH_CHANGE_WAIT).until(month_changed)
+    time.sleep(0.5)
 
 
-def scrape_attendance_via_api(
-    session: requests.Session,
-    unit_number: str,
+# ============================================================
+# ATTENDANCE EXTRACTION
+# ============================================================
+
+def attendance_state_from_cell(cell) -> Optional[bool]:
+    """
+    Return:
+      True  = checked attendance icon
+      False = empty-circle attendance icon
+      None  = no attendance button, usually an unavailable/future date
+    """
+    buttons = cell.find_elements(
+        By.CSS_SELECTOR,
+        "button[class*='attendanceButton']",
+    )
+    if not buttons:
+        return None
+
+    paths = buttons[0].find_elements(By.CSS_SELECTOR, "svg path")
+    if not paths:
+        return None
+
+    path = paths[0]
+    fill_rule = (path.get_attribute("fill-rule") or "").strip().lower()
+    clip_rule = (path.get_attribute("clip-rule") or "").strip().lower()
+    path_data = re.sub(r"\s+", " ", path.get_attribute("d") or "").strip()
+
+    # The checked-circle SVG has evenodd rules and starts with M12 22...
+    if fill_rule == "evenodd" or clip_rule == "evenodd":
+        return True
+    if path_data.startswith("M12 22"):
+        return True
+
+    # The unmarked icon is the outlined circle and starts with M12 3.5...
+    if path_data.startswith("M12 3.5"):
+        return False
+
+    raise RuntimeError(f"Unrecognized attendance SVG path: {path_data[:120]}")
+
+
+def scrape_visible_month(
+    driver: webdriver.Chrome,
+    requested_start: date,
+    requested_end: date,
+) -> Tuple[Dict[str, Dict[date, Optional[bool]]], Set[date], List[str]]:
+    table = WebDriverWait(driver, ATTENDANCE_WAIT).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "table[role='grid']"))
+    )
+
+    col_dates: List[Optional[date]] = []
+    for col in table.find_elements(By.CSS_SELECTOR, "colgroup col"):
+        col_dates.append(parse_col_date(col.get_attribute("id") or ""))
+
+    if len(col_dates) < 3:
+        raise RuntimeError("Attendance table did not contain expected date columns.")
+
+    data: Dict[str, Dict[date, Optional[bool]]] = {}
+    available_dates: Set[date] = set()
+    debug_rows: List[str] = []
+
+    for row_index, row in enumerate(
+        table.find_elements(By.CSS_SELECTOR, "tbody tr[role='row']"), start=1
+    ):
+        cells = row.find_elements(By.CSS_SELECTOR, "td")
+        if len(cells) < 3:
+            continue
+
+        name_buttons = cells[0].find_elements(
+            By.CSS_SELECTOR, "button[data-member-card-person-uuid]"
+        )
+        if not name_buttons:
+            continue
+
+        name = clean_name(name_buttons[0].text)
+        if not looks_like_name(name):
+            continue
+
+        uuid = name_buttons[0].get_attribute("data-member-card-person-uuid") or ""
+        states_for_debug: List[str] = []
+        data.setdefault(name, {})
+
+        # col_dates[0] and col_dates[1] are Name and Gender and therefore None.
+        for col_index in range(2, min(len(cells), len(col_dates))):
+            dt = col_dates[col_index]
+            if dt is None or not (requested_start <= dt <= requested_end):
+                continue
+
+            state = attendance_state_from_cell(cells[col_index])
+            data[name][dt] = state
+
+            if state is not None:
+                available_dates.add(dt)
+
+            states_for_debug.append(
+                f"{dt.isoformat()}={'present' if state is True else 'absent' if state is False else 'unavailable'}"
+            )
+
+        debug_rows.append(
+            f"ROW {row_index} | uuid={uuid} | name={name} | " + " | ".join(states_for_debug)
+        )
+
+    return data, available_dates, debug_rows
+
+
+def merge_attendance(
+    destination: Dict[str, Dict[date, Optional[bool]]],
+    incoming: Dict[str, Dict[date, Optional[bool]]],
+) -> None:
+    for name, values in incoming.items():
+        destination.setdefault(name, {}).update(values)
+
+
+def scrape_attendance(
+    driver: webdriver.Chrome,
     start_dt: date,
     end_dt: date,
-    roster_by_uuid: Dict[str, str],
-    roster_names: Set[str],
-) -> Tuple[Dict[str, Dict[date, bool]], List[date]]:
-    attendance_data: Dict[str, Dict[date, bool]] = {}
-    all_dates: Set[date] = set()
+) -> Tuple[Dict[str, Dict[date, Optional[bool]]], List[date]]:
+    log(f"Loading rendered attendance page: {ATTENDANCE_PAGE_URL}")
+    driver.get(ATTENDANCE_PAGE_URL)
+    wait_for_attendance_table(driver)
 
-    windows = build_date_windows(start_dt, end_dt)
-    log(f"Date windows to request: {[f'{to_iso(s)}..{to_iso(e)}' for s, e in windows]}")
+    combined: Dict[str, Dict[date, Optional[bool]]] = {}
+    all_available_dates: Set[date] = set()
+    all_debug_rows: List[str] = []
 
-    for win_start, win_end in windows:
-        payload = fetch_attendance_window(session, unit_number, win_start, win_end)
-        merged_people, skipped_people = merge_attendance_window(
-            payload,
-            roster_by_uuid,
-            roster_names,
-            attendance_data,
-            all_dates,
-            start_dt,
-            end_dt,
-        )
-        log(f"Merged attendees from window: {merged_people}; skipped without usable names: {skipped_people}")
+    try:
+        for target_month in month_keys_between(start_dt, end_dt):
+            select_month(driver, target_month)
+            month_data, month_dates, month_debug = scrape_visible_month(
+                driver, start_dt, end_dt
+            )
+            merge_attendance(combined, month_data)
+            all_available_dates.update(month_dates)
+            all_debug_rows.extend([f"MONTH {target_month}"] + month_debug)
+            log(
+                f"Collected {len(month_dates)} available attendance dates "
+                f"and {sum(1 for v in month_data.values() if v)} member rows for {target_month}"
+            )
+    except Exception:
+        save_debug(driver, all_debug_rows)
+        raise
 
-    final_dates = sorted(all_dates)
-    if not final_dates:
+    save_debug(driver, all_debug_rows)
+
+    final_dates = sorted(
+        dt for dt in all_available_dates if start_dt <= dt <= end_dt
+    )
+    people_with_values = sum(
+        1
+        for per_date in combined.values()
+        if any(value is not None for value in per_date.values())
+    )
+
+    log(f"Attendance dates collected: {len(final_dates)}")
+    log(f"Members with attendance values: {people_with_values}")
+
+    if not final_dates or people_with_values == 0:
         raise RuntimeError(
-            "No attendance dates were collected from the API. "
-            f"Inspect {DEBUG_ATTENDANCE_JSON}."
+            "The attendance page loaded, but no usable attendance values were collected. "
+            f"Debug files were written under {OUTPUT_DIR}."
         )
 
-    return attendance_data, final_dates
+    return combined, final_dates
 
 
 # ============================================================
@@ -474,7 +450,7 @@ def scrape_attendance_via_api(
 # ============================================================
 
 def write_excel(
-    attendance_data: Dict[str, Dict[date, bool]],
+    attendance_data: Dict[str, Dict[date, Optional[bool]]],
     all_dates: List[date],
     out_path: Path,
 ) -> None:
@@ -484,6 +460,7 @@ def write_excel(
 
     header_fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
     percent_fill = PatternFill(fill_type="solid", fgColor="E2F0D9")
+    unavailable_fill = PatternFill(fill_type="solid", fgColor="E7E6E6")
     bold = Font(bold=True)
     center = Alignment(horizontal="center", vertical="center")
     left = Alignment(horizontal="left", vertical="center")
@@ -497,13 +474,17 @@ def write_excel(
         cell.fill = header_fill
         cell.alignment = left if col_idx == 1 else center
 
-    for row_idx, name in enumerate(
-        sorted(attendance_data.keys(), key=lambda s: s.casefold()), start=2
-    ):
+    names = [
+        name
+        for name, values in attendance_data.items()
+        if any(values.get(dt) is not None for dt in all_dates)
+    ]
+
+    for row_idx, name in enumerate(sorted(names, key=str.casefold), start=2):
         per_date = attendance_data[name]
-        total = len(all_dates)
-        present_count = sum(1 for d in all_dates if per_date.get(d, False))
-        pct = (present_count / total) if total else 0.0
+        countable_dates = [dt for dt in all_dates if per_date.get(dt) is not None]
+        present_count = sum(1 for dt in countable_dates if per_date.get(dt) is True)
+        pct = present_count / len(countable_dates) if countable_dates else 0.0
 
         ws.cell(row=row_idx, column=1, value=name)
 
@@ -512,21 +493,29 @@ def write_excel(
         pct_cell.fill = percent_fill
 
         for col_idx, dt in enumerate(all_dates, start=3):
-            ws.cell(
-                row=row_idx,
-                column=col_idx,
-                value="☑" if per_date.get(dt, False) else "☐",
-            )
+            state = per_date.get(dt)
+            cell = ws.cell(row=row_idx, column=col_idx)
+            if state is True:
+                cell.value = "☑"
+            elif state is False:
+                cell.value = "☐"
+            else:
+                cell.value = "—"
+                cell.fill = unavailable_fill
 
     ws.freeze_panes = "C2"
-    ws.column_dimensions["A"].width = 30
+    ws.auto_filter.ref = ws.dimensions
+    ws.column_dimensions["A"].width = 32
     ws.column_dimensions["B"].width = 12
 
     for col_idx in range(3, 3 + len(all_dates)):
         ws.column_dimensions[get_column_letter(col_idx)].width = 14
 
     for row in ws.iter_rows(
-        min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column
+        min_row=2,
+        max_row=ws.max_row,
+        min_col=1,
+        max_col=ws.max_column,
     ):
         for cell in row:
             cell.alignment = left if cell.column == 1 else center
@@ -543,55 +532,42 @@ def main() -> int:
         err("Missing LCR_USERNAME and/or LCR_PASSWORD environment variables.")
         return 1
 
-    start_dt = parse_iso_date(START_DATE)
-    end_dt = parse_iso_date(END_DATE)
+    try:
+        start_dt = parse_iso_date(START_DATE)
+        end_dt = parse_iso_date(END_DATE)
+    except ValueError:
+        err("START_DATE and END_DATE must use YYYY-MM-DD format.")
+        return 1
 
     if start_dt > end_dt:
         err("START_DATE must be on or before END_DATE.")
         return 1
 
-    output_dir = ensure_dir(OUTPUT_DIR)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = output_dir / (
+    out_path = OUTPUT_DIR / (
         f"attendance_{start_dt.isoformat()}_to_{end_dt.isoformat()}_{timestamp}.xlsx"
     )
 
     driver = make_driver()
     try:
         login(driver)
-
-        # FIX: Load and parse the same rendered member-list page used by the
-        # repaired fetch_lcr_all_names.py rather than calling the obsolete API.
-        roster_by_uuid, roster_names = fetch_member_roster_from_page(driver)
-
-        # Open the attendance page before copying cookies so all LCR session
-        # cookies and attendance-specific context are present.
-        log(f"Loading attendance page: {ATTENDANCE_PAGE_URL}")
-        driver.get(ATTENDANCE_PAGE_URL)
-        WebDriverWait(driver, LONG_WAIT).until(
-            lambda d: "attendance" in d.current_url.lower()
-            or "Attendance" in get_body_text(d)
-        )
-
-        session = build_requests_session_from_driver(driver)
-        attendance_data, all_dates = scrape_attendance_via_api(
-            session,
-            UNIT_NUMBER,
-            start_dt,
-            end_dt,
-            roster_by_uuid,
-            roster_names,
-        )
-
+        attendance_data, all_dates = scrape_attendance(driver, start_dt, end_dt)
         write_excel(attendance_data, all_dates, out_path)
         log(f"Excel output written to {out_path}")
+        return 0
+    except Exception as ex:
+        err(str(ex))
+        try:
+            save_debug(driver)
+        except Exception:
+            pass
+        return 1
     finally:
         try:
             driver.quit()
         except Exception:
             pass
-
-    return 0
 
 
 if __name__ == "__main__":
