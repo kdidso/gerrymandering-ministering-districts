@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -24,7 +26,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 LCR_BASE = "https://lcr.churchofjesuschrist.org"
 ATTENDANCE_PAGE_URL = f"{LCR_BASE}/report/class-and-quorum-attendance/overview?lang=eng"
-MEMBER_LIST_PAGE_URL = f"{LCR_BASE}/records/member-list?lang=eng"
+# FIX: LCR moved the rendered member list under /mlt/.
+MEMBER_LIST_PAGE_URL = f"{LCR_BASE}/mlt/records/member-list?lang=eng"
 
 UNIT_NUMBER = os.getenv("UNIT_NUMBER", "253022").strip()
 
@@ -39,7 +42,13 @@ OUTPUT_DIR = "data"
 HEADLESS = True
 DEFAULT_WAIT = 30
 LONG_WAIT = 60
+ROSTER_WAIT = 180
 WINDOW_DAYS = 28
+
+DEBUG_MEMBER_HTML = Path(OUTPUT_DIR) / "debug_attendance_member_list.html"
+DEBUG_MEMBER_TEXT = Path(OUTPUT_DIR) / "debug_attendance_member_list.txt"
+DEBUG_MEMBER_ROWS = Path(OUTPUT_DIR) / "debug_attendance_member_rows.txt"
+DEBUG_ATTENDANCE_JSON = Path(OUTPUT_DIR) / "debug_attendance_last_response.json"
 
 
 # ============================================================
@@ -77,12 +86,7 @@ def sunday_on_or_before(dt: date) -> date:
 
 
 def build_date_windows(start_dt: date, end_dt: date) -> List[Tuple[date, date]]:
-    """
-    Build overlapping 28-day windows starting every Sunday.
-    This covers the discovered API pattern without guessing exact block alignment.
-    """
     windows: List[Tuple[date, date]] = []
-
     first_start = sunday_on_or_before(start_dt - timedelta(days=28))
     last_start = sunday_on_or_before(end_dt)
 
@@ -92,6 +96,30 @@ def build_date_windows(start_dt: date, end_dt: date) -> List[Tuple[date, date]]:
         current += timedelta(days=7)
 
     return windows
+
+
+def get_body_text(driver: webdriver.Chrome) -> str:
+    return driver.find_element(By.TAG_NAME, "body").text
+
+
+def clean_name(name: str) -> str:
+    name = re.sub(r"\s*(Out-of-Unit|Not Baptized)\s*", " ", name)
+    name = re.sub(r"\s+", " ", name)
+    return name.strip()
+
+
+def looks_like_name(name: str) -> bool:
+    if not name or name == "Come, Follow Me" or len(name) > 90:
+        return False
+    return bool(re.match(r"^[A-Za-zÀ-ÿ'’.\- ]+,\s+[A-Za-zÀ-ÿ'’.\- ]+$", name))
+
+
+def first_string(obj: dict, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = obj.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 # ============================================================
@@ -113,31 +141,27 @@ def make_driver() -> webdriver.Chrome:
 
 def login(driver: webdriver.Chrome) -> None:
     if not USERNAME or not PASSWORD:
-        err("Missing env vars LCR_USERNAME and/or LCR_PASSWORD")
-        sys.exit(1)
+        raise RuntimeError("Missing LCR_USERNAME and/or LCR_PASSWORD.")
 
-    log("Opening LCR base login page")
+    log("Opening LCR login page")
     driver.get(LCR_BASE)
 
-    try:
-        user_input = WebDriverWait(driver, LONG_WAIT).until(
-            EC.presence_of_element_located((By.ID, "username-input"))
-        )
-        user_input.clear()
-        user_input.send_keys(USERNAME)
-        user_input.send_keys(Keys.ENTER)
+    user_input = WebDriverWait(driver, LONG_WAIT).until(
+        EC.presence_of_element_located((By.ID, "username-input"))
+    )
+    user_input.clear()
+    user_input.send_keys(USERNAME)
+    user_input.send_keys(Keys.ENTER)
 
-        pwd_input = WebDriverWait(driver, LONG_WAIT).until(
-            EC.presence_of_element_located((By.ID, "password-input"))
-        )
-        pwd_input.clear()
-        pwd_input.send_keys(PASSWORD)
-        pwd_input.send_keys(Keys.ENTER)
+    pwd_input = WebDriverWait(driver, LONG_WAIT).until(
+        EC.presence_of_element_located((By.ID, "password-input"))
+    )
+    pwd_input.clear()
+    pwd_input.send_keys(PASSWORD)
+    pwd_input.send_keys(Keys.ENTER)
 
-        WebDriverWait(driver, LONG_WAIT).until(EC.url_contains(LCR_BASE))
-        log("Login submitted successfully")
-    except Exception as ex:
-        raise RuntimeError("Automated login failed with the known username/password field flow.") from ex
+    WebDriverWait(driver, LONG_WAIT).until(EC.url_contains(LCR_BASE))
+    log("Login submitted successfully")
 
 
 def build_requests_session_from_driver(driver: webdriver.Chrome) -> requests.Session:
@@ -153,16 +177,112 @@ def build_requests_session_from_driver(driver: webdriver.Chrome) -> requests.Ses
 
     session.headers.update(
         {
-            "User-Agent": "Mozilla/5.0",
+            "User-Agent": driver.execute_script("return navigator.userAgent;") or "Mozilla/5.0",
             "Accept": "application/json, text/plain, */*",
             "Referer": ATTENDANCE_PAGE_URL,
+            "Origin": LCR_BASE,
         }
     )
     return session
 
 
 # ============================================================
-# API URLS
+# ROSTER FROM THE WORKING RENDERED MEMBER LIST
+# ============================================================
+
+def extract_uuid_from_row(row) -> str:
+    candidate_attributes = (
+        "data-uuid",
+        "data-person-uuid",
+        "data-personuuid",
+        "data-member-uuid",
+        "id",
+    )
+
+    for attr in candidate_attributes:
+        value = (row.get_attribute(attr) or "").strip()
+        match = re.search(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+            value,
+        )
+        if match:
+            return match.group(0)
+
+    for link in row.find_elements(By.CSS_SELECTOR, "a[href]"):
+        href = link.get_attribute("href") or ""
+        match = re.search(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+            href,
+        )
+        if match:
+            return match.group(0)
+
+    return ""
+
+
+def fetch_member_roster_from_page(driver: webdriver.Chrome) -> tuple[Dict[str, str], Set[str]]:
+    log(f"Loading rendered member list: {MEMBER_LIST_PAGE_URL}")
+    driver.get(MEMBER_LIST_PAGE_URL)
+
+    WebDriverWait(driver, ROSTER_WAIT).until(
+        lambda d: (
+            "Name" in get_body_text(d)
+            and "Gender" in get_body_text(d)
+            and "Birth Date" in get_body_text(d)
+            and get_body_text(d).count(",") > 50
+        )
+    )
+
+    DEBUG_MEMBER_HTML.write_text(driver.page_source, encoding="utf-8")
+    DEBUG_MEMBER_TEXT.write_text(get_body_text(driver), encoding="utf-8")
+
+    roster_by_uuid: Dict[str, str] = {}
+    roster_names: Set[str] = set()
+    debug_rows: list[str] = []
+
+    for row in driver.find_elements(By.CSS_SELECTOR, "tr"):
+        cells = row.find_elements(By.CSS_SELECTOR, "td")
+        cell_texts = [cell.text.strip() for cell in cells]
+        if cell_texts:
+            debug_rows.append(" | ".join(cell_texts))
+
+        if len(cell_texts) < 5:
+            continue
+
+        possible_name = clean_name(cell_texts[1])
+        gender = cell_texts[2].strip()
+        age = cell_texts[3].strip()
+        birth_date = cell_texts[4].strip()
+
+        if gender not in {"M", "F"}:
+            continue
+        if not age.isdigit():
+            continue
+        if not re.search(r"\b\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\b", birth_date):
+            continue
+        if not looks_like_name(possible_name):
+            continue
+
+        roster_names.add(possible_name)
+        uuid = extract_uuid_from_row(row)
+        if uuid:
+            roster_by_uuid[uuid] = possible_name
+
+    DEBUG_MEMBER_ROWS.write_text("\n".join(debug_rows), encoding="utf-8")
+
+    log(f"Rendered roster names found: {len(roster_names)}")
+    log(f"Rendered roster UUID mappings found: {len(roster_by_uuid)}")
+
+    if len(roster_names) < 50:
+        raise RuntimeError(
+            f"Only found {len(roster_names)} roster names. Member list may not have fully loaded."
+        )
+
+    return roster_by_uuid, roster_names
+
+
+# ============================================================
+# ATTENDANCE API
 # ============================================================
 
 def attendance_api_url(unit_number: str, start_dt: date, end_dt: date) -> str:
@@ -172,55 +292,32 @@ def attendance_api_url(unit_number: str, start_dt: date, end_dt: date) -> str:
     )
 
 
-def member_list_api_url(unit_number: str) -> str:
-    return f"{LCR_BASE}/api/umlu/report/member-list?lang=eng&unitNumber={unit_number}"
-
-
-# ============================================================
-# API FETCHES
-# ============================================================
-
 def fetch_json(session: requests.Session, url: str) -> dict | list:
-    response = session.get(url, timeout=60)
-    response.raise_for_status()
+    response = session.get(url, timeout=60, allow_redirects=True)
+
+    content_type = response.headers.get("content-type", "")
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Request failed with HTTP {response.status_code}: {url}\n"
+            f"Response preview: {response.text[:500]}"
+        )
+
+    if "json" not in content_type.lower():
+        raise RuntimeError(
+            f"Expected JSON but received {content_type or 'unknown content type'} from {url}. "
+            "The session may have been redirected to a login or error page.\n"
+            f"Response preview: {response.text[:500]}"
+        )
+
     return response.json()
 
 
-def fetch_member_roster(session: requests.Session, unit_number: str) -> Dict[str, str]:
-    url = member_list_api_url(unit_number)
-    log(f"Fetching member roster: {url}")
-    payload = fetch_json(session, url)
-
-    if not isinstance(payload, list):
-        raise RuntimeError("Member-list API did not return a list.")
-
-    roster: Dict[str, str] = {}
-
-    for person in payload:
-        uuid = (person.get("uuid") or person.get("personUuid") or "").strip()
-        if not uuid:
-            continue
-
-        name = (
-            person.get("nameListPreferredLocal")
-            or person.get("householdNameDirectoryLocal")
-            or (person.get("nameFormats") or {}).get("listPreferredLocal")
-            or person.get("houseHoldMemberNameForList")
-            or ""
-        )
-        name = name.strip()
-
-        if name:
-            roster[uuid] = name
-
-    log(f"Roster members mapped: {len(roster)}")
-    if not roster:
-        raise RuntimeError("No UUID→name mappings were found in member-list response.")
-
-    return roster
-
-
-def fetch_attendance_window(session: requests.Session, unit_number: str, start_dt: date, end_dt: date) -> dict:
+def fetch_attendance_window(
+    session: requests.Session,
+    unit_number: str,
+    start_dt: date,
+    end_dt: date,
+) -> dict:
     url = attendance_api_url(unit_number, start_dt, end_dt)
     log(f"Fetching attendance window: {to_iso(start_dt)} to {to_iso(end_dt)}")
     payload = fetch_json(session, url)
@@ -228,6 +325,9 @@ def fetch_attendance_window(session: requests.Session, unit_number: str, start_d
     if not isinstance(payload, dict):
         raise RuntimeError("Attendance API did not return an object.")
 
+    DEBUG_ATTENDANCE_JSON.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     return payload
 
 
@@ -235,39 +335,85 @@ def fetch_attendance_window(session: requests.Session, unit_number: str, start_d
 # MERGE ATTENDANCE
 # ============================================================
 
+def name_from_attendance_person(person: dict) -> str:
+    direct = first_string(
+        person,
+        (
+            "nameListPreferredLocal",
+            "listPreferredLocal",
+            "displayName",
+            "name",
+            "memberName",
+            "personName",
+            "houseHoldMemberNameForList",
+        ),
+    )
+    if direct:
+        return clean_name(direct)
+
+    name_formats = person.get("nameFormats")
+    if isinstance(name_formats, dict):
+        nested = first_string(
+            name_formats,
+            ("listPreferredLocal", "nameListPreferredLocal", "displayName", "name"),
+        )
+        if nested:
+            return clean_name(nested)
+
+    return ""
+
+
 def merge_attendance_window(
     payload: dict,
-    roster: Dict[str, str],
+    roster_by_uuid: Dict[str, str],
+    roster_names: Set[str],
     attendance_data: Dict[str, Dict[date, bool]],
     all_dates: Set[date],
     start_dt: date,
     end_dt: date,
-) -> int:
-    attendance_data_obj = payload.get("attendanceData") or {}
+) -> tuple[int, int]:
+    attendance_data_obj = payload.get("attendanceData") or payload
     attendees = attendance_data_obj.get("attendees") or []
 
     merged_people = 0
+    skipped_people = 0
 
     for person in attendees:
-        uuid = (person.get("uuid") or person.get("personUuid") or "").strip()
-        if not uuid:
+        uuid = first_string(person, ("uuid", "personUuid", "personUUID", "memberUuid"))
+
+        # Prefer the attendance response's own name. This removes dependence on
+        # the member-list API that recently stopped working.
+        name = name_from_attendance_person(person)
+        if not name and uuid:
+            name = roster_by_uuid.get(uuid, "")
+
+        if not name or not looks_like_name(name):
+            skipped_people += 1
             continue
 
-        name = roster.get(uuid)
-        if not name:
-            continue
+        # Keep legitimate attendance names even if the rendered roster omits
+        # an out-of-unit attendee, but log roster mismatches for diagnosis.
+        if roster_names and name not in roster_names:
+            log(f"Attendance name not found in rendered roster: {name}")
 
         merged_people += 1
         attendance_data.setdefault(name, {})
 
-        for entry in person.get("entries", []) or []:
-            date_obj = entry.get("date") or {}
-            iso = date_obj.get("isoYearMonthDay")
+        entries = person.get("entries") or person.get("attendanceEntries") or []
+        for entry in entries:
+            raw_date = entry.get("date")
+            if isinstance(raw_date, dict):
+                iso = first_string(raw_date, ("isoYearMonthDay", "isoDate", "date"))
+            elif isinstance(raw_date, str):
+                iso = raw_date
+            else:
+                iso = first_string(entry, ("isoYearMonthDay", "attendanceDate"))
+
             if not iso:
                 continue
 
             try:
-                dt = datetime.strptime(iso, "%Y-%m-%d").date()
+                dt = datetime.strptime(iso[:10], "%Y-%m-%d").date()
             except ValueError:
                 continue
 
@@ -276,11 +422,14 @@ def merge_attendance_window(
 
             all_dates.add(dt)
             attended = bool(
-                entry.get("isMarkedAttended", entry.get("markedAttended", False))
+                entry.get(
+                    "isMarkedAttended",
+                    entry.get("markedAttended", entry.get("attended", False)),
+                )
             )
             attendance_data[name][dt] = attended
 
-    return merged_people
+    return merged_people, skipped_people
 
 
 def scrape_attendance_via_api(
@@ -288,9 +437,9 @@ def scrape_attendance_via_api(
     unit_number: str,
     start_dt: date,
     end_dt: date,
+    roster_by_uuid: Dict[str, str],
+    roster_names: Set[str],
 ) -> Tuple[Dict[str, Dict[date, bool]], List[date]]:
-    roster = fetch_member_roster(session, unit_number)
-
     attendance_data: Dict[str, Dict[date, bool]] = {}
     all_dates: Set[date] = set()
 
@@ -299,14 +448,23 @@ def scrape_attendance_via_api(
 
     for win_start, win_end in windows:
         payload = fetch_attendance_window(session, unit_number, win_start, win_end)
-        merged_people = merge_attendance_window(
-            payload, roster, attendance_data, all_dates, start_dt, end_dt
+        merged_people, skipped_people = merge_attendance_window(
+            payload,
+            roster_by_uuid,
+            roster_names,
+            attendance_data,
+            all_dates,
+            start_dt,
+            end_dt,
         )
-        log(f"Merged attendees from window: {merged_people}")
+        log(f"Merged attendees from window: {merged_people}; skipped without usable names: {skipped_people}")
 
     final_dates = sorted(all_dates)
     if not final_dates:
-        raise RuntimeError("No attendance dates were collected from the API.")
+        raise RuntimeError(
+            "No attendance dates were collected from the API. "
+            f"Inspect {DEBUG_ATTENDANCE_JSON}."
+        )
 
     return attendance_data, final_dates
 
@@ -315,7 +473,11 @@ def scrape_attendance_via_api(
 # EXCEL OUTPUT
 # ============================================================
 
-def write_excel(attendance_data: Dict[str, Dict[date, bool]], all_dates: List[date], out_path: Path) -> None:
+def write_excel(
+    attendance_data: Dict[str, Dict[date, bool]],
+    all_dates: List[date],
+    out_path: Path,
+) -> None:
     wb = Workbook()
     ws = wb.active
     ws.title = "Attendance"
@@ -335,7 +497,9 @@ def write_excel(attendance_data: Dict[str, Dict[date, bool]], all_dates: List[da
         cell.fill = header_fill
         cell.alignment = left if col_idx == 1 else center
 
-    for row_idx, name in enumerate(sorted(attendance_data.keys(), key=lambda s: s.casefold()), start=2):
+    for row_idx, name in enumerate(
+        sorted(attendance_data.keys(), key=lambda s: s.casefold()), start=2
+    ):
         per_date = attendance_data[name]
         total = len(all_dates)
         present_count = sum(1 for d in all_dates if per_date.get(d, False))
@@ -348,7 +512,11 @@ def write_excel(attendance_data: Dict[str, Dict[date, bool]], all_dates: List[da
         pct_cell.fill = percent_fill
 
         for col_idx, dt in enumerate(all_dates, start=3):
-            ws.cell(row=row_idx, column=col_idx, value="☑" if per_date.get(dt, False) else "☐")
+            ws.cell(
+                row=row_idx,
+                column=col_idx,
+                value="☑" if per_date.get(dt, False) else "☐",
+            )
 
     ws.freeze_panes = "C2"
     ws.column_dimensions["A"].width = 30
@@ -357,7 +525,9 @@ def write_excel(attendance_data: Dict[str, Dict[date, bool]], all_dates: List[da
     for col_idx in range(3, 3 + len(all_dates)):
         ws.column_dimensions[get_column_letter(col_idx)].width = 14
 
-    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+    for row in ws.iter_rows(
+        min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column
+    ):
         for cell in row:
             cell.alignment = left if cell.column == 1 else center
 
@@ -382,18 +552,36 @@ def main() -> int:
 
     output_dir = ensure_dir(OUTPUT_DIR)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = output_dir / f"attendance_{start_dt.isoformat()}_to_{end_dt.isoformat()}_{timestamp}.xlsx"
+    out_path = output_dir / (
+        f"attendance_{start_dt.isoformat()}_to_{end_dt.isoformat()}_{timestamp}.xlsx"
+    )
 
     driver = make_driver()
     try:
         login(driver)
 
-        # Touch both pages so auth/session context is definitely warm
+        # FIX: Load and parse the same rendered member-list page used by the
+        # repaired fetch_lcr_all_names.py rather than calling the obsolete API.
+        roster_by_uuid, roster_names = fetch_member_roster_from_page(driver)
+
+        # Open the attendance page before copying cookies so all LCR session
+        # cookies and attendance-specific context are present.
+        log(f"Loading attendance page: {ATTENDANCE_PAGE_URL}")
         driver.get(ATTENDANCE_PAGE_URL)
-        driver.get(MEMBER_LIST_PAGE_URL)
+        WebDriverWait(driver, LONG_WAIT).until(
+            lambda d: "attendance" in d.current_url.lower()
+            or "Attendance" in get_body_text(d)
+        )
 
         session = build_requests_session_from_driver(driver)
-        attendance_data, all_dates = scrape_attendance_via_api(session, UNIT_NUMBER, start_dt, end_dt)
+        attendance_data, all_dates = scrape_attendance_via_api(
+            session,
+            UNIT_NUMBER,
+            start_dt,
+            end_dt,
+            roster_by_uuid,
+            roster_names,
+        )
 
         write_excel(attendance_data, all_dates, out_path)
         log(f"Excel output written to {out_path}")
