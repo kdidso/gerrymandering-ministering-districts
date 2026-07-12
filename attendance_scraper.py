@@ -188,7 +188,7 @@ def save_debug(driver: webdriver.Chrome, row_lines: Optional[List[str]] = None) 
                             f"id={el.get_attribute('id') or ''}",
                             f"title={el.get_attribute('title') or ''}",
                             f"value={el.get_attribute('value') or ''}",
-                            f"text={re.sub(r'\\s+', ' ', el.text or '').strip()}",
+                            "text=" + re.sub(r"\s+", " ", el.text or "").strip(),
                         ]
                     )
                 )
