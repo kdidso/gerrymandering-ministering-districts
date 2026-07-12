@@ -244,9 +244,13 @@ def select_month(driver: webdriver.Chrome, target_month: str) -> None:
     }
 
     if target_month not in available_values:
+        month_pattern = re.compile(r"\d{4}-\d{2}")
+        available_months = sorted(
+            value for value in available_values if month_pattern.fullmatch(value)
+        )
         raise RuntimeError(
             f"Attendance month {target_month} is not available in the LCR month selector. "
-            f"Available months include: {', '.join(sorted(v for v in available_values if re.fullmatch(r'\\d{{4}}-\\d{{2}}', v)))}"
+            f"Available months include: {', '.join(available_months)}"
         )
 
     current_value = select_el.get_attribute("value") or ""
